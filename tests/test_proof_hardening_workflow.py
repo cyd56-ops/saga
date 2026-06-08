@@ -25,7 +25,7 @@ class ProofHardeningWorkflowTests(unittest.TestCase):
         """workflow 应复用仓库内已有 proof-hardening 验收入口。"""
         text = WORKFLOW_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("python experiments/proof_hardening_check.py", text)
+        self.assertIn("python -m experiments.proof_hardening_check", text)
         self.assertIn("--output-dir artifacts/proof-hardening", text)
         self.assertIn("--skip-mutations", text)
         self.assertIn("actions/upload-artifact@v4", text)

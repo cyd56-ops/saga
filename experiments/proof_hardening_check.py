@@ -11,11 +11,15 @@ import subprocess
 import sys
 from collections.abc import Iterable, Sequence
 
+# 直接按脚本路径运行时，先把仓库根目录加入导入路径。
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from experiments import end_to_end_validation, mutation_evidence_runner
 from saga.security_kernel import mutation_evidence
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNS_DIR = REPO_ROOT / "experiments" / "runs"
 DEFAULT_PROOF_TESTS = (
     "tests/test_security_kernel.py",

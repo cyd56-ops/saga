@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -161,6 +163,27 @@ class ProofHardeningCheckTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         report = json.loads(print_mock.call_args.args[0])
         self.assertTrue(report["passed"])
+
+    def test_script_path_help_bootstraps_repo_imports(self) -> None:
+        """直接运行脚本路径时也应能导入仓库内 experiments 模块。"""
+        script_path = Path(proof_hardening_check.__file__).resolve()
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            completed = subprocess.run(
+                [sys.executable, str(script_path), "--help"],
+                cwd=tmpdir,
+                env=env,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("Run optional proof-hardening checks", completed.stdout)
 
 
 if __name__ == "__main__":
