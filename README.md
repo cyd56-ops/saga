@@ -239,6 +239,7 @@ and receiving-side execution gating in one step:
 ```python
 from pq import ToyLWESignatureScheme
 from saga.agent import Agent, enable_toy_lwe_runtime_auth, get_agent_material
+from saga.execution_gate import SQLiteReplayStateStore
 
 scheme = ToyLWESignatureScheme(seed=47)  # research-only, non-production
 alice_keys = scheme.keygen()
@@ -282,16 +283,69 @@ toy_runtime_auth:
   seed: 47
   verifier_flavor: compiled
   message_bytes: 32
-  replay_state_dir: "/tmp/saga-pqcan-shared-replay"  # optional shared marker dir
+  replay_store:
+    backend: file_marker  # local/dev/test marker backend, not production replay storage
+    state_dir: "/tmp/saga-pqcan-shared-replay"
   trusted_public_keys:
     bob@mail.com:email_agent: "<base64-encoded-toy-public-key>"
 ```
 
-If `replay_state_dir` is omitted, the helper stores replay markers under the
-receiving agent workdir at `audit/replay/`. Setting `replay_state_dir` lets
-multiple local workdirs or gate instances share one replay marker directory.
-This is a research file-store prototype; a real multi-host deployment should
-inject a backend with equivalent atomic reserve semantics.
+If `replay_store` is omitted, the helper stores replay markers under the
+receiving agent workdir at `audit/replay/`. If no agent workdir is available,
+runtime-auth setup fails closed instead of using memory-only replay state.
+Setting
+`replay_store.backend: file_marker` lets multiple local workdirs or gate
+instances share one replay marker directory for local/dev/test experiments.
+The legacy `replay_state_dir` field is still accepted and maps to the same
+`file_marker` backend, but new configs should prefer the explicit
+`replay_store` block.
+
+The checked-in file-marker backend is not a production distributed replay
+store. A real multi-host deployment should inject a strongly consistent
+`ReplayStateStore` backend with equivalent atomic reserve semantics; the
+config-only `external_strong_consistency` backend fails closed until explicit
+backend wiring is supplied. The repository includes:
+
+- `SQLiteReplayStateStore`: a minimal SQL-style adapter for local research and
+  tests. It uses a primary-key insert as the atomic `reserve_request(...)`
+  operation.
+- `RedisReplayStateStore`: a deployment-oriented adapter around an injected
+  Redis client. It uses `SET ... NX` as the atomic reservation operation.
+
+Both adapters enter runtime auth through the explicit backend path:
+
+```python
+enable_toy_lwe_runtime_auth(
+    alice_email_agent,
+    scheme=scheme,
+    key_pair=alice_keys,
+    trusted_public_keys={
+        "bob@mail.com:email_agent": b"<bob-toy-public-key-bytes>",
+    },
+    replay_state_store=SQLiteReplayStateStore("/tmp/saga-pqcan-replay.sqlite3"),
+)
+```
+
+SQLite is not a replacement for Redis, PostgreSQL, or another deployment-grade
+strongly consistent service in a true multi-host setting; it documents and
+tests the adapter contract. For opt-in real-service negative runs, receiver
+listeners can now use an injected replay store without editing the checked-in
+YAML:
+
+```bash
+.venv/bin/python experiments/real_negative_runner.py run \
+  --scenario replayed_envelope \
+  --replay-store-backend sqlite
+```
+
+For Redis, install and provide a vetted Redis client package and URL:
+
+```bash
+.venv/bin/python experiments/real_negative_runner.py run \
+  --scenario replayed_envelope \
+  --replay-store-backend redis \
+  --replay-store-redis-url redis://127.0.0.1:6379/0
+```
 
 Supported runtime-auth modes are:
 
@@ -335,6 +389,13 @@ outputs may request scopes or describe intent, but the runtime gate makes the
 final hard allow/deny decision. See [`SECURITY.md`](SECURITY.md) for the current
 research security boundary and non-production cryptography status.
 
+The signed request envelope is the runtime capability object. Its canonical
+bytes bind `capability_id`, `authorized_scopes`, optional
+`parent_envelope_digest`, parent scope metadata, and delegation depth. Delegated
+child envelopes must reference a known parent digest and may only attenuate the
+parent scope set; they cannot add new tool, memory, prompt, or delegation
+authority.
+
 The experiment entrypoints also append a task-level structured result row under
 `experiments/results/<task-name>.jsonl`, including the run mode, peer AID,
 success outcome, and a summary of any receiver-side gate rejects observed in
@@ -348,18 +409,63 @@ the model backend:
   --baseline-summary experiments/runs/20260527T114103Z-schedule_meeting-expense_report-create_blogpost/end_to_end_stats_summary.json \
   --pq-can-summary experiments/runs/20260527T114953Z-schedule_meeting-expense_report-create_blogpost/end_to_end_stats_summary.json \
   --positive-task-count 3 \
-  --real-negative-run-dir experiments/runs/20260531T122842Z-real-negative-missing_request_envelope-tampered_message-prompt_surface_tool_only-replayed_envelope-wrong_trusted_sender_key \
+  --real-negative-run-dir experiments/runs/20260602T062649Z-real-negative-missing_request_envelope-tampered_message-prompt_surface_tool_only-replayed_envelope-wrong_trusted_sender_key-unauthorized_tool_scope-unauthorized_memory_write-unauthorized_delegation \
   --required-real-negative-scenario missing_request_envelope \
   --required-real-negative-scenario tampered_message \
   --required-real-negative-scenario prompt_surface_tool_only \
   --required-real-negative-scenario replayed_envelope \
-  --required-real-negative-scenario wrong_trusted_sender_key
+  --required-real-negative-scenario wrong_trusted_sender_key \
+  --required-real-negative-scenario unauthorized_tool_scope \
+  --required-real-negative-scenario unauthorized_memory_write \
+  --required-real-negative-scenario unauthorized_delegation
 ```
 
 The validator checks that positive baseline/PQ-CAN summaries have the expected
 runtime-auth mode, all tasks succeeded, positive gate reject counts are zero,
 and real-service negative samples rejected with expected reasons without
-invoking the recording local agent.
+invoking the recording local agent. For the tool, memory, and delegation
+scope-probe negatives, the prompt stub may run once, but the protected action
+must not write a side-effect record. The expected rejection reasons are checked
+against the U9/U10 evidence map in `experiments/security_evidence.py`.
+
+You can also summarize the current real end-to-end ablation evidence without
+starting live services:
+
+```bash
+.venv/bin/python experiments/real_ablation_runner.py summarize
+```
+
+This reads the saved baseline and PQ-CAN batch summaries and emits one row per
+ablation mode. Only `saga_only` and `shamir_secured_pq_can` are currently wired
+as real Agent runtime runs. `ordinary_pq_middleware` and
+`naive_neural_verifier` remain offline-only ablation modes until dedicated
+real-runtime adapters are added. Before a live run, use the opt-in preflight
+subcommand to check the selected live mode configs and, when requested, the
+model endpoint without starting local services:
+
+```bash
+.venv/bin/python experiments/real_ablation_runner.py preflight \
+  --mode saga_only \
+  --mode shamir_secured_pq_can \
+  --model-probe \
+  --output-dir experiments/runs/<run-id>-real-ablation-preflight
+```
+
+To explicitly run the live supported modes, use the opt-in `run` subcommand; it
+starts local services and model-backed tasks:
+
+```bash
+.venv/bin/python experiments/real_ablation_runner.py run --mode saga_only --mode shamir_secured_pq_can
+```
+
+Paper-table rows can be emitted to stdout or archived as both JSON and
+Markdown without starting services:
+
+```bash
+.venv/bin/python experiments/paper_tables.py \
+  --format markdown \
+  --output-dir experiments/tables/20260527-positive-baseline-pqcan
+```
 
 Users may use our implementation of a local LLM agent (available under `agent_backend`), but are free to implement their local agents using any library or manner as long as it inherits from the `LocalAgent` abstract class (defined under `local_agent.py`). The basic requirement is to implement the following function:
 

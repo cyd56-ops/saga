@@ -23,6 +23,7 @@ def get_provider_cert(email):
     ))
     cert_bytes = base64.b64decode(response.json().get('certificate'))
     cert = sc.bytesToX509Certificate(cert_bytes)
+
     return cert
 
 # Instanciate the CA object:
@@ -120,6 +121,7 @@ def register(email: str=None, password: str=None):
     }, verify=saga.config.CA_CERT_PATH, cert=(
         saga.config.USER_WORKDIR+"/keys/"+email+".crt", saga.config.USER_WORKDIR+"/keys/"+email+".key"
     ))
+
     if response.status_code == 201:
         logger.log("PROVIDER", f"User {email} registered successfully.")
         # Store the uid:
@@ -510,10 +512,13 @@ def refresh_otks(name=None, num_one_time_keys=None):
         logger.log("PROVIDER", f"Agent {aid} one-time keys refreshed successfully.")
 
         def _append_otks(material):
+            # 刷新 OTK 时必须同步对应签名，否则本地 manifest 会保留旧签名语义。
             material.setdefault("otks", [])
             material.setdefault("sotks", [])
+            material.setdefault("otk_sigs", [])
             material["otks"].extend(public_one_time_keys_2_b64)
             material["sotks"].extend(private_one_time_keys_2_b64)
+            material["otk_sigs"].extend(otk_sigs_2_b64)
 
         _update_agent_manifest(aid, _append_otks)
         _consume_local_provider_token()

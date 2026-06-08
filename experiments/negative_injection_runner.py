@@ -49,6 +49,7 @@ DEFAULT_SCENARIOS = (
     "agent_runtime_prompt_surface_tool_only",
     "agent_runtime_replayed_envelope",
     "agent_runtime_scope_escalation_tool",
+    "agent_runtime_context_ignoring_local_agent",
 )
 
 
@@ -120,6 +121,10 @@ class _RuntimeLocalAgent:
         self.side_effects: list[str] = []
         self.denied_reason = ""
 
+    def supports_execution_context(self) -> bool:
+        """声明离线探针会接收 execution_context 以测试下游 capability 拒绝。"""
+        return True
+
     def run(
         self,
         query: str,
@@ -165,6 +170,14 @@ class _ScopeEscalatingLocalAgent(_RuntimeLocalAgent):
 
         self.side_effects.append("add_calendar_event")
         return agent_instance, self.response
+
+
+class _ContextIgnoringRuntimeLocalAgent(_RuntimeLocalAgent):
+    """Local-agent stub that refuses to opt into execution_context support."""
+
+    def supports_execution_context(self) -> bool:
+        """声明该自定义 agent 不支持 execution_context，用于 U5 负向样本。"""
+        return False
 
 
 class NegativeInjectionHarness:
@@ -219,6 +232,9 @@ class NegativeInjectionHarness:
             "agent_runtime_replayed_envelope": self._agent_runtime_replayed_envelope,
             "agent_runtime_scope_escalation_tool": (
                 self._agent_runtime_scope_escalation_tool
+            ),
+            "agent_runtime_context_ignoring_local_agent": (
+                self._agent_runtime_context_ignoring_local_agent
             ),
         }
         try:
@@ -717,6 +733,48 @@ class NegativeInjectionHarness:
             expected_reason="unauthorized_tool_scope",
             observed_reason=local_agent.denied_reason or "authorized",
             side_effect_triggered=bool(local_agent.side_effects),
+            details={
+                "local_agent_run_calls": local_agent.run_calls,
+                "side_effects": list(local_agent.side_effects),
+            },
+        )
+
+    def _agent_runtime_context_ignoring_local_agent(self) -> NegativeInjectionResult:
+        """验证 strict 模式拒绝不声明支持 execution_context 的自定义 LocalAgent。"""
+        fixture = self._signed_request()
+        message_dict = self._message_dict_from_fixture(fixture)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_agent = _ContextIgnoringRuntimeLocalAgent()
+            agent = self._runtime_agent(
+                gate=self._new_gate(),
+                local_agent=local_agent,
+                workdir=tmpdir,
+            )
+            agent.recv = lambda _conn: message_dict
+            agent.send = lambda _conn, _payload: None
+
+            ended = agent.receive_conversation(
+                object(),
+                DEFAULT_TOKEN,
+                recipient_pac=object(),
+                sender_aid=DEFAULT_SENDER_AID,
+            )
+            observed_reason = self._load_last_audit_reason(tmpdir)
+
+        return NegativeInjectionResult(
+            scenario="agent_runtime_context_ignoring_local_agent",
+            category="agent_runtime",
+            passed=(
+                ended
+                and local_agent.run_calls == 0
+                and not local_agent.side_effects
+                and observed_reason == "local_agent_execution_context_unsupported"
+            ),
+            allowed=local_agent.run_calls > 0,
+            expected_reason="local_agent_execution_context_unsupported",
+            observed_reason=observed_reason or "missing_audit_reason",
+            side_effect_triggered=local_agent.run_calls > 0 or bool(local_agent.side_effects),
             details={
                 "local_agent_run_calls": local_agent.run_calls,
                 "side_effects": list(local_agent.side_effects),

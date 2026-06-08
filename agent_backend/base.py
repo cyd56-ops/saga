@@ -14,7 +14,12 @@ from smolagents.memory import TaskStep
 import os
 
 from saga.config import ROOT_DIR, UserConfig
-from saga.execution_gate import ExecutionAuthorizationError
+from saga.execution_gate import (
+    ActionScopeSpec,
+    ExecutionAuthorizationError,
+    ExecutionCapabilityFacade,
+    GatedExecutionResource,
+)
 from saga.local_agent import LocalAgent
 
 from agent_backend.tools.email import LocalEmailClientTool
@@ -27,10 +32,28 @@ import importlib.resources
 VERBOSITY_LEVEL = 2
 
 
+def _email_collection_scope(
+    *,
+    where: str,
+    inbox_scope: str,
+    outbox_scope: str,
+) -> str:
+    """根据邮件 backend 的 where 参数选择对应工具 capability。"""
+    if where == "inbox":
+        return inbox_scope
+    if where == "sent":
+        return outbox_scope
+    return inbox_scope
+
+
 class AgentWrapper(LocalAgent):
     """
         Base agents wrapper, built on top of CodeAgent form smolagents
     """
+    def supports_execution_context(self) -> bool:
+        """声明本 wrapper 会用 execution_context 保护 tool、memory 和 delegation。"""
+        return True
+
     def __init__(self,
                  user_config: UserConfig,
                  config: LocalAgentConfig,
@@ -39,6 +62,13 @@ class AgentWrapper(LocalAgent):
         self.config = config
         self.tool_collections = []
         self.prompt_filename = prompt_filename
+        self._execution_context = None
+        self._strict_execution_capabilities = False
+        self._execution_capabilities = ExecutionCapabilityFacade(
+            lambda: self._execution_context,
+            context_required=lambda: getattr(self, "_strict_execution_capabilities", False),
+        )
+        self._delegation_handler: Callable[..., Any] | None = None
 
         # Collect all tools
         self._collect_tools_for_use()
@@ -50,8 +80,6 @@ class AgentWrapper(LocalAgent):
 
         # Read YAML file
         self._set_custom_prompt(self.prompt_filename)
-        self._execution_context = None
-        self._delegation_handler: Callable[..., Any] | None = None
 
     def _set_custom_prompt(self, prompt_filename: str):
         DIR_ABOVE_ROOT_DIR = os.path.dirname(ROOT_DIR)
@@ -134,7 +162,7 @@ class AgentWrapper(LocalAgent):
         def gated_forward(*args, **kwargs):
             """在真正调用工具前执行当前请求的动作范围检查。"""
             try:
-                self._require_execution_action(f"tool_call:{tool_name}")
+                self._execution_capability_facade().require_action(f"tool_call:{tool_name}")
             except PermissionError as exc:
                 raise ExecutionAuthorizationError(
                     "tool_not_authorized",
@@ -150,22 +178,40 @@ class AgentWrapper(LocalAgent):
         tool_obj.forward = gated_forward
         return tool_obj
 
+    def _execution_capability_facade(self) -> ExecutionCapabilityFacade:
+        """返回当前 wrapper 的能力 facade；测试桩绕过 __init__ 时惰性创建。"""
+        facade = getattr(self, "_execution_capabilities", None)
+        if facade is None:
+            facade = ExecutionCapabilityFacade(
+                lambda: getattr(self, "_execution_context", None),
+                context_required=lambda: getattr(self, "_strict_execution_capabilities", False),
+            )
+            self._execution_capabilities = facade
+        return facade
+
+    def _gated_tool_resource(
+        self,
+        resource: object,
+        method_scopes: dict[str, ActionScopeSpec],
+    ) -> GatedExecutionResource:
+        """把底层业务工具 backend 包成 capability facade，防止直连绕过 wrapper。"""
+        return GatedExecutionResource(
+            resource,
+            self._execution_capability_facade(),
+            method_scopes,
+        )
+
     def _require_execution_action(self, action_scope: str) -> None:
         """Raise ``PermissionError`` unless the current execution context allows ``action_scope``."""
-        execution_context = getattr(self, "_execution_context", None)
-        if execution_context is None:
-            return
-        execution_context.require_action(action_scope)
+        self._execution_capability_facade().require_action(action_scope)
 
     def _read_agent_memory_steps(self, agent_instance: MultiStepAgent) -> tuple[TaskStep, ...]:
         """Return an immutable snapshot of agent memory after ``memory_read`` authorization."""
-        self._require_execution_action("memory_read")
-        return tuple(agent_instance.memory.steps)
+        return self._execution_capability_facade().read_memory_steps(agent_instance.memory)
 
     def _append_agent_memory_step(self, agent_instance: MultiStepAgent, step: TaskStep) -> None:
         """Append a memory step only when ``memory_write`` is authorized."""
-        self._require_execution_action("memory_write")
-        agent_instance.memory.steps.append(step)
+        self._execution_capability_facade().append_memory_step(agent_instance.memory, step)
 
     def _require_delegation_permission(self) -> None:
         """Raise ``PermissionError`` unless delegation is authorized in the current context."""
@@ -175,19 +221,32 @@ class AgentWrapper(LocalAgent):
         """Install the concrete runtime callback used for delegation."""
         self._delegation_handler = handler
 
+    def set_strict_execution_capabilities(self, enabled: bool) -> None:
+        """配置底层 capability facade 是否在缺少 execution context 时拒绝。"""
+        self._strict_execution_capabilities = bool(enabled)
+
     def delegate_to_agent(self, target_aid: str, message: str, **kwargs) -> Any:
         """Delegate a task to another agent after execution-gate authorization."""
-        self._require_delegation_permission()
         if self._delegation_handler is None:
             raise NotImplementedError("delegation handler is not configured")
-        return self._delegation_handler(target_aid, message, **kwargs)
+        return self._execution_capability_facade().delegate(
+            self._delegation_handler,
+            target_aid,
+            message,
+            **kwargs,
+        )
 
     def _reimbursement_tools(self):
         # Tools relevant to submitting an expense report to HR
         # Initialize only if it does not exist already
         if not hasattr(self, "email_client"):
-            self.email_client = LocalEmailClientTool(user_name=self.user_config.name,
-                                                     user_email=self.user_config.email)
+            self.email_client = self._gated_tool_resource(
+                LocalEmailClientTool(
+                    user_name=self.user_config.name,
+                    user_email=self.user_config.email,
+                ),
+                self._email_backend_method_scopes(),
+            )
         
         @tool
         def submit_expense_report(amount: float, description: str, people_involved: List[str]) -> bool:
@@ -212,8 +271,13 @@ class AgentWrapper(LocalAgent):
 
     def _email_tools(self):
         # Define relevant tools for email use
-        self.email_client = LocalEmailClientTool(user_name=self.user_config.name,
-                                                 user_email=self.user_config.email)
+        self.email_client = self._gated_tool_resource(
+            LocalEmailClientTool(
+                user_name=self.user_config.name,
+                user_email=self.user_config.email,
+            ),
+            self._email_backend_method_scopes(),
+        )
 
         @tool
         def check_inbox(limit: int = 50) -> List[dict]:
@@ -288,8 +352,18 @@ class AgentWrapper(LocalAgent):
 
     def _calendar_tools(self):
         # Define relevant tools for email use
-        self.calendar_client = LocalCalendarTool(user_name=self.user_config.name,
-                                                 user_email=self.user_config.email)
+        self.calendar_client = self._gated_tool_resource(
+            LocalCalendarTool(
+                user_name=self.user_config.name,
+                user_email=self.user_config.email,
+            ),
+            {
+                "get_upcoming_events": "tool_call:get_upcoming_events",
+                "add_calendar_event": "tool_call:add_calendar_event",
+                "get_availability": "tool_call:get_free_time_slots",
+                "get_preference": "tool_call:get_general_preferences",
+            },
+        )
 
         @tool
         def get_upcoming_events(limit: int = 10) -> List[dict]:
@@ -355,7 +429,13 @@ class AgentWrapper(LocalAgent):
 
     def _documents_tools(self):
         # Define relevant tools for documents use
-        self.documents_client = LocalDocumentsTool(user_email=self.user_config.email)
+        self.documents_client = self._gated_tool_resource(
+            LocalDocumentsTool(user_email=self.user_config.email),
+            {
+                "create_document": "tool_call:create_document",
+                "search_by_query": "tool_call:search_blogposts",
+            },
+        )
 
         @tool
         def create_document(title: str, content: str, filetype: str = "md") -> bool:
@@ -411,6 +491,22 @@ class AgentWrapper(LocalAgent):
         ]
 
         return tools_available
+
+    def _email_backend_method_scopes(self) -> dict[str, ActionScopeSpec]:
+        """定义邮件 backend 方法可由哪些显式工具 capability 调用。"""
+        return {
+            "get_emails": lambda *args, **kwargs: _email_collection_scope(
+                where=kwargs.get("where", args[0] if args else "inbox"),
+                inbox_scope="tool_call:check_inbox",
+                outbox_scope="tool_call:check_outbox",
+            ),
+            "search_by_query": lambda *args, **kwargs: _email_collection_scope(
+                where=kwargs.get("where", args[1] if len(args) > 1 else "inbox"),
+                inbox_scope="tool_call:search_inbox",
+                outbox_scope="tool_call:search_outbox",
+            ),
+            "send_email": ("tool_call:send_email", "tool_call:submit_expense_report"),
+        }
 
     def _create_local_agent_object(self, **kwargs) -> MultiStepAgent:
         raise NotImplementedError("Child class should implement _create_local_agent_object()")

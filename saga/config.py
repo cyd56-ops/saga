@@ -92,6 +92,31 @@ class EndPointConfig(Serializable):
 
 
 @dataclass
+class ReplayStoreConfig(Serializable):
+    """执行层 replay 状态后端配置。"""
+
+    backend: Literal["agent_workdir_file", "file_marker", "external_strong_consistency"] = (
+        "agent_workdir_file"
+    )
+    """Replay store backend selected for runtime-auth request consumption."""
+    state_dir: str | None = None
+    """Marker directory used only by the local/dev/test ``file_marker`` backend."""
+
+    def __post_init__(self) -> None:
+        """校验 replay store backend 与目录字段的组合，避免生产语义含混。"""
+        valid_backends = {"agent_workdir_file", "file_marker", "external_strong_consistency"}
+        if self.backend not in valid_backends:
+            raise ValueError(
+                "replay store backend must be one of: "
+                "agent_workdir_file, file_marker, external_strong_consistency"
+            )
+        if self.backend == "file_marker" and not self.state_dir:
+            raise ValueError("file_marker replay store requires state_dir")
+        if self.backend != "file_marker" and self.state_dir is not None:
+            raise ValueError("state_dir is only valid for the file_marker replay store")
+
+
+@dataclass
 class ToyRuntimeAuthConfig(Serializable):
     """研究用 toy LWE 执行层认证配置。"""
 
@@ -107,8 +132,10 @@ class ToyRuntimeAuthConfig(Serializable):
     """Legacy toy verifier flavor; use ``mode`` for new configs."""
     message_bytes: int = 32
     """Envelope digest length expected by the verifier helper."""
+    replay_store: ReplayStoreConfig | None = None
+    """Explicit replay backend config; preferred over legacy ``replay_state_dir``."""
     replay_state_dir: str | None = None
-    """Optional shared replay marker directory for multi-workdir experiments."""
+    """Legacy shared marker directory; mapped to ``ReplayStoreConfig(file_marker)``."""
     trusted_public_keys: dict[str, str] = field(default_factory=dict)
     """Mapping from trusted peer AIDs to base64-encoded toy public keys."""
 
@@ -127,6 +154,8 @@ class ToyRuntimeAuthConfig(Serializable):
             raise ValueError("toy_wrapper mode requires verifier_flavor='wrapper'")
         if self.message_bytes <= 0:
             raise ValueError("message_bytes must be positive")
+        if self.replay_store is not None and self.replay_state_dir is not None:
+            raise ValueError("configure either replay_store or replay_state_dir, not both")
 
     def resolved_mode(self) -> Literal["toy_compiled_research", "toy_wrapper", "mldsa_external"]:
         """返回规范化 runtime-auth mode，兼容旧的 verifier_flavor 配置。"""
@@ -144,6 +173,14 @@ class ToyRuntimeAuthConfig(Serializable):
         if resolved_mode == "toy_wrapper":
             return "wrapper"
         raise ValueError("mldsa_external mode does not use a toy verifier flavor")
+
+    def resolved_replay_store(self) -> ReplayStoreConfig | None:
+        """返回规范化 replay store 配置，兼容旧的 replay_state_dir 字段。"""
+        if self.replay_store is not None:
+            return self.replay_store
+        if self.replay_state_dir is not None:
+            return ReplayStoreConfig(backend="file_marker", state_dir=self.replay_state_dir)
+        return None
 
 
 @dataclass

@@ -25,6 +25,15 @@ def _make_echo_tool():
     return echo
 
 
+def _make_failing_tool():
+    @tool
+    def fail_tool() -> str:
+        """Raise a backend error after authorization succeeds."""
+        raise RuntimeError("backend failed")
+
+    return fail_tool
+
+
 class _StubExecutionContext:
     """Minimal execution context stub used by the tool-gating tests."""
 
@@ -68,6 +77,23 @@ class _RunCapableTestAgentWrapper(AgentWrapper):
         )()
 
 
+class _DirectBackendStub:
+    """Tracks whether a protected backend method was reached."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def send_email(self, *args, **kwargs) -> bool:
+        """Record a direct backend email send attempt."""
+        self.calls.append(("send_email", args, kwargs))
+        return True
+
+    def get_emails(self, *args, **kwargs) -> list[dict]:
+        """Record a direct backend email read attempt."""
+        self.calls.append(("get_emails", args, kwargs))
+        return [{"subject": "ok"}]
+
+
 class AgentWrapperExecutionGateTests(unittest.TestCase):
     """Verify that tool execution is mediated by the local execution context."""
 
@@ -105,6 +131,17 @@ class AgentWrapperExecutionGateTests(unittest.TestCase):
         self.assertEqual(raised.exception.reason, "tool_not_authorized")
         self.assertEqual(raised.exception.action_scope, "tool_call:echo")
 
+    def test_tool_backend_error_is_not_rewritten_as_authorization_failure(self) -> None:
+        """Tool-internal failures should remain distinguishable from local authorization denials."""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = _StubExecutionContext({"tool_call:fail_tool"})
+        gated_tool = wrapper._wrap_tool_with_execution_gate(_make_failing_tool())
+
+        with self.assertRaisesRegex(RuntimeError, "backend failed"):
+            gated_tool()
+
+        self.assertEqual(wrapper._execution_context.seen_scopes, ["tool_call:fail_tool"])
+
     def test_memory_read_helper_requires_matching_scope(self) -> None:
         """Reading agent memory should require the explicit memory_read scope."""
         wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
@@ -118,6 +155,21 @@ class AgentWrapperExecutionGateTests(unittest.TestCase):
         steps = wrapper._read_agent_memory_steps(agent_instance)
 
         self.assertEqual(len(steps), 1)
+        self.assertEqual(wrapper._execution_context.seen_scopes, ["memory_read"])
+
+    def test_memory_read_helper_rejects_without_scope(self) -> None:
+        """缺少 memory_read scope 时，读取 helper 不能返回 memory 快照。"""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = _StubExecutionContext({"memory_write"})
+        agent_instance = type(
+            "AgentStub",
+            (),
+            {"memory": type("MemoryStub", (), {"steps": [TaskStep(task="private")]})()},
+        )()
+
+        with self.assertRaisesRegex(PermissionError, "unauthorized_memory_read"):
+            wrapper._read_agent_memory_steps(agent_instance)
+
         self.assertEqual(wrapper._execution_context.seen_scopes, ["memory_read"])
 
     def test_memory_write_helper_rejects_without_scope(self) -> None:
@@ -177,6 +229,108 @@ class AgentWrapperExecutionGateTests(unittest.TestCase):
 
         with self.assertRaisesRegex(NotImplementedError, "delegation handler is not configured"):
             wrapper.delegate_to_agent("alice@example.com:calendar_agent", "hello")
+
+    def test_direct_tool_backend_proxy_rejects_without_scope(self) -> None:
+        """Direct backend calls through the gated resource must not bypass tool scopes."""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = _StubExecutionContext({"tool_call:check_inbox"})
+        backend = _DirectBackendStub()
+        gated_backend = wrapper._gated_tool_resource(
+            backend,
+            {"send_email": "tool_call:send_email"},
+        )
+
+        with self.assertRaises(ExecutionAuthorizationError) as raised:
+            gated_backend.send_email(to=["hr@example.com"], subject="x", body="blocked")
+
+        self.assertEqual(raised.exception.reason, "unauthorized_tool_scope")
+        self.assertEqual(backend.calls, [])
+        self.assertEqual(wrapper._execution_context.seen_scopes, ["tool_call:send_email"])
+
+    def test_direct_tool_backend_proxy_allows_matching_scope(self) -> None:
+        """A gated backend method should run only after matching tool capability."""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = _StubExecutionContext({"tool_call:send_email"})
+        backend = _DirectBackendStub()
+        gated_backend = wrapper._gated_tool_resource(
+            backend,
+            {"send_email": "tool_call:send_email"},
+        )
+
+        result = gated_backend.send_email(to=["hr@example.com"], subject="x", body="allowed")
+
+        self.assertTrue(result)
+        self.assertEqual(len(backend.calls), 1)
+        self.assertEqual(wrapper._execution_context.seen_scopes, ["tool_call:send_email"])
+
+    def test_direct_email_backend_read_scope_depends_on_where_argument(self) -> None:
+        """Email backend reads should bind inbox/outbox scopes to the where argument."""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = _StubExecutionContext({"tool_call:check_inbox"})
+        backend = _DirectBackendStub()
+        gated_backend = wrapper._gated_tool_resource(
+            backend,
+            wrapper._email_backend_method_scopes(),
+        )
+
+        self.assertEqual(gated_backend.get_emails(where="inbox"), [{"subject": "ok"}])
+        with self.assertRaisesRegex(PermissionError, "unauthorized_tool_scope"):
+            gated_backend.get_emails(where="sent")
+
+        self.assertEqual(len(backend.calls), 1)
+        self.assertEqual(
+            wrapper._execution_context.seen_scopes,
+            ["tool_call:check_inbox", "tool_call:check_outbox"],
+        )
+
+    def test_direct_tool_backend_proxy_rejects_missing_context_in_strict_mode(self) -> None:
+        """Strict capability mode should reject backend access when context is missing."""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = None
+        wrapper.set_strict_execution_capabilities(True)
+        backend = _DirectBackendStub()
+        gated_backend = wrapper._gated_tool_resource(
+            backend,
+            {"send_email": "tool_call:send_email"},
+        )
+
+        with self.assertRaises(ExecutionAuthorizationError) as raised:
+            gated_backend.send_email(to=["hr@example.com"], subject="x", body="blocked")
+
+        self.assertEqual(raised.exception.reason, "missing_local_execution_context")
+        self.assertEqual(raised.exception.action_scope, "tool_call:send_email")
+        self.assertEqual(backend.calls, [])
+
+    def test_direct_memory_facade_write_rejects_without_scope(self) -> None:
+        """Direct use of the memory capability facade must not mutate memory without scope."""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = _StubExecutionContext({"memory_read"})
+        memory = type("MemoryStub", (), {"steps": []})()
+
+        with self.assertRaisesRegex(PermissionError, "unauthorized_memory_write"):
+            wrapper._execution_capability_facade().append_memory_step(
+                memory,
+                TaskStep(task="blocked"),
+            )
+
+        self.assertEqual(memory.steps, [])
+        self.assertEqual(wrapper._execution_context.seen_scopes, ["memory_write"])
+
+    def test_direct_delegation_facade_rejects_without_scope(self) -> None:
+        """Direct delegation through the capability facade should reject before side effects."""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = _StubExecutionContext({"tool_call:echo"})
+        delegated: list[tuple[str, str]] = []
+
+        with self.assertRaisesRegex(PermissionError, "unauthorized_delegation"):
+            wrapper._execution_capability_facade().delegate(
+                lambda target_aid, message: delegated.append((target_aid, message)),
+                "alice@example.com:calendar_agent",
+                "hello",
+            )
+
+        self.assertEqual(delegated, [])
+        self.assertEqual(wrapper._execution_context.seen_scopes, ["delegation"])
 
     def test_run_blocks_initiating_memory_bootstrap_without_memory_write_scope(self) -> None:
         """The real initialization-time memory append should now pass through the gate."""

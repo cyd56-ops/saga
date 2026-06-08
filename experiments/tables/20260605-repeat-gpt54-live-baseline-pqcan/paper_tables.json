@@ -1,0 +1,479 @@
+{
+  "notes": {
+    "api_cost": "API cost is reported only when model diagnostics expose explicit cost fields.",
+    "audit_counts": "Audit counts refer to execution-gate audit records, not model/tool permission text.",
+    "security_evidence": "Security-property rows and evidence rows are generated from experiments/security_evidence.py.",
+    "token_usage": "Token usage is reported only when model diagnostics expose explicit token fields."
+  },
+  "run_level_columns": [
+    "mode",
+    "runtime_auth_enabled",
+    "task_count",
+    "succeeded_count",
+    "failed_count",
+    "task_latency_seconds_total",
+    "task_latency_seconds_mean",
+    "model_call_count",
+    "llm_elapsed_seconds_total",
+    "audit_record_count",
+    "audit_reject_count",
+    "audit_logging_overhead_record_count",
+    "logging_stats_collection_latency_seconds_total",
+    "api_cost_available",
+    "api_cost_usd_total",
+    "token_usage_available",
+    "total_tokens"
+  ],
+  "run_level_rows": [
+    {
+      "api_cost_available": false,
+      "api_cost_usd_total": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "failed_count": 0,
+      "llm_elapsed_seconds_total": 113.55404,
+      "logging_stats_collection_latency_seconds_total": 0.009242301,
+      "mode": "baseline",
+      "model_call_count": 13,
+      "runtime_auth_enabled": false,
+      "succeeded_count": 3,
+      "task_count": 3,
+      "task_latency_seconds_mean": 32.966271,
+      "task_latency_seconds_total": 98.898812,
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd_total": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "failed_count": 0,
+      "llm_elapsed_seconds_total": 122.961256,
+      "logging_stats_collection_latency_seconds_total": 0.0109467,
+      "mode": "pq_can",
+      "model_call_count": 8,
+      "runtime_auth_enabled": true,
+      "succeeded_count": 3,
+      "task_count": 3,
+      "task_latency_seconds_mean": 41.078534,
+      "task_latency_seconds_total": 123.235601,
+      "token_usage_available": false,
+      "total_tokens": null
+    }
+  ],
+  "security_evidence_columns": [
+    "source",
+    "name",
+    "properties",
+    "expected_reason",
+    "evidence_kind",
+    "side_effect_expectation"
+  ],
+  "security_evidence_rows": [
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "message_digest_mismatch",
+      "name": "tampered_message",
+      "properties": "context_binding, unforgeability",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "action_scope_mismatch",
+      "name": "tampered_action_scope",
+      "properties": "context_binding, scope_non_escalation",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "signature_verification_failed",
+      "name": "tampered_authorized_scope",
+      "properties": "unforgeability, scope_non_escalation",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "envelope_expired",
+      "name": "expired_envelope",
+      "properties": "context_binding",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "replayed_request_envelope",
+      "name": "replayed_envelope",
+      "properties": "replay_resistance, side_effect_free_rejection",
+      "side_effect_expectation": "first_allowed_second_rejected",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "local_execution_context",
+      "expected_reason": "unauthorized_tool_scope",
+      "name": "unauthorized_tool_scope",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "protected_tool_not_called",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "local_execution_context",
+      "expected_reason": "unauthorized_memory_write",
+      "name": "unauthorized_memory_write",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "memory_not_written",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "local_execution_context",
+      "expected_reason": "unauthorized_delegation",
+      "name": "unauthorized_delegation",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "delegation_not_started",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "shamir_mask_gate",
+      "expected_reason": "real_valued_signature_input",
+      "name": "real_valued_signature_input",
+      "properties": "unforgeability",
+      "side_effect_expectation": "no_accepting_real_valued_gate",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "trusted_key_map",
+      "expected_reason": "untrusted_sender_aid",
+      "name": "untrusted_sender_aid",
+      "properties": "unforgeability, context_binding",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "trusted_key_map",
+      "expected_reason": "signature_verification_failed",
+      "name": "wrong_trusted_sender_key",
+      "properties": "unforgeability",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "agent_runtime_path",
+      "expected_reason": "prompt_scope_not_authorized",
+      "name": "agent_runtime_prompt_surface_tool_only",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "agent_runtime_path",
+      "expected_reason": "replayed_request_envelope",
+      "name": "agent_runtime_replayed_envelope",
+      "properties": "replay_resistance, side_effect_free_rejection",
+      "side_effect_expectation": "second_local_run_not_called",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "agent_runtime_path",
+      "expected_reason": "unauthorized_tool_scope",
+      "name": "agent_runtime_scope_escalation_tool",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "protected_tool_not_called",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "agent_runtime_path",
+      "expected_reason": "local_agent_execution_context_unsupported",
+      "name": "agent_runtime_context_ignoring_local_agent",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "missing_request_envelope",
+      "name": "missing_request_envelope",
+      "properties": "unforgeability, context_binding, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "message_digest_mismatch",
+      "name": "tampered_message",
+      "properties": "context_binding, unforgeability, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "prompt_scope_not_authorized",
+      "name": "prompt_surface_tool_only",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "replayed_request_envelope",
+      "name": "replayed_envelope",
+      "properties": "replay_resistance, side_effect_free_rejection",
+      "side_effect_expectation": "second_local_run_not_called",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "signature_verification_failed",
+      "name": "wrong_trusted_sender_key",
+      "properties": "unforgeability, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener_scope_probe",
+      "expected_reason": "unauthorized_tool_scope",
+      "name": "unauthorized_tool_scope",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "prompt_runs_once_protected_tool_not_called",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener_scope_probe",
+      "expected_reason": "unauthorized_memory_write",
+      "name": "unauthorized_memory_write",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "prompt_runs_once_memory_not_written",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener_scope_probe",
+      "expected_reason": "unauthorized_delegation",
+      "name": "unauthorized_delegation",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "prompt_runs_once_delegation_not_started",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "offline_ablation_mode",
+      "expected_reason": "negative_rejected_count=0",
+      "name": "saga_only",
+      "properties": "context_binding, scope_non_escalation, replay_resistance",
+      "side_effect_expectation": "baseline_admission_only",
+      "source": "ablation_overhead_runner"
+    },
+    {
+      "evidence_kind": "offline_ablation_mode",
+      "expected_reason": "negative_rejected_count=2",
+      "name": "ordinary_pq_middleware",
+      "properties": "unforgeability, context_binding",
+      "side_effect_expectation": "rejects_signature_and_envelope_cases_only",
+      "source": "ablation_overhead_runner"
+    },
+    {
+      "evidence_kind": "offline_ablation_mode",
+      "expected_reason": "negative_rejected_count=2",
+      "name": "naive_neural_verifier",
+      "properties": "unforgeability, context_binding",
+      "side_effect_expectation": "rejects_signature_and_envelope_cases_only",
+      "source": "ablation_overhead_runner"
+    },
+    {
+      "evidence_kind": "offline_ablation_mode",
+      "expected_reason": "negative_rejected_count=5",
+      "name": "shamir_secured_pq_can",
+      "properties": "unforgeability, context_binding, scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "rejects_all_current_offline_negative_cases",
+      "source": "ablation_overhead_runner"
+    }
+  ],
+  "security_property_columns": [
+    "property_id",
+    "title",
+    "enforcement_terms",
+    "assumptions",
+    "limitations"
+  ],
+  "security_property_rows": [
+    {
+      "assumptions": "Trusted public keys are provisioned by the SAGA registration path.; The production-facing ML-DSA path must wrap a vetted external backend.; Toy LWE evidence is research wiring evidence, not a production PQ claim.",
+      "enforcement_terms": "request_envelope_valid, pq_signature_valid, can_accept",
+      "limitations": "This property does not claim confidentiality or full post-quantum transport security.; Compatibility paths outside strict runtime auth are excluded.",
+      "property_id": "unforgeability",
+      "title": "Unforgeability of Execution Capabilities"
+    },
+    {
+      "assumptions": "Request envelopes are encoded with deterministic canonical JSON.; The receiver compares transport fields with the signed envelope before execution.",
+      "enforcement_terms": "saga_token_valid, request_envelope_valid, pq_signature_valid, can_accept",
+      "limitations": "The claim covers fields represented in the signed request envelope.",
+      "property_id": "context_binding",
+      "title": "Context Binding"
+    },
+    {
+      "assumptions": "LLM-requested scopes are proposals and are not trusted authorization proofs.; Strict runtime surfaces consume LocalExecutionContext or gated facades.",
+      "enforcement_terms": "request_envelope_valid, execution_scope_allowed, internal_policy_accept",
+      "limitations": "Raw backend use outside the checked strict runtime kernel is outside the claim.",
+      "property_id": "scope_non_escalation",
+      "title": "Scope Non-Escalation"
+    },
+    {
+      "assumptions": "A replay store with atomic reserve semantics is configured for strict runtime auth.; File and SQLite stores are local research backends; deployment needs a consistent shared backend.",
+      "enforcement_terms": "request_envelope_valid, pq_signature_valid, can_accept, internal_policy_accept",
+      "limitations": "The property is scoped to request-envelope digest consumption, not network-level packet replay.",
+      "property_id": "replay_resistance",
+      "title": "Replay Resistance"
+    },
+    {
+      "assumptions": "Protected actions are reached only through the strict execution kernel.; Tests use side-effect counters or protected-action files as the oracle.",
+      "enforcement_terms": "execution_scope_allowed, internal_policy_accept",
+      "limitations": "The property does not cover unrelated application code that bypasses the kernel.",
+      "property_id": "side_effect_free_rejection",
+      "title": "Side-Effect-Free Rejection"
+    }
+  ],
+  "task_level_columns": [
+    "mode",
+    "task_name",
+    "success",
+    "runtime_auth_enabled",
+    "task_latency_seconds",
+    "model_call_count",
+    "local_model_call_count",
+    "peer_model_call_count",
+    "llm_elapsed_seconds_total",
+    "audit_record_count",
+    "audit_reject_count",
+    "peer_audit_reject_count",
+    "audit_logging_overhead_record_count",
+    "api_cost_available",
+    "api_cost_usd",
+    "token_usage_available",
+    "total_tokens",
+    "oracle_reason"
+  ],
+  "task_level_rows": [
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 25.091159,
+      "local_model_call_count": 2,
+      "mode": "baseline",
+      "model_call_count": 5,
+      "oracle_reason": "meeting_scheduled",
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 3,
+      "runtime_auth_enabled": false,
+      "success": true,
+      "task_latency_seconds": 25.181676,
+      "task_name": "schedule_meeting",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 59.576894,
+      "local_model_call_count": 2,
+      "mode": "baseline",
+      "model_call_count": 6,
+      "oracle_reason": null,
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 4,
+      "runtime_auth_enabled": false,
+      "success": true,
+      "task_latency_seconds": 44.750986,
+      "task_name": "expense_report",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 28.885987,
+      "local_model_call_count": 0,
+      "mode": "baseline",
+      "model_call_count": 2,
+      "oracle_reason": null,
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 2,
+      "runtime_auth_enabled": false,
+      "success": true,
+      "task_latency_seconds": 28.96615,
+      "task_name": "create_blogpost",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 14.21629,
+      "local_model_call_count": 0,
+      "mode": "pq_can",
+      "model_call_count": 3,
+      "oracle_reason": "meeting_scheduled",
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 3,
+      "runtime_auth_enabled": true,
+      "success": true,
+      "task_latency_seconds": 14.31063,
+      "task_name": "schedule_meeting",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 81.955416,
+      "local_model_call_count": 0,
+      "mode": "pq_can",
+      "model_call_count": 3,
+      "oracle_reason": null,
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 3,
+      "runtime_auth_enabled": true,
+      "success": true,
+      "task_latency_seconds": 82.046452,
+      "task_name": "expense_report",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 26.789551,
+      "local_model_call_count": 0,
+      "mode": "pq_can",
+      "model_call_count": 2,
+      "oracle_reason": null,
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 2,
+      "runtime_auth_enabled": true,
+      "success": true,
+      "task_latency_seconds": 26.878519,
+      "task_name": "create_blogpost",
+      "token_usage_available": false,
+      "total_tokens": null
+    }
+  ]
+}

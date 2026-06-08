@@ -20,7 +20,7 @@ agents:
       model_type: "OpenAIServerModel"
       base_agent_type: "CodeAgent"
       api_base: "https://code.fastn.top/v1"
-      model: "gpt-5.2"
+      model: "gpt-5.4"
       additional_authorized_imports: [
         "datetime"
         ]
@@ -53,7 +53,7 @@ agents:
       model_type: "OpenAIServerModel"
       base_agent_type: "CodeAgent"
       api_base: "https://code.fastn.top/v1"
-      model: "gpt-5.2"
+      model: "gpt-5.4"
       additional_authorized_imports: [
         "datetime"
       ]
@@ -84,7 +84,7 @@ agents:
       model_type: "OpenAIServerModel"
       base_agent_type: "CodeAgent"
       api_base: "https://code.fastn.top/v1"
-      model: "gpt-5.2"
+      model: "gpt-5.4"
       additional_authorized_imports: [
         "datetime"
       ]

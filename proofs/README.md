@@ -1,5 +1,120 @@
 Symbolic Formal Verification of the SAGA protocol
 
+# Strict runtime-auth model
+
+`strict_runtime_auth_model.py` is a lightweight Python state exploration model
+for the SAGA-PQ-CAN strict runtime-auth kernel. It models the paper-facing
+claim:
+
+```text
+Execute(surface) => N_verify=1 AND scope_ok AND replay_ok AND delegation_ok AND policy_ok
+```
+
+Run it through the checked-in regression test:
+
+```bash
+python -m pytest -q tests/test_strict_runtime_auth_model.py
+```
+
+The model is intentionally narrower than the ProVerif / Verifpal protocol
+models below. It does not model the whole Python repository. It only enumerates
+the abstract authorization predicates for the protected sinks recorded in
+`saga/security_kernel.py`. The corresponding Python refinement table is exposed
+by `saga.security_kernel.model_refinement_mappings()`.
+
+`strict_runtime_auth_evidence.md` is the current paper-facing proof evidence
+summary. It indexes the core claim, covered and excluded paths, proof artifacts,
+TLC state counts, protected sinks, mutation evidence, model refinement mappings,
+paper-level security properties, and the toy-cryptography boundary:
+
+```bash
+python -m pytest -q tests/test_strict_runtime_auth_evidence_summary.py
+```
+
+The summary is tested against `saga/security_kernel.py` and
+`experiments/security_evidence.py` so changes to protected sinks, mutation
+targets, refinement mappings, or security properties must be reflected in the
+paper-facing evidence index.
+
+# TLA+ strict runtime-auth specification
+
+`tla/StrictRuntimeAuth.tla` is a first-stage TLA+ specification of the same
+strict runtime-auth transition system. It models protected surfaces, the five
+required predicates, guarded `Execute(surface)` transitions, and the invariant:
+
+```text
+Execute(surface) => N_verify=1 AND scope_ok AND replay_ok AND delegation_ok AND policy_ok
+```
+
+`tla/StrictRuntimeAuth.cfg` instantiates the current protected sink surface set.
+`tla/StrictRuntimeAuthLayered.tla` is a symmetry-reduced companion model. It
+folds the full surface inventory into five proof layers:
+
+- prompt layer
+- tool layer
+- memory layer
+- delegation layer
+- replay layer
+
+The layered model keeps the same guarded `Execute` predicate over
+`N_verify`, `scope_ok`, `replay_ok`, `delegation_ok`, and `policy_ok`, while
+checking layer partition coverage separately. This reduces the checked state
+space from free Boolean predicate maps over every surface to one selected layer
+and five Boolean predicates at a time.
+
+The checked-in regression test keeps the TLA+ surface constants and predicate
+names aligned with the Python security-kernel inventory:
+
+```bash
+python -m pytest -q tests/test_tla_strict_runtime_auth.py
+```
+
+This repository does not vendor TLC. If `tla2tools.jar` or an equivalent TLC
+installation is available, run the specification from `proofs/tla/` with:
+
+```bash
+python experiments/tlc_strict_runtime_auth_check.py \
+  --tla2tools-jar /path/to/tla2tools.jar \
+  --output-dir /tmp/saga-tlc-strict-runtime-auth-check
+java -cp /path/to/tla2tools.jar tlc2.TLC -config StrictRuntimeAuthSmoke.cfg \
+  -metadir /tmp/saga-tlc-strict-runtime-auth-smoke StrictRuntimeAuth.tla
+java -cp /path/to/tla2tools.jar tlc2.TLC -config StrictRuntimeAuthPairSmoke.cfg \
+  -metadir /tmp/saga-tlc-strict-runtime-auth-pair-smoke StrictRuntimeAuth.tla
+java -cp /path/to/tla2tools.jar tlc2.TLC -config StrictRuntimeAuthLayered.cfg \
+  -metadir /tmp/saga-tlc-strict-runtime-auth-layered StrictRuntimeAuthLayered.tla
+```
+
+`experiments/tlc_strict_runtime_auth_check.py` is the preferred opt-in TLC
+entrypoint. It reads the full `StrictRuntimeAuth.cfg` inventory, generates a
+temporary one-surface cfg for each protected surface under the selected output
+directory, runs TLC for each generated cfg, optionally runs the checked-in
+two-surface pair smoke config, runs the checked-in layered model by default,
+and writes `tlc_strict_runtime_auth_summary.json`.
+Generated cfgs and TLC state directories should live under `/tmp` or another
+explicit output directory, not in the repository.
+
+`StrictRuntimeAuthSmoke.cfg` intentionally uses one representative protected
+surface. It is a bounded TLC smoke model for the guarded transition and
+invariants. `StrictRuntimeAuthPairSmoke.cfg` uses two protected surfaces to
+check that multiple surfaces can coexist without weakening the same invariant
+or the scope-check mutation oracle. The full `StrictRuntimeAuth.cfg` keeps the
+complete Python surface inventory aligned, but direct TLC model checking of
+that file expands the five free Boolean predicate maps across all current
+surfaces and is therefore a very large state-space run.
+
+`StrictRuntimeAuthLayered.tla` / `StrictRuntimeAuthLayered.cfg` is the current
+symmetry-reduced paper artifact for that full inventory. It does not prove
+arbitrary Python code unreachable; it proves the same abstract strict-kernel
+transition over layer representatives and separately checks that every full
+inventory surface belongs to exactly one layer. In the latest local TLC run,
+the layered model completed with `325 states generated` and `165 distinct
+states found`.
+
+The Python tests are artifact consistency checks for the TLA+ files. They do
+not replace a TLC run, but they keep the bounded smoke configs and the full
+inventory / layered configs aligned with the Python security-kernel surface
+list.
+
 # Reproduction Steps
 1. Install the [nix package manager](https://nixos.org/download/)
 2. Navigate to the current directory, and run `nix develop`. You will get dropped into a devshell with [ProVerif](https://en.wikipedia.org/wiki/ProVerif) and [Verifpal](https://verifpal.com/). Feel free to execute another shell if you don't like `bash`.

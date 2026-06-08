@@ -601,7 +601,40 @@ cat "/home/kali/saga/saga/user/raj.sharma@gmail.com:calendar_agent/audit/executi
 
 ---
 
-## 14. 当前版建议下一步
+## 14. 可选 proof-hardening 验收
+
+该检查不属于默认快速 pytest 矩阵，因为它会复制临时 workspace 并按 mutation 逐项运行 pytest。
+需要整理论文级 strict runtime-auth 证据或可选 CI artifact 时运行：
+
+```bash
+.venv/bin/python experiments/proof_hardening_check.py
+```
+
+该入口会执行：
+
+1. focused proof tests；
+2. `experiments/mutation_evidence_runner.py --mutation all`；
+3. mutation artifact validation。
+
+快速只跑 proof tests 可使用：
+
+```bash
+.venv/bin/python experiments/proof_hardening_check.py --skip-mutations
+```
+
+输出默认写入 ignored `experiments/runs/`，其中包含 `proof_hardening_check_summary.json`。
+
+仓库还提供手动 GitHub Actions 入口：
+
+```text
+.github/workflows/proof-hardening.yml
+```
+
+该 workflow 只通过 `workflow_dispatch` 触发，不挂到默认 `push` / `pull_request` 快速路径。默认运行完整 proof-hardening 检查；需要快速检查时可将 `skip_mutations` 输入设为 `true`。
+
+---
+
+## 15. 当前版建议下一步
 
 真实测试工作从本稿开始，执行顺序建议为：
 
@@ -616,7 +649,7 @@ cat "/home/kali/saga/saga/user/raj.sharma@gmail.com:calendar_agent/audit/executi
 
 ---
 
-## 15. 最终说明
+## 16. 最终说明
 
 本修订稿刻意收紧到“当前仓库真实可执行”。
 

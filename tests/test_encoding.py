@@ -7,8 +7,10 @@ import unittest
 
 from saga.messages import (
     DEFAULT_ENVELOPE_DOMAIN,
+    DEFAULT_MAX_DELEGATION_DEPTH,
     RequestEnvelope,
     action_scope_allows,
+    action_scopes_are_attenuated,
     action_scopes_allow,
     build_request_envelope,
     normalize_authorized_scopes,
@@ -216,6 +218,86 @@ class RequestEnvelopeTests(unittest.TestCase):
         """Unsupported extra scopes must fail before signing."""
         with self.assertRaisesRegex(ValueError, "unsupported action_scope"):
             normalize_authorized_scopes("llm_prompt", ["calendar_write"])
+
+    def test_capability_fields_are_canonicalized_and_signed(self) -> None:
+        """Capability metadata should be part of the canonical signed envelope."""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="token-1",
+            session_id="session-1",
+            turn_id="turn-1",
+            issued_at=datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 5, 7, 14, 0, 0, tzinfo=timezone.utc),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            message="hello",
+            capability_id="cap-root",
+        )
+
+        payload = envelope.as_dict()
+
+        self.assertEqual(payload["capability_id"], "cap-root")
+        self.assertEqual(payload["parent_envelope_digest"], "")
+        self.assertEqual(payload["parent_authorized_scopes"], [])
+        self.assertEqual(payload["delegation_depth"], 0)
+        self.assertEqual(payload["max_delegation_depth"], DEFAULT_MAX_DELEGATION_DEPTH)
+        self.assertIn("\"capability_id\":\"cap-root\"", envelope.canonical_json())
+
+    def test_child_capability_derives_parent_digest_and_depth(self) -> None:
+        """Delegated child envelopes should bind the parent digest and attenuated scopes."""
+        parent = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="token-1",
+            session_id="session-1",
+            turn_id="turn-parent",
+            issued_at=datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 5, 7, 14, 0, 0, tzinfo=timezone.utc),
+            action_scope="llm_prompt",
+            authorized_scopes=["delegation", "tool_call:send_email"],
+            message="parent",
+            capability_id="cap-parent",
+        )
+
+        child = build_request_envelope(
+            sender_aid="bob@example.com:email_agent",
+            receiver_aid="carol@example.com:email_agent",
+            token="token-2",
+            session_id="session-1",
+            turn_id="turn-child",
+            issued_at=datetime(2026, 5, 7, 13, 1, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 5, 7, 13, 30, 0, tzinfo=timezone.utc),
+            action_scope="tool_call:send_email",
+            message="child",
+            parent_envelope=parent,
+            capability_id="cap-child",
+        )
+
+        self.assertEqual(child.parent_envelope_digest, parent.hex_digest())
+        self.assertEqual(child.parent_authorized_scopes, parent.authorized_scopes)
+        self.assertEqual(child.delegation_depth, 1)
+        self.assertTrue(
+            action_scopes_are_attenuated(
+                child.parent_authorized_scopes,
+                child.authorized_scopes,
+            )
+        )
+
+    def test_action_scopes_are_attenuated_rejects_scope_expansion(self) -> None:
+        """A delegated child scope set must not exceed its parent capability."""
+        self.assertTrue(
+            action_scopes_are_attenuated(
+                ("tool_call", "memory_read"),
+                ("tool_call:send_email",),
+            )
+        )
+        self.assertFalse(
+            action_scopes_are_attenuated(
+                ("tool_call:send_email",),
+                ("tool_call:add_calendar_event",),
+            )
+        )
 
 
 if __name__ == "__main__":

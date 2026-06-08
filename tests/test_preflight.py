@@ -50,6 +50,49 @@ def _issue_cert(common_name: str, ca_private_key, ca_certificate):
     return secret_key, public_key, cert
 
 
+def _raw_public_key(public_key) -> bytes:
+    """Serialize one raw public key in the SAGA manifest format."""
+    return public_key.public_bytes(
+        encoding=sc.serialization.Encoding.Raw,
+        format=sc.serialization.PublicFormat.Raw,
+    )
+
+
+def _write_agent_manifest(
+    agent_dir: Path,
+    *,
+    aid: str,
+    user_cert,
+    user_secret,
+    agent_cert,
+    legacy_raw_otk_signature: bool = False,
+) -> tuple[bytes, bytes]:
+    """Write a minimal agent manifest with one signed OTK and return DB OTK fields."""
+    _private_otk, public_otk = sc.generate_x25519_keypair()
+    otk_bytes = _raw_public_key(public_otk)
+    if legacy_raw_otk_signature:
+        signature = user_secret.sign(otk_bytes)
+    else:
+        signature = sc.sign_otk(user_secret, aid, otk_bytes)
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    _write_text(
+        agent_dir / "agent.json",
+        textwrap.dedent(
+            f"""
+            {{
+              "aid": "{aid}",
+              "crt_u": "{base64.b64encode(user_cert.public_bytes(sc.serialization.Encoding.PEM)).decode('ascii')}",
+              "agent_cert": "{base64.b64encode(agent_cert.public_bytes(sc.serialization.Encoding.PEM)).decode('ascii')}",
+              "otks": ["{base64.b64encode(otk_bytes).decode('ascii')}"],
+              "otk_sigs": ["{base64.b64encode(signature).decode('ascii')}"]
+            }}
+            """
+        ).strip()
+        + "\n",
+    )
+    return otk_bytes, signature
+
+
 @dataclass
 class _FakeCollection:
     """Simple in-memory collection stub for `find_one` lookups."""
@@ -123,13 +166,20 @@ class PreflightTests(unittest.TestCase):
 
             email = "emma@example.com"
             agent_name = "calendar_agent"
-            _, _, user_cert = _issue_cert(email, ca_private_key, ca_certificate)
+            user_secret, _, user_cert = _issue_cert(email, ca_private_key, ca_certificate)
             sc.save_x509_certificate(str(user_workdir / "keys" / email), user_cert)
 
             agent_dir = user_workdir / f"{email}:{agent_name}"
             agent_dir.mkdir(parents=True, exist_ok=True)
             _, _, agent_cert = _issue_cert(f"{email}:{agent_name}", ca_private_key, ca_certificate)
             sc.save_x509_certificate(str(agent_dir / "agent"), agent_cert)
+            otk_bytes, otk_signature = _write_agent_manifest(
+                agent_dir,
+                aid=f"{email}:{agent_name}",
+                user_cert=user_cert,
+                user_secret=user_secret,
+                agent_cert=agent_cert,
+            )
 
             self._build_minimal_config(config_path, email, agent_name)
 
@@ -145,6 +195,8 @@ class PreflightTests(unittest.TestCase):
                             {
                                 "aid": f"{email}:{agent_name}",
                                 "agent_cert": (agent_dir / "agent.crt").read_bytes(),
+                                "one_time_keys": [otk_bytes],
+                                "one_time_key_sigs": [otk_signature],
                             }
                         ]
                     ),
@@ -193,13 +245,20 @@ class PreflightTests(unittest.TestCase):
 
             email = "raj@example.com"
             agent_name = "calendar_agent"
-            _, _, user_cert = _issue_cert(email, ca_private_key, ca_certificate)
+            user_secret, _, user_cert = _issue_cert(email, ca_private_key, ca_certificate)
             sc.save_x509_certificate(str(user_workdir / "keys" / email), user_cert)
 
             agent_dir = user_workdir / f"{email}:{agent_name}"
             agent_dir.mkdir(parents=True, exist_ok=True)
             _, _, agent_cert = _issue_cert(f"{email}:{agent_name}", ca_private_key, ca_certificate)
             sc.save_x509_certificate(str(agent_dir / "agent"), agent_cert)
+            otk_bytes, otk_signature = _write_agent_manifest(
+                agent_dir,
+                aid=f"{email}:{agent_name}",
+                user_cert=user_cert,
+                user_secret=user_secret,
+                agent_cert=agent_cert,
+            )
             self._build_minimal_config(config_path, email, agent_name)
 
             stale_user_bytes = b"stale-user-cert"
@@ -210,7 +269,14 @@ class PreflightTests(unittest.TestCase):
                 {
                     "users": _FakeCollection([{"uid": email, "crt_u": stale_user_bytes}]),
                     "agents": _FakeCollection(
-                        [{"aid": f"{email}:{agent_name}", "agent_cert": stale_agent_bytes}]
+                        [
+                            {
+                                "aid": f"{email}:{agent_name}",
+                                "agent_cert": stale_agent_bytes,
+                                "one_time_keys": [otk_bytes],
+                                "one_time_key_sigs": [otk_signature],
+                            }
+                        ]
                     ),
                 },
             )()
@@ -278,22 +344,16 @@ class PreflightTests(unittest.TestCase):
 
             email = "emma@example.com"
             agent_name = "email_agent"
-            _, _, user_cert = _issue_cert(email, ca_private_key, ca_certificate)
+            user_secret, _, user_cert = _issue_cert(email, ca_private_key, ca_certificate)
             sc.save_x509_certificate(str(user_workdir / "keys" / email), user_cert)
             _, _, agent_cert = _issue_cert(f"{email}:{agent_name}", ca_private_key, ca_certificate)
             agent_dir = user_workdir / f"{email}:{agent_name}"
-            agent_dir.mkdir(parents=True, exist_ok=True)
-            _write_text(
-                agent_dir / "agent.json",
-                textwrap.dedent(
-                    f"""
-                    {{
-                      "aid": "{email}:{agent_name}",
-                      "agent_cert": "{base64.b64encode(agent_cert.public_bytes(sc.serialization.Encoding.PEM)).decode('ascii')}"
-                    }}
-                    """
-                ).strip()
-                + "\n",
+            otk_bytes, otk_signature = _write_agent_manifest(
+                agent_dir,
+                aid=f"{email}:{agent_name}",
+                user_cert=user_cert,
+                user_secret=user_secret,
+                agent_cert=agent_cert,
             )
             self._build_minimal_config(config_path, email, agent_name)
 
@@ -309,6 +369,8 @@ class PreflightTests(unittest.TestCase):
                             {
                                 "aid": f"{email}:{agent_name}",
                                 "agent_cert": agent_cert.public_bytes(sc.serialization.Encoding.PEM),
+                                "one_time_keys": [otk_bytes],
+                                "one_time_key_sigs": [otk_signature],
                             }
                         ]
                     ),
@@ -330,6 +392,91 @@ class PreflightTests(unittest.TestCase):
                 )
 
         self.assertTrue(all(result.ok for result in results))
+
+    def test_preflight_detects_legacy_raw_otk_signatures(self) -> None:
+        """旧 raw-OTK 签名应在真实实验前被 preflight 明确拒绝。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ca_static_dir = root / ".ca_static"
+            ca_workdir = root / "saga" / "ca"
+            provider_dir = root / "saga" / "provider"
+            user_workdir = root / "saga" / "user"
+            config_path = root / "user_configs" / "emma.yaml"
+
+            ca_static_dir.mkdir(parents=True, exist_ok=True)
+            ca_workdir.mkdir(parents=True, exist_ok=True)
+            provider_dir.mkdir(parents=True, exist_ok=True)
+            user_workdir.mkdir(parents=True, exist_ok=True)
+            (user_workdir / "keys").mkdir(parents=True, exist_ok=True)
+
+            ca_private_key, ca_public_key, ca_certificate = sc.generate_ca(CA_CONFIG)
+            sc.save_ca(str(ca_static_dir), "ca", ca_private_key, ca_public_key, ca_certificate)
+            sc.save_ca(str(ca_workdir), "ca", ca_private_key, ca_public_key, ca_certificate)
+
+            _, _, provider_cert = _issue_cert("provider", ca_private_key, ca_certificate)
+            sc.save_x509_certificate(str(provider_dir / "provider"), provider_cert)
+
+            email = "emma@example.com"
+            agent_name = "calendar_agent"
+            user_secret, _, user_cert = _issue_cert(email, ca_private_key, ca_certificate)
+            sc.save_x509_certificate(str(user_workdir / "keys" / email), user_cert)
+            _, _, agent_cert = _issue_cert(f"{email}:{agent_name}", ca_private_key, ca_certificate)
+            agent_dir = user_workdir / f"{email}:{agent_name}"
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            sc.save_x509_certificate(str(agent_dir / "agent"), agent_cert)
+            otk_bytes, otk_signature = _write_agent_manifest(
+                agent_dir,
+                aid=f"{email}:{agent_name}",
+                user_cert=user_cert,
+                user_secret=user_secret,
+                agent_cert=agent_cert,
+                legacy_raw_otk_signature=True,
+            )
+            self._build_minimal_config(config_path, email, agent_name)
+
+            fake_db = type(
+                "FakeDatabase",
+                (),
+                {
+                    "users": _FakeCollection(
+                        [{"uid": email, "crt_u": (user_workdir / "keys" / f"{email}.crt").read_bytes()}]
+                    ),
+                    "agents": _FakeCollection(
+                        [
+                            {
+                                "aid": f"{email}:{agent_name}",
+                                "agent_cert": (agent_dir / "agent.crt").read_bytes(),
+                                "one_time_keys": [otk_bytes],
+                                "one_time_key_sigs": [otk_signature],
+                            }
+                        ]
+                    ),
+                },
+            )()
+            fake_client = type("FakeClient", (), {"close": lambda self: None})()
+
+            with mock.patch.object(preflight, "USER_WORKDIR", str(user_workdir)), mock.patch.object(
+                preflight,
+                "_connect_provider_db",
+                return_value=(fake_client, fake_db),
+            ):
+                results = preflight.run_preflight_checks(
+                    config_paths=[config_path],
+                    ca_static_dir=ca_static_dir,
+                    ca_workdir=ca_workdir,
+                    provider_cert_path=provider_dir / "provider.crt",
+                    check_db_sync=True,
+                )
+                repair_plan = preflight.build_repair_plan(results, config_paths=[config_path])
+
+        self.assertFalse(all(result.ok for result in results))
+        self.assertTrue(
+            any(result.name == f"local_otk_signature:{email}:{agent_name}" and not result.ok for result in results)
+        )
+        self.assertTrue(
+            any(result.name == f"db_otk_signature:{email}:{agent_name}" and not result.ok for result in results)
+        )
+        self.assertTrue(any("Refresh OTK inventory" in step for step in repair_plan))
 
     def test_model_probe_fails_closed_when_openai_key_is_missing(self) -> None:
         """Optional model probes should fail before experiments when a required key is absent."""

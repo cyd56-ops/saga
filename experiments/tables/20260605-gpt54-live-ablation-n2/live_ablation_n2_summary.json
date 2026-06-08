@@ -1,0 +1,84 @@
+{
+  "api_cost_policy": "API cost and token usage are reported only when model diagnostics expose explicit fields; both were unavailable in these runs.",
+  "generated_from": [
+    {
+      "baseline_summary": "experiments/runs/20260605T064325Z-real-e2e-ablation/saga_only/end_to_end_stats_summary.json",
+      "pq_can_summary": "experiments/runs/20260605T064325Z-real-e2e-ablation/shamir_secured_pq_can/end_to_end_stats_summary.json",
+      "sample_id": "20260605T064325Z"
+    },
+    {
+      "baseline_summary": "experiments/runs/20260605T-repeat-gpt54-real-e2e-ablation/saga_only/end_to_end_stats_summary.json",
+      "pq_can_summary": "experiments/runs/20260605T-repeat-gpt54-real-e2e-ablation/shamir_secured_pq_can/end_to_end_stats_summary.json",
+      "sample_id": "20260605T-repeat"
+    }
+  ],
+  "model": "gpt-5.4",
+  "mode_rows": [
+    {
+      "api_cost_available": false,
+      "audit_reject_count_total": 0,
+      "audit_record_count_total": 0,
+      "model_call_count_mean_per_run": 12.5,
+      "model_call_count_range_per_run": [
+        12,
+        13
+      ],
+      "model_call_count_total": 25,
+      "mode": "baseline",
+      "run_count": 2,
+      "runtime_auth_enabled": false,
+      "successful_tasks": 6,
+      "task_count": 6,
+      "task_latency_seconds_mean_across_tasks": 34.326645,
+      "task_latency_seconds_range_across_tasks": [
+        18.573237,
+        59.334295
+      ],
+      "token_usage_available": false,
+      "total_latency_seconds_mean_per_run": 102.979934,
+      "total_latency_seconds_range_per_run": [
+        98.898812,
+        107.061056
+      ]
+    },
+    {
+      "api_cost_available": false,
+      "audit_reject_count_total": 0,
+      "audit_record_count_total": 0,
+      "model_call_count_mean_per_run": 11.5,
+      "model_call_count_range_per_run": [
+        8,
+        15
+      ],
+      "model_call_count_total": 23,
+      "mode": "pq_can",
+      "run_count": 2,
+      "runtime_auth_enabled": true,
+      "successful_tasks": 6,
+      "task_count": 6,
+      "task_latency_seconds_mean_across_tasks": 41.025729,
+      "task_latency_seconds_range_across_tasks": [
+        14.31063,
+        82.046452
+      ],
+      "token_usage_available": false,
+      "total_latency_seconds_mean_per_run": 123.077188,
+      "total_latency_seconds_range_per_run": [
+        122.918774,
+        123.235601
+      ]
+    }
+  ],
+  "paired_summary": {
+    "mean_total_latency_delta_seconds": 20.097254,
+    "mean_total_latency_ratio_pq_can_over_baseline": 1.195157,
+    "success_rate_baseline": 1.0,
+    "success_rate_pq_can": 1.0
+  },
+  "scope": "Two live end-to-end samples for the real runtime modes wired in this prototype: SAGA baseline and Shamir-secured PQ-CAN. Ordinary PQ middleware and naive neural verifier remain offline ablation modes.",
+  "task_names": [
+    "schedule_meeting",
+    "expense_report",
+    "create_blogpost"
+  ]
+}

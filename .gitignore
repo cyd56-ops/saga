@@ -184,6 +184,7 @@ saga/user/*/*.json
 .mongodata/
 experiments/results/
 experiments/runs/
+states/
 saga/user/*/diagnostics/
 saga/user/*/audit/
 saga/user/*/agent.crt.stale-*

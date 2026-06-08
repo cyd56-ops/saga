@@ -12,6 +12,7 @@ import ssl
 import base64
 import binascii
 import requests
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import traceback
 from pathlib import Path
@@ -32,9 +33,10 @@ from saga.execution_gate import (
     ExecutionGate,
     ExecutionGateRequest,
     LocalExecutionContext,
+    ReplayStateStore,
     build_toy_lwe_execution_gate,
 )
-from saga.messages import build_request_envelope
+from saga.messages import RequestEnvelope, build_request_envelope
 from saga.intent import AgentIntent, IntentCompiler, PolicyDecision
 from saga.local_agent import LocalAgent, DummyAgent
 from saga.runtime_diagnostics import (
@@ -112,11 +114,51 @@ def deserialize(obj):
 
 
 def _default_replay_state_dir(agent: "Agent") -> Path | None:
-    """返回 agent 默认的 replay 状态目录；缺少 workdir 时保持内存态。"""
+    """返回 agent 默认的 replay 状态目录；缺少 workdir 时返回 ``None``。"""
     workdir = getattr(agent, "workdir", None)
     if not workdir:
         return None
     return Path(workdir) / "audit" / "replay"
+
+
+def _require_default_replay_state_dir(agent: "Agent") -> Path:
+    """返回安全模式默认 replay 目录；缺少 workdir 时 fail-closed。"""
+    replay_state_dir = _default_replay_state_dir(agent)
+    if replay_state_dir is None:
+        raise RuntimeError(
+            "runtime auth requires persistent replay state; configure an agent "
+            "workdir or inject a ReplayStateStore backend"
+        )
+    return replay_state_dir
+
+
+def _runtime_auth_replay_state_dir(
+    agent: "Agent",
+    replay_store_config: saga.config.ReplayStoreConfig | None,
+) -> Path:
+    """根据显式 replay backend 配置选择 marker 目录；强一致后端必须外部注入。"""
+    if replay_store_config is None:
+        return _require_default_replay_state_dir(agent)
+    if replay_store_config.backend == "agent_workdir_file":
+        return _require_default_replay_state_dir(agent)
+    if replay_store_config.backend == "file_marker":
+        assert replay_store_config.state_dir is not None
+        return Path(replay_store_config.state_dir)
+    if replay_store_config.backend == "external_strong_consistency":
+        raise RuntimeError(
+            "external_strong_consistency replay store requires explicit "
+            "ReplayStateStore backend wiring; the config-driven path fails closed."
+        )
+    raise ValueError(f"unsupported replay store backend: {replay_store_config.backend}")
+
+
+def _sync_execution_capability_mode(agent: "Agent") -> None:
+    """把外层 strict runtime-auth 模式同步给支持 capability facade 的本地 agent。"""
+    local_agent = getattr(agent, "local_agent", None)
+    if hasattr(local_agent, "set_strict_execution_capabilities"):
+        local_agent.set_strict_execution_capabilities(
+            bool(getattr(agent, "strict_execution_gate", False))
+        )
 
 
 def enable_toy_lwe_runtime_auth(
@@ -129,6 +171,7 @@ def enable_toy_lwe_runtime_auth(
     message_bytes: int = 32,
     now_fn: Callable[[], datetime] | None = None,
     replay_state_dir: str | Path | None = None,
+    replay_state_store: ReplayStateStore | None = None,
 ) -> ExecutionGate:
     """Attach research-only toy LWE signing and execution-gate wiring to an agent.
 
@@ -139,19 +182,25 @@ def enable_toy_lwe_runtime_auth(
 
     启用 toy LWE runtime auth 时默认打开严格执行层 gate，缺失 gate/context 会拒绝。
     """
+    effective_replay_state_dir = replay_state_dir
+    if replay_state_store is None:
+        effective_replay_state_dir = replay_state_dir or _require_default_replay_state_dir(agent)
+
     gate = build_toy_lwe_execution_gate(
         scheme,
         trusted_public_keys,
         verifier_flavor=verifier_flavor,
         message_bytes=message_bytes,
         now_fn=now_fn,
-        replay_state_dir=replay_state_dir or _default_replay_state_dir(agent),
+        replay_state_dir=effective_replay_state_dir,
+        replay_state_store=replay_state_store,
     )
     agent.pq_signature_scheme = scheme
     agent.pq_public_key = key_pair.public_key
     agent.pq_secret_key = key_pair.secret_key
     agent.execution_gate = gate
     agent.strict_execution_gate = True
+    _sync_execution_capability_mode(agent)
     return gate
 
 
@@ -160,8 +209,9 @@ def enable_toy_lwe_runtime_auth_from_config(
     runtime_auth_config: saga.config.ToyRuntimeAuthConfig | None,
     *,
     now_fn: Callable[[], datetime] | None = None,
+    replay_state_store: ReplayStateStore | None = None,
 ) -> ExecutionGate | None:
-    """从配置块启用 runtime auth，并按 mode 保持 toy/ML-DSA 边界。"""
+    """从配置块启用 runtime auth，并按 mode 与 replay backend 保持安全边界。"""
     if runtime_auth_config is None or not runtime_auth_config.enabled:
         return None
 
@@ -179,6 +229,17 @@ def enable_toy_lwe_runtime_auth_from_config(
         except (TypeError, ValueError, binascii.Error) as exc:
             raise ValueError(f"invalid base64 trusted public key for {aid}") from exc
 
+    replay_store_config = runtime_auth_config.resolved_replay_store()
+    if replay_state_store is not None:
+        if replay_store_config is None or replay_store_config.backend != "external_strong_consistency":
+            raise ValueError(
+                "explicit ReplayStateStore injection requires "
+                "replay_store.backend='external_strong_consistency'"
+            )
+        replay_state_dir = None
+    else:
+        replay_state_dir = _runtime_auth_replay_state_dir(agent, replay_store_config)
+
     # toy LWE 只在显式启用 research runtime auth 时加载，避免 SAGA 核心路径强依赖 PQ-CAN。
     from pq.toy_lwe import ToyLWESignatureScheme
 
@@ -192,9 +253,12 @@ def enable_toy_lwe_runtime_auth_from_config(
         verifier_flavor=runtime_auth_config.toy_verifier_flavor(),
         message_bytes=runtime_auth_config.message_bytes,
         now_fn=now_fn,
-        replay_state_dir=runtime_auth_config.replay_state_dir or _default_replay_state_dir(agent),
+        replay_state_dir=replay_state_dir,
+        replay_state_store=replay_state_store,
     )
-    agent.strict_execution_gate = runtime_auth_config.strict_execution_gate
+    if agent.strict_execution_gate != runtime_auth_config.strict_execution_gate:
+        agent.strict_execution_gate = runtime_auth_config.strict_execution_gate
+        _sync_execution_capability_mode(agent)
     return gate
 
 
@@ -243,6 +307,7 @@ class Agent:
         self.task_finished_token = self.local_agent.task_finished_token
         self.execution_gate = execution_gate
         self.strict_execution_gate = strict_execution_gate
+        self._sync_local_agent_execution_capability_mode()
         self.pq_signature_scheme = None
         self.pq_public_key = None
         self.pq_secret_key = None
@@ -367,6 +432,11 @@ class Agent:
         """Install optional runtime callbacks into the local agent wrapper."""
         if hasattr(self.local_agent, "set_delegation_handler"):
             self.local_agent.set_delegation_handler(self._delegate_to_agent)
+
+    def _sync_local_agent_execution_capability_mode(self) -> None:
+        """把外层 strict runtime-auth 模式同步给本地 capability facade。"""
+        _sync_execution_capability_mode(self)
+
 
     @staticmethod
     def _local_agent_memory_step_count(agent_instance: object | None) -> int:
@@ -1005,6 +1075,36 @@ class Agent:
             pq_signature=execution_context.pq_signature,
         )
 
+    def _local_agent_supports_execution_context(self) -> bool:
+        """检查本地 agent 是否声明会用 execution_context 保护受限资源。"""
+        support_checker = getattr(
+            getattr(self, "local_agent", None),
+            "supports_execution_context",
+            None,
+        )
+        if not callable(support_checker):
+            return False
+        try:
+            return bool(support_checker())
+        except Exception:
+            return False
+
+    def _evaluate_local_agent_context_support(
+        self,
+        base_decision: ExecutionGateDecision,
+    ) -> ExecutionGateDecision:
+        """严格模式下要求本地 agent 显式支持 execution_context，否则拒绝执行。"""
+        if not getattr(self, "strict_execution_gate", False):
+            return base_decision
+        if self._local_agent_supports_execution_context():
+            return base_decision
+        return replace(
+            base_decision,
+            allowed=False,
+            reason="local_agent_execution_context_unsupported",
+            internal_policy_accept=False,
+        )
+
     def _record_execution_gate_rejection(
         self,
         *,
@@ -1028,10 +1128,14 @@ class Agent:
         turn_index: int,
         token_dict: dict | None,
         authorized_scopes: list[str] | tuple[str, ...] | None = None,
+        parent_envelope: RequestEnvelope | None = None,
+        parent_envelope_digest: str = "",
+        parent_authorized_scopes: list[str] | tuple[str, ...] | None = None,
+        delegation_depth: int = 0,
     ) -> dict:
         """Build a transport payload and attach a signed request envelope when configured.
 
-        入口动作和额外授权 scope 一起进入签名信封，供接收端工具 gate 使用。
+        入口动作、额外授权 scope 和可选父 capability 一起进入签名信封。
         """
         payload = {
             "msg": message,
@@ -1065,6 +1169,10 @@ class Agent:
             message=message,
             provider_id=getattr(self, "provider_id", ""),
             timestamp=now,
+            parent_envelope=parent_envelope,
+            parent_envelope_digest=parent_envelope_digest,
+            parent_authorized_scopes=parent_authorized_scopes,
+            delegation_depth=delegation_depth,
         )
         signature = signature_scheme.sign(secret_key, envelope.digest())
         payload["request_envelope"] = envelope.canonical_json()
@@ -1255,6 +1363,23 @@ class Agent:
                 self.monitor.stop("agent:communication_conv_init")
                 return False
 
+            response_local_agent_decision = self._evaluate_local_agent_context_support(
+                response_prompt_decision
+            )
+            if not response_local_agent_decision.allowed:
+                request = self._build_execution_gate_request(
+                    sender_aid=r_aid,
+                    token=token,
+                    message_dict=response,
+                )
+                self._record_execution_gate_rejection(
+                    request=request,
+                    decision=response_local_agent_decision,
+                    log_message="Execution gate rejected inbound response local agent.",
+                )
+                self.monitor.stop("agent:communication_conv_init")
+                return False
+
             # Process response:
             received_message = str(response.get("msg", self.local_agent.task_finished_token))
             logger.log("AGENT", f"Received: \'{received_message}\'")
@@ -1391,6 +1516,21 @@ class Agent:
                     request=request,
                     decision=prompt_decision,
                     log_message="Execution gate rejected prompt surface request.",
+                )
+                self.monitor.stop("agent:communication_conv_recv")
+                return True
+
+            local_agent_decision = self._evaluate_local_agent_context_support(prompt_decision)
+            if not local_agent_decision.allowed:
+                request = self._build_execution_gate_request(
+                    sender_aid=sender_aid,
+                    token=token,
+                    message_dict=message_dict,
+                )
+                self._record_execution_gate_rejection(
+                    request=request,
+                    decision=local_agent_decision,
+                    log_message="Execution gate rejected local agent implementation.",
                 )
                 self.monitor.stop("agent:communication_conv_recv")
                 return True

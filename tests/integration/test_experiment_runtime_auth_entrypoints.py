@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -25,12 +26,17 @@ class _RecordingAgent:
     """Minimal agent double that records experiment entrypoint behavior."""
 
     instances: list["_RecordingAgent"] = []
+    workdir_root: Path | None = None
 
     def __init__(self, workdir: str, material: dict, local_agent) -> None:
-        self.workdir = workdir
         self.material = material
         self.local_agent = local_agent
         self.aid = material["aid"]
+        self.workdir = (
+            str(type(self).workdir_root / self.aid)
+            if type(self).workdir_root is not None
+            else workdir
+        )
         self.provider_id = "https://provider.example.test"
         self.execution_gate = None
         self.pq_signature_scheme = None
@@ -76,6 +82,10 @@ class ExperimentRuntimeAuthEntrypointTests(unittest.TestCase):
     def setUp(self) -> None:
         """Reset the recording agent registry before each test."""
         _RecordingAgent.instances.clear()
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        _RecordingAgent.workdir_root = Path(self.tempdir.name)
+        self.addCleanup(lambda: setattr(_RecordingAgent, "workdir_root", None))
 
     def _load_agent_config(self, config_path: str, agent_name: str):
         """Load a single agent config from a user config file."""
@@ -88,6 +98,7 @@ class ExperimentRuntimeAuthEntrypointTests(unittest.TestCase):
         """Create a minimal object compatible with runtime-auth helper wiring."""
         agent = Agent.__new__(Agent)
         agent.aid = aid
+        agent.workdir = str(Path(self.tempdir.name) / aid)
         agent.provider_id = "https://provider.example.test"
         agent.execution_gate = None
         agent.pq_signature_scheme = None

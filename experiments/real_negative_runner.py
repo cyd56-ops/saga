@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
 import time
 from types import MethodType
-from typing import Iterable
+from typing import Iterable, Literal
 
 from saga.agent import Agent, enable_toy_lwe_runtime_auth_from_config, get_agent_material
-from saga.config import ROOT_DIR, UserConfig, get_index_of_agent
+from saga.config import ROOT_DIR, ReplayStoreConfig, ToyRuntimeAuthConfig, UserConfig, get_index_of_agent
+from saga.execution_gate import RedisReplayStateStore, ReplayStateStore, SQLiteReplayStateStore
 from saga.local_agent import LocalAgent
 
 try:  # pragma: no cover - exercised by script-style execution
@@ -63,6 +64,7 @@ SCOPE_PROBE_SCENARIOS = (
     "unauthorized_memory_write",
     "unauthorized_delegation",
 )
+REPLAY_STORE_BACKENDS = ("agent_config", "sqlite", "redis")
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,11 @@ class RealNegativeRunConfig:
     query_timeout_seconds: float
     audit_timeout_seconds: float
     skip_db_preflight: bool
+    replay_store_backend: Literal["agent_config", "sqlite", "redis"] = "agent_config"
+    replay_store_sqlite_path: Path | None = None
+    replay_store_redis_url: str | None = None
+    replay_store_key_prefix: str = "saga:pqcan:replay:"
+    replay_store_ttl_seconds: int | None = None
 
 
 class _RecordingLocalAgent(LocalAgent):
@@ -133,6 +140,10 @@ class _RecordingLocalAgent(LocalAgent):
             if protected_side_effect_path is not None
             else _protected_side_effect_path(self.side_effect_path)
         )
+
+    def supports_execution_context(self) -> bool:
+        """声明真实服务负向探针会使用 execution_context 检查下游能力。"""
+        return True
 
     def run(
         self,
@@ -276,9 +287,8 @@ def build_negative_payload(
             action_scope=DEFAULT_TOOL_ONLY_SCOPE,
             turn_index=turn_index,
             token_dict=dict(token_dict),
-            authorized_scopes=agent._conversation_authorized_scopes(
-                DEFAULT_TOOL_ONLY_SCOPE
-            ),
+            # 该负向样本要验证 receiver 侧 prompt surface gate；不能让 initiating 侧本地 policy 提前拒绝。
+            authorized_scopes=(DEFAULT_TOOL_ONLY_SCOPE,),
         )
     if scenario in {"wrong_trusted_sender_key", *SCOPE_PROBE_SCENARIOS}:
         authorized_scopes = agent._conversation_authorized_scopes("llm_prompt")
@@ -307,6 +317,11 @@ def run_listener(
     side_effect_path: str | Path,
     wrong_trusted_sender_aid: str | None = None,
     scope_probe: str | None = None,
+    replay_store_backend: str = "agent_config",
+    replay_store_sqlite_path: str | Path | None = None,
+    replay_store_redis_url: str | None = None,
+    replay_store_key_prefix: str = "saga:pqcan:replay:",
+    replay_store_ttl_seconds: int | None = None,
 ) -> None:
     """启动真实 receiving Agent listener，但本地 agent 只记录副作用。"""
     agent = _build_agent_from_config(
@@ -314,6 +329,13 @@ def run_listener(
         agent_name=agent_name,
         side_effect_path=side_effect_path,
         scope_probe=scope_probe,
+        replay_state_store=_build_replay_state_store(
+            replay_store_backend,
+            sqlite_path=replay_store_sqlite_path,
+            redis_url=replay_store_redis_url,
+            key_prefix=replay_store_key_prefix,
+            ttl_seconds=replay_store_ttl_seconds,
+        ),
     )
     if wrong_trusted_sender_aid is not None:
         _install_wrong_trusted_sender_key(agent, sender_aid=wrong_trusted_sender_aid)
@@ -410,6 +432,15 @@ def run_real_negative_services(config: RealNegativeRunConfig) -> list[RealNegati
         "receiver_config": str(config.receiver_config),
         "agent_name": config.agent_name,
         "run_dir": str(config.run_dir),
+        "replay_store_backend": config.replay_store_backend,
+        "replay_store_sqlite_path": (
+            str(config.replay_store_sqlite_path)
+            if config.replay_store_sqlite_path is not None
+            else None
+        ),
+        "replay_store_redis_url_configured": config.replay_store_redis_url is not None,
+        "replay_store_key_prefix": config.replay_store_key_prefix,
+        "replay_store_ttl_seconds": config.replay_store_ttl_seconds,
     }
     (config.run_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -453,6 +484,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     listen_parser.add_argument("--side-effect-path", required=True)
     listen_parser.add_argument("--wrong-trusted-sender-aid")
     listen_parser.add_argument("--scope-probe", choices=SCOPE_PROBE_SCENARIOS)
+    _add_replay_store_args(listen_parser)
 
     query_parser = subparsers.add_parser("query", help="Internal negative query entrypoint.")
     query_parser.add_argument("--scenario", choices=DEFAULT_SCENARIOS, required=True)
@@ -475,6 +507,11 @@ def main(argv: list[str] | None = None) -> int:
             side_effect_path=args.side_effect_path,
             wrong_trusted_sender_aid=args.wrong_trusted_sender_aid,
             scope_probe=args.scope_probe,
+            replay_store_backend=args.replay_store_backend,
+            replay_store_sqlite_path=args.replay_store_sqlite_path,
+            replay_store_redis_url=args.replay_store_redis_url,
+            replay_store_key_prefix=args.replay_store_key_prefix,
+            replay_store_ttl_seconds=args.replay_store_ttl_seconds,
         )
         return 0
     if args.mode == "query":
@@ -515,6 +552,7 @@ def _build_agent_from_config(
     agent_name: str,
     side_effect_path: str | Path,
     scope_probe: str | None = None,
+    replay_state_store: ReplayStateStore | None = None,
 ) -> Agent:
     """从 user config 和本地注册材料构造真实 Agent，并启用 PQ-CAN runtime auth。"""
     config = UserConfig.load(str(config_path), drop_extra_fields=True)
@@ -528,9 +566,13 @@ def _build_agent_from_config(
         material=material,
         local_agent=_RecordingLocalAgent(side_effect_path, scope_probe=scope_probe),
     )
+    runtime_auth_config = config.agents[agent_index].toy_runtime_auth
+    if replay_state_store is not None:
+        runtime_auth_config = _runtime_auth_config_for_injected_replay_store(runtime_auth_config)
     enable_toy_lwe_runtime_auth_from_config(
         agent,
-        config.agents[agent_index].toy_runtime_auth,
+        runtime_auth_config,
+        replay_state_store=replay_state_store,
     )
     return agent
 
@@ -762,6 +804,16 @@ def _listen_command(
         "--side-effect-path",
         str(side_effect_path),
     ]
+    if config.replay_store_backend != "agent_config":
+        command.extend(["--replay-store-backend", config.replay_store_backend])
+    if config.replay_store_sqlite_path is not None:
+        command.extend(["--replay-store-sqlite-path", str(config.replay_store_sqlite_path)])
+    if config.replay_store_redis_url is not None:
+        command.extend(["--replay-store-redis-url", config.replay_store_redis_url])
+    if config.replay_store_backend == "redis":
+        command.extend(["--replay-store-key-prefix", config.replay_store_key_prefix])
+    if config.replay_store_ttl_seconds is not None:
+        command.extend(["--replay-store-ttl-seconds", str(config.replay_store_ttl_seconds)])
     if wrong_trusted_sender_aid is not None:
         command.extend(
             [
@@ -862,6 +914,35 @@ def _add_common_run_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Skip Provider DB sync checks in the post-start trust-chain preflight.",
     )
+    _add_replay_store_args(parser)
+
+
+def _add_replay_store_args(parser: argparse.ArgumentParser) -> None:
+    """给真实负向 runner 添加显式 replay store 注入参数。"""
+    parser.add_argument(
+        "--replay-store-backend",
+        choices=REPLAY_STORE_BACKENDS,
+        default="agent_config",
+        help="Replay store source for receiver listeners.",
+    )
+    parser.add_argument(
+        "--replay-store-sqlite-path",
+        help="SQLite database path for --replay-store-backend sqlite.",
+    )
+    parser.add_argument(
+        "--replay-store-redis-url",
+        help="Redis URL for --replay-store-backend redis; requires redis-py.",
+    )
+    parser.add_argument(
+        "--replay-store-key-prefix",
+        default="saga:pqcan:replay:",
+        help="Redis key prefix for replay markers.",
+    )
+    parser.add_argument(
+        "--replay-store-ttl-seconds",
+        type=int,
+        help="Optional Redis replay marker TTL in seconds.",
+    )
 
 
 def _config_from_run_args(args: argparse.Namespace) -> RealNegativeRunConfig:
@@ -878,6 +959,18 @@ def _config_from_run_args(args: argparse.Namespace) -> RealNegativeRunConfig:
         if args.mongo_binary
         else batch_run._find_repo_mongod(REPO_ROOT)
     )
+    replay_store_backend = args.replay_store_backend
+    replay_store_sqlite_path = _sqlite_replay_path_from_args(
+        replay_store_backend,
+        args.replay_store_sqlite_path,
+        run_dir=run_dir,
+    )
+    replay_store_redis_url = _redis_url_from_args(
+        replay_store_backend,
+        args.replay_store_redis_url,
+    )
+    if args.replay_store_ttl_seconds is not None and args.replay_store_ttl_seconds <= 0:
+        raise ValueError("replay store ttl must be positive")
     return RealNegativeRunConfig(
         repo_root=REPO_ROOT,
         python_executable=args.python_executable,
@@ -895,6 +988,86 @@ def _config_from_run_args(args: argparse.Namespace) -> RealNegativeRunConfig:
         query_timeout_seconds=args.query_timeout,
         audit_timeout_seconds=args.audit_timeout,
         skip_db_preflight=args.skip_db_preflight,
+        replay_store_backend=replay_store_backend,
+        replay_store_sqlite_path=replay_store_sqlite_path,
+        replay_store_redis_url=replay_store_redis_url,
+        replay_store_key_prefix=args.replay_store_key_prefix,
+        replay_store_ttl_seconds=args.replay_store_ttl_seconds,
+    )
+
+
+def _sqlite_replay_path_from_args(
+    replay_store_backend: str,
+    sqlite_path: str | None,
+    *,
+    run_dir: Path,
+) -> Path | None:
+    """根据 run 参数解析 SQLite replay DB 路径；run 模式默认写入 run 目录。"""
+    if replay_store_backend != "sqlite":
+        if sqlite_path is not None:
+            raise ValueError("sqlite replay path is only valid for sqlite replay backend")
+        return None
+    if sqlite_path is None:
+        return run_dir / "replay_state.sqlite3"
+    return batch_run._resolve_repo_path(sqlite_path)
+
+
+def _redis_url_from_args(replay_store_backend: str, redis_url: str | None) -> str | None:
+    """校验 Redis replay backend URL，避免配置面含混。"""
+    if replay_store_backend != "redis":
+        if redis_url is not None:
+            raise ValueError("redis replay URL is only valid for redis replay backend")
+        return None
+    if not redis_url:
+        raise ValueError("redis replay backend requires --replay-store-redis-url")
+    return redis_url
+
+
+def _build_replay_state_store(
+    replay_store_backend: str,
+    *,
+    sqlite_path: str | Path | None,
+    redis_url: str | None,
+    key_prefix: str,
+    ttl_seconds: int | None,
+) -> ReplayStateStore | None:
+    """按 runner 显式参数构造 replay store；默认继续使用 agent 配置。"""
+    if replay_store_backend == "agent_config":
+        return None
+    if replay_store_backend == "sqlite":
+        if sqlite_path is None:
+            raise ValueError("sqlite replay backend requires a database path")
+        return SQLiteReplayStateStore(sqlite_path)
+    if replay_store_backend == "redis":
+        if redis_url is None:
+            raise ValueError("redis replay backend requires a Redis URL")
+        return RedisReplayStateStore(
+            _redis_client_from_url(redis_url),
+            key_prefix=key_prefix,
+            ttl_seconds=ttl_seconds,
+        )
+    raise ValueError(f"unsupported replay store backend: {replay_store_backend}")
+
+
+def _redis_client_from_url(redis_url: str) -> object:
+    """动态加载 redis-py client；未安装时保持 opt-in runner fail-fast。"""
+    try:
+        import redis  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError("redis replay backend requires the optional redis package") from exc
+    return redis.from_url(redis_url)
+
+
+def _runtime_auth_config_for_injected_replay_store(
+    runtime_auth_config: ToyRuntimeAuthConfig | None,
+) -> ToyRuntimeAuthConfig | None:
+    """显式 runner backend 注入时，将 runtime auth 配置规范化为强一致 backend。"""
+    if runtime_auth_config is None:
+        return None
+    return replace(
+        runtime_auth_config,
+        replay_store=ReplayStoreConfig(backend="external_strong_consistency"),
+        replay_state_dir=None,
     )
 
 

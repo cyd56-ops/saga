@@ -13,6 +13,10 @@ class LocalAgent(ABC):
     Abstract class for a local agent that can execute tasks in a local environment.
     As long as the downstream library adheres to the interface, it can be used with the SAGA framework.
     """
+    def supports_execution_context(self) -> bool:
+        """返回该本地 agent 是否会把 execution_context 用作受保护资源授权依据。"""
+        return False
+
     @abstractmethod
     def run(self, query: str,
             initiating_agent: bool,

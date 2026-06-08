@@ -333,6 +333,18 @@ def _local_agent_cert_bytes(aid: str) -> tuple[bytes | None, str]:
         return None, str(manifest_path)
 
 
+def _local_agent_manifest(aid: str) -> tuple[dict[str, Any] | None, str]:
+    """读取本地 agent manifest，用于只读检查 OTK 签名语义。"""
+    manifest_path = Path(USER_WORKDIR) / aid / "agent.json"
+    if not manifest_path.exists():
+        return None, str(manifest_path)
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None, str(manifest_path)
+    return payload, str(manifest_path)
+
+
 def _check_local_identity_certs(
     identities: Sequence[ManagedIdentity],
     ca_cert_path: Path,
@@ -367,6 +379,93 @@ def _check_local_identity_certs(
                     local_agent_cert_bytes,
                     ca_cert_path,
                     source_label,
+                )
+            )
+    return results
+
+
+def _check_local_otk_signatures(identities: Sequence[ManagedIdentity]) -> list[CheckResult]:
+    """验证本地 agent manifest 中 OTK 签名是否绑定到对应 AID。"""
+    results: list[CheckResult] = []
+    for identity in identities:
+        if identity.aid is None:
+            continue
+        manifest, source_label = _local_agent_manifest(identity.aid)
+        if manifest is None:
+            results.append(
+                CheckResult(
+                    f"local_otk_signature:{identity.aid}",
+                    False,
+                    f"missing or invalid agent manifest: {source_label}",
+                )
+            )
+            continue
+
+        crt_u_b64 = manifest.get("crt_u")
+        otks = manifest.get("otks", [])
+        otk_sigs = manifest.get("otk_sigs", [])
+        if not isinstance(crt_u_b64, str) or not isinstance(otks, list) or not isinstance(otk_sigs, list):
+            results.append(
+                CheckResult(
+                    f"local_otk_signature:{identity.aid}",
+                    False,
+                    "local agent manifest is missing crt_u, otks, or otk_sigs",
+                )
+            )
+            continue
+        if not otks or len(otks) != len(otk_sigs):
+            results.append(
+                CheckResult(
+                    f"local_otk_signature:{identity.aid}",
+                    False,
+                    "local agent manifest OTKs and signatures are empty or misaligned",
+                )
+            )
+            continue
+
+        try:
+            user_cert = _load_cert_bytes(base64.b64decode(crt_u_b64))
+            public_key = user_cert.public_key()
+        except Exception as exc:
+            results.append(
+                CheckResult(
+                    f"local_otk_signature:{identity.aid}",
+                    False,
+                    "local agent manifest contains invalid user certificate bytes",
+                    (str(exc),),
+                )
+            )
+            continue
+
+        valid_count = 0
+        invalid_indexes: list[str] = []
+        for index, (otk_b64, sig_b64) in enumerate(zip(otks, otk_sigs)):
+            try:
+                otk = base64.b64decode(otk_b64)
+                signature = base64.b64decode(sig_b64)
+            except Exception:
+                invalid_indexes.append(str(index))
+                continue
+            if sc.verify_otk_signature(public_key, identity.aid, otk, signature):
+                valid_count += 1
+            else:
+                invalid_indexes.append(str(index))
+
+        if valid_count == 0:
+            results.append(
+                CheckResult(
+                    f"local_otk_signature:{identity.aid}",
+                    False,
+                    "local OTK inventory has no AID-bound signatures",
+                    tuple(invalid_indexes[:5]),
+                )
+            )
+        else:
+            results.append(
+                CheckResult(
+                    f"local_otk_signature:{identity.aid}",
+                    True,
+                    f"local OTK inventory has {valid_count}/{len(otks)} AID-bound signatures",
                 )
             )
     return results
@@ -469,6 +568,89 @@ def _check_db_sync(
     return results
 
 
+def _check_db_otk_signatures(
+    identities: Sequence[ManagedIdentity],
+    users_collection: Collection,
+    agents_collection: Collection,
+) -> list[CheckResult]:
+    """验证 Provider DB 中待发放 OTK 的签名是否绑定到对应 AID。"""
+    results: list[CheckResult] = []
+    for identity in identities:
+        if identity.aid is None:
+            continue
+
+        user_doc = users_collection.find_one({"uid": identity.email})
+        agent_doc = agents_collection.find_one({"aid": identity.aid})
+        if user_doc is None or agent_doc is None:
+            continue
+
+        crt_u = user_doc.get("crt_u")
+        otks = agent_doc.get("one_time_keys", [])
+        otk_sigs = agent_doc.get("one_time_key_sigs", [])
+        if not isinstance(crt_u, bytes) or not isinstance(otks, list) or not isinstance(otk_sigs, list):
+            results.append(
+                CheckResult(
+                    f"db_otk_signature:{identity.aid}",
+                    False,
+                    "Provider DB agent OTK fields are missing or malformed",
+                )
+            )
+            continue
+        if not otks or len(otks) != len(otk_sigs):
+            results.append(
+                CheckResult(
+                    f"db_otk_signature:{identity.aid}",
+                    False,
+                    "Provider DB OTKs and signatures are empty or misaligned",
+                )
+            )
+            continue
+
+        try:
+            public_key = _load_cert_bytes(crt_u).public_key()
+        except Exception as exc:
+            results.append(
+                CheckResult(
+                    f"db_otk_signature:{identity.aid}",
+                    False,
+                    "Provider DB user certificate cannot verify OTK signatures",
+                    (str(exc),),
+                )
+            )
+            continue
+
+        valid_count = 0
+        invalid_indexes: list[str] = []
+        for index, (otk, signature) in enumerate(zip(otks, otk_sigs)):
+            if (
+                isinstance(otk, bytes)
+                and isinstance(signature, bytes)
+                and sc.verify_otk_signature(public_key, identity.aid, otk, signature)
+            ):
+                valid_count += 1
+            else:
+                invalid_indexes.append(str(index))
+
+        if valid_count == 0:
+            results.append(
+                CheckResult(
+                    f"db_otk_signature:{identity.aid}",
+                    False,
+                    "Provider DB OTK inventory has no AID-bound signatures",
+                    tuple(invalid_indexes[:5]),
+                )
+            )
+        else:
+            results.append(
+                CheckResult(
+                    f"db_otk_signature:{identity.aid}",
+                    True,
+                    f"Provider DB OTK inventory has {valid_count}/{len(otks)} AID-bound signatures",
+                )
+            )
+    return results
+
+
 def run_preflight_checks(
     *,
     config_paths: Sequence[Path],
@@ -495,6 +677,7 @@ def run_preflight_checks(
 
     identities = _load_managed_identities(config_paths)
     results.extend(_check_local_identity_certs(identities, ca_cert_path))
+    results.extend(_check_local_otk_signatures(identities))
 
     if check_db_sync:
         try:
@@ -512,6 +695,13 @@ def run_preflight_checks(
             try:
                 results.extend(
                     _check_db_sync(
+                        identities,
+                        users_collection=database.users,
+                        agents_collection=database.agents,
+                    )
+                )
+                results.extend(
+                    _check_db_otk_signatures(
                         identities,
                         users_collection=database.users,
                         agents_collection=database.agents,
@@ -565,6 +755,10 @@ def build_repair_plan(
         suggestions.append(
             "If local certs were replaced, delete only the affected user/agent registration rows from the local Provider DB, then re-run register + register-agents for: "
             + config_labels
+        )
+    if any(name.startswith("local_otk_signature:") or name.startswith("db_otk_signature:") for name in names):
+        suggestions.append(
+            "Refresh OTK inventory for affected agents with the current AID-bound signing helper, or re-register the affected agents after cleaning stale Provider DB rows."
         )
     if "db_connectivity" in names:
         suggestions.append(

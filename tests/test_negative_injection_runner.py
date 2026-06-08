@@ -44,6 +44,7 @@ class NegativeInjectionRunnerTests(unittest.TestCase):
         self.assertIn("agent_runtime_prompt_surface_tool_only", DEFAULT_SCENARIOS)
         self.assertIn("agent_runtime_replayed_envelope", DEFAULT_SCENARIOS)
         self.assertIn("agent_runtime_scope_escalation_tool", DEFAULT_SCENARIOS)
+        self.assertIn("agent_runtime_context_ignoring_local_agent", DEFAULT_SCENARIOS)
 
     def test_runner_passes_all_default_negative_injections(self) -> None:
         """All default injections should be rejected with their expected reasons.
@@ -82,6 +83,10 @@ class NegativeInjectionRunnerTests(unittest.TestCase):
             observed["agent_runtime_scope_escalation_tool"],
             "unauthorized_tool_scope",
         )
+        self.assertEqual(
+            observed["agent_runtime_context_ignoring_local_agent"],
+            "local_agent_execution_context_unsupported",
+        )
 
     def test_runner_records_execution_surface_rejections_without_side_effects(self) -> None:
         """Tool, memory, and delegation injections should not trigger side effects.
@@ -117,6 +122,7 @@ class NegativeInjectionRunnerTests(unittest.TestCase):
                 "agent_runtime_prompt_surface_tool_only",
                 "agent_runtime_replayed_envelope",
                 "agent_runtime_scope_escalation_tool",
+                "agent_runtime_context_ignoring_local_agent",
             )
         )
 
@@ -128,6 +134,7 @@ class NegativeInjectionRunnerTests(unittest.TestCase):
                 "prompt_scope_not_authorized",
                 "replayed_request_envelope",
                 "unauthorized_tool_scope",
+                "local_agent_execution_context_unsupported",
             },
         )
 

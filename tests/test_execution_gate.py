@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import tempfile
+import threading
 from unittest import mock
 import unittest
 
@@ -17,10 +19,53 @@ from saga.execution_gate import (
     ExecutionAuthorizationError,
     ExecutionGateRequest,
     FileReplayStateStore,
+    RedisReplayStateStore,
     SignedRequestExecutionGate,
+    SQLiteReplayStateStore,
     build_execution_gate_audit_record,
 )
-from saga.messages import build_request_envelope, sha256_hex
+from saga.messages import RequestEnvelope, build_request_envelope, parse_request_envelope, sha256_hex
+
+
+class _FakeRedisClient:
+    """测试用 Redis client，模拟 set(nx=True) 与 scan_iter 语义。"""
+
+    def __init__(self) -> None:
+        """初始化内存 key-value 存储与调用记录。"""
+        self.values: dict[str, str] = {}
+        self.set_calls: list[dict[str, object]] = []
+
+    def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        nx: bool = False,
+        ex: int | None = None,
+    ) -> bool:
+        """模拟 Redis SET；nx=True 时已有 key 返回 False。"""
+        self.set_calls.append({"key": key, "value": value, "nx": nx, "ex": ex})
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        return True
+
+    def scan_iter(self, *, match: str) -> list[str]:
+        """按 prefix 模拟 Redis SCAN 迭代。"""
+        prefix = match[:-1] if match.endswith("*") else match
+        return [key for key in self.values if key.startswith(prefix)]
+
+
+class _UnavailableReplayStateStore:
+    """测试用不可写 replay store，模拟持久化后端故障。"""
+
+    def load_consumed_request_ids(self) -> set[str]:
+        """返回空状态，使 gate 初始化可以完成。"""
+        return set()
+
+    def reserve_request(self, request_id: str, envelope: RequestEnvelope) -> str:
+        """模拟后端写入失败，执行路径应 fail-closed。"""
+        raise OSError("replay store unavailable")
 
 
 class SignedRequestExecutionGateTests(unittest.TestCase):
@@ -63,6 +108,68 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             pq_signature=base64.b64encode(signature).decode("utf-8"),
         )
 
+    def _signed_request_from_envelope(self, envelope: RequestEnvelope, message: str) -> ExecutionGateRequest:
+        """用当前测试密钥把指定信封包装成执行 gate 请求。"""
+        signature = self.scheme.sign(self.key_pair.secret_key, envelope.digest())
+        return ExecutionGateRequest(
+            sender_aid=envelope.sender_aid,
+            receiver_aid=envelope.receiver_aid,
+            token="enc-token",
+            message=message,
+            action_scope=envelope.action_scope,
+            request_envelope=envelope.canonical_json(),
+            pq_signature=base64.b64encode(signature).decode("utf-8"),
+        )
+
+    def _parent_capability_envelope(self) -> RequestEnvelope:
+        """构造允许委托和 send_email 的父 capability 信封。"""
+        return build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="parent-token",
+            session_id="session-1",
+            turn_id="turn-parent",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["delegation", "tool_call:send_email"],
+            message="parent",
+            timestamp=self.now,
+            capability_id="cap-parent",
+        )
+
+    def _delegated_child_envelope(
+        self,
+        parent: RequestEnvelope,
+        *,
+        authorized_scopes: list[str] | None = None,
+        parent_digest: str | None = None,
+        parent_scopes: list[str] | None = None,
+        delegation_depth: int = 1,
+        max_delegation_depth: int = 8,
+    ) -> RequestEnvelope:
+        """构造绑定父 capability 的委托子信封。"""
+        return build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-child",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="tool_call:send_email",
+            authorized_scopes=authorized_scopes,
+            message="child",
+            timestamp=self.now,
+            capability_id="cap-child",
+            parent_envelope_digest=parent.hex_digest() if parent_digest is None else parent_digest,
+            parent_authorized_scopes=(
+                parent.authorized_scopes if parent_scopes is None else parent_scopes
+            ),
+            delegation_depth=delegation_depth,
+            max_delegation_depth=max_delegation_depth,
+        )
+
     def test_authorize_accepts_valid_signed_request(self) -> None:
         """A valid signed envelope should pass the execution gate."""
         self.assertTrue(self.gate.authorize(self._build_request()))
@@ -81,6 +188,100 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             },
         )
 
+    def test_authorize_accepts_delegated_child_capability_when_attenuated(self) -> None:
+        """合法委托子 capability 绑定父摘要且 scope 不扩大时应通过。"""
+        parent = self._parent_capability_envelope()
+        child = self._delegated_child_envelope(parent)
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={parent.hex_digest(): parent.authorized_scopes},
+        )
+
+        decision = gate.evaluate_request(self._signed_request_from_envelope(child, "child"))
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.reason, "authorized")
+        self.assertTrue(decision.execution_scope_allowed)
+
+    def test_authorize_rejects_delegated_child_without_known_parent_digest(self) -> None:
+        """委托子 capability 的父摘要不在本地事实源中时必须 fail-closed。"""
+        parent = self._parent_capability_envelope()
+        child = self._delegated_child_envelope(parent)
+
+        decision = self.gate.evaluate_request(self._signed_request_from_envelope(child, "child"))
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "unknown_parent_envelope_digest")
+        self.assertTrue(decision.request_envelope_valid)
+
+    def test_authorize_rejects_delegated_child_missing_parent_digest(self) -> None:
+        """delegation_depth>0 但未绑定 parent digest 时应稳定拒绝。"""
+        parent = self._parent_capability_envelope()
+        child = self._delegated_child_envelope(parent, parent_digest="")
+
+        decision = self.gate.evaluate_request(self._signed_request_from_envelope(child, "child"))
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "missing_parent_envelope_digest")
+
+    def test_authorize_rejects_delegated_child_scope_escalation(self) -> None:
+        """子 capability 不能把父未授权工具 scope 加进签名授权面。"""
+        parent = self._parent_capability_envelope()
+        child = self._delegated_child_envelope(
+            parent,
+            authorized_scopes=["tool_call:add_calendar_event"],
+        )
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={parent.hex_digest(): parent.authorized_scopes},
+        )
+
+        decision = gate.evaluate_request(self._signed_request_from_envelope(child, "child"))
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "delegation_scope_escalation")
+        self.assertFalse(decision.execution_scope_allowed)
+
+    def test_authorize_rejects_delegated_child_parent_scope_mismatch(self) -> None:
+        """子信封中声明的父 scopes 必须匹配本地父 capability 事实源。"""
+        parent = self._parent_capability_envelope()
+        child = self._delegated_child_envelope(parent, parent_scopes=["tool_call"])
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={parent.hex_digest(): parent.authorized_scopes},
+        )
+
+        decision = gate.evaluate_request(self._signed_request_from_envelope(child, "child"))
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "parent_authorized_scopes_mismatch")
+
+    def test_authorize_rejects_delegation_depth_exceeded(self) -> None:
+        """超过最大委托深度的子 capability 必须 fail-closed。"""
+        parent = self._parent_capability_envelope()
+        child = self._delegated_child_envelope(
+            parent,
+            delegation_depth=2,
+            max_delegation_depth=1,
+        )
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={parent.hex_digest(): parent.authorized_scopes},
+        )
+
+        decision = gate.evaluate_request(self._signed_request_from_envelope(child, "child"))
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "delegation_depth_exceeded")
+
     def test_consume_request_rejects_replayed_envelope(self) -> None:
         """同一个已消费信封再次进入执行路径时必须 replay 拒绝。"""
         request = self._build_request()
@@ -91,6 +292,22 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
         self.assertTrue(first_decision.allowed)
         self.assertFalse(second_decision.allowed)
         self.assertEqual(second_decision.reason, "replayed_request_envelope")
+
+    def test_consume_request_allows_only_one_concurrent_consumer(self) -> None:
+        """同一 gate 并发消费同一个信封时只能有一个执行授权。"""
+        request = self._build_request()
+        barrier = threading.Barrier(8)
+
+        def consume_once(_index: int) -> str:
+            """同步发起消费请求，放大同一信封的并发竞争窗口。"""
+            barrier.wait()
+            return self.gate.consume_request(request).reason
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            reasons = list(executor.map(consume_once, range(8)))
+
+        self.assertEqual(reasons.count("authorized"), 1)
+        self.assertEqual(reasons.count("replayed_request_envelope"), 7)
 
     def test_persisted_replay_state_rejects_new_gate_instance(self) -> None:
         """A persisted replay marker should block a fresh gate instance too."""
@@ -140,6 +357,88 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             self.assertFalse(replay_decision.allowed)
             self.assertEqual(replay_decision.reason, "replayed_request_envelope")
 
+    def test_sqlite_replay_store_rejects_replay_across_gate_instances(self) -> None:
+        """SQLite replay store 应通过唯一约束让不同 gate 实例共享消费状态。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            database_path = Path(tmpdir) / "replay.sqlite3"
+            first_gate = SignedRequestExecutionGate(
+                CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+                {"alice@example.com:calendar_agent": self.key_pair.public_key},
+                now_fn=lambda: self.now,
+                replay_state_store=SQLiteReplayStateStore(database_path),
+            )
+            second_gate = SignedRequestExecutionGate(
+                CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+                {"alice@example.com:calendar_agent": self.key_pair.public_key},
+                now_fn=lambda: self.now,
+                replay_state_store=SQLiteReplayStateStore(database_path),
+            )
+            request = self._build_request()
+
+            self.assertTrue(first_gate.consume_request(request).allowed)
+            replay_decision = second_gate.consume_request(request)
+
+            self.assertFalse(replay_decision.allowed)
+            self.assertEqual(replay_decision.reason, "replayed_request_envelope")
+
+    def test_sqlite_replay_store_reserves_request_id_atomically(self) -> None:
+        """并发预留同一 request id 时，SQLite 后端只能有一个 reserved 结果。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            envelope = build_request_envelope(
+                sender_aid="alice@example.com:calendar_agent",
+                receiver_aid="bob@example.com:email_agent",
+                token="enc-token",
+                session_id="session-1",
+                turn_id="turn-1",
+                issued_at=self.now - timedelta(minutes=1),
+                expires_at=self.now + timedelta(minutes=5),
+                action_scope="llm_prompt",
+                message="hello",
+                provider_id="https://provider.example.test",
+                timestamp=self.now,
+            )
+            database_path = Path(tmpdir) / "replay.sqlite3"
+            request_id = envelope.hex_digest()
+            stores = [SQLiteReplayStateStore(database_path), SQLiteReplayStateStore(database_path)]
+            barrier = threading.Barrier(2)
+
+            def reserve_once(store_index: int) -> str:
+                """让两个独立 store 实例同时竞争同一个 request id。"""
+                barrier.wait()
+                return stores[store_index].reserve_request(request_id, envelope)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(reserve_once, range(2)))
+
+            self.assertEqual(results.count("reserved"), 1)
+            self.assertEqual(results.count("replayed"), 1)
+            self.assertEqual(SQLiteReplayStateStore(database_path).load_consumed_request_ids(), {request_id})
+
+    def test_redis_replay_store_uses_set_nx_for_atomic_reservation(self) -> None:
+        """Redis replay store 必须通过 SET NX 语义原子预留 request id。"""
+        request = self._build_request()
+        envelope = parse_request_envelope(request.request_envelope)
+        client = _FakeRedisClient()
+        store = RedisReplayStateStore(client, ttl_seconds=3600)
+        request_id = envelope.hex_digest()
+
+        self.assertEqual(store.reserve_request(request_id, envelope), "reserved")
+        self.assertEqual(store.reserve_request(request_id, envelope), "replayed")
+        self.assertEqual(client.set_calls[0]["nx"], True)
+        self.assertEqual(client.set_calls[0]["ex"], 3600)
+        self.assertEqual(store.load_consumed_request_ids(), {request_id})
+
+    def test_redis_replay_store_failures_fail_closed(self) -> None:
+        """Redis backend 异常应转为 OSError，让执行路径 fail-closed。"""
+        request = self._build_request()
+        envelope = parse_request_envelope(request.request_envelope)
+        broken_client = mock.Mock()
+        broken_client.set.side_effect = RuntimeError("redis down")
+        store = RedisReplayStateStore(broken_client)
+
+        with self.assertRaises(OSError):
+            store.reserve_request(envelope.hex_digest(), envelope)
+
     def test_replay_store_and_directory_are_mutually_exclusive(self) -> None:
         """同一个 gate 不能同时配置目录和自定义 store，避免 replay 事实源分裂。"""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -185,6 +484,20 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
 
             self.assertFalse(decision.allowed)
             self.assertEqual(decision.reason, "replay_state_persistence_failed")
+
+    def test_consume_request_fails_closed_when_injected_replay_store_is_unavailable(self) -> None:
+        """注入 replay store 不可写时，请求必须拒绝而不是只记录内存状态。"""
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            replay_state_store=_UnavailableReplayStateStore(),
+        )
+
+        decision = gate.consume_request(self._build_request())
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "replay_state_persistence_failed")
 
     def test_authorize_rejects_message_digest_mismatch(self) -> None:
         """Changing the transport message must invalidate the envelope binding."""
@@ -712,6 +1025,31 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             self.assertEqual(payload["reason"], "message_digest_mismatch")
             self.assertEqual(payload["sender_aid"], request.sender_aid)
             self.assertIn("recorded_at", payload)
+
+    def test_build_execution_gate_audit_record_captures_capability_metadata(self) -> None:
+        """审计记录应保留签名 capability 与父 capability 绑定字段。"""
+        parent = self._parent_capability_envelope()
+        child = self._delegated_child_envelope(parent)
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={parent.hex_digest(): parent.authorized_scopes},
+        )
+        request = self._signed_request_from_envelope(child, "child")
+        decision = gate.evaluate_request(request)
+
+        record = build_execution_gate_audit_record(request, decision)
+
+        self.assertTrue(record["allowed"])
+        self.assertEqual(record["signed_capability_id"], "cap-child")
+        self.assertEqual(record["signed_parent_envelope_digest"], parent.hex_digest())
+        self.assertEqual(
+            record["signed_parent_authorized_scopes"],
+            list(parent.authorized_scopes),
+        )
+        self.assertEqual(record["signed_delegation_depth"], 1)
+        self.assertEqual(record["signed_max_delegation_depth"], 8)
 
     def test_local_execution_context_exposes_memory_and_delegation_helpers(self) -> None:
         """The context should provide explicit helpers for non-tool execution actions."""

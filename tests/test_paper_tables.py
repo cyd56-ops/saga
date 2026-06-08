@@ -12,10 +12,16 @@ from experiments.paper_tables import (
     DEFAULT_PQ_CAN_SUMMARY_PATH,
     TASK_LEVEL_COLUMNS,
     RUN_LEVEL_COLUMNS,
+    SECURITY_EVIDENCE_COLUMNS,
+    SECURITY_PROPERTY_COLUMNS,
     build_paper_tables,
+    format_paper_tables_markdown,
     format_markdown_table,
     load_end_to_end_summary,
+    main,
+    write_paper_table_archive,
 )
+from experiments.security_evidence import SECURITY_PROPERTY_ORDER
 
 
 def _summary(
@@ -89,6 +95,14 @@ class PaperTablesTests(unittest.TestCase):
 
         self.assertEqual(tables["run_level_columns"], list(RUN_LEVEL_COLUMNS))
         self.assertEqual(tables["task_level_columns"], list(TASK_LEVEL_COLUMNS))
+        self.assertEqual(
+            tables["security_property_columns"],
+            list(SECURITY_PROPERTY_COLUMNS),
+        )
+        self.assertEqual(
+            tables["security_evidence_columns"],
+            list(SECURITY_EVIDENCE_COLUMNS),
+        )
         self.assertEqual(len(tables["run_level_rows"]), 2)
         self.assertEqual(len(tables["task_level_rows"]), 2)
 
@@ -103,6 +117,36 @@ class PaperTablesTests(unittest.TestCase):
         self.assertEqual(pq_can_task["mode"], "pq_can")
         self.assertTrue(pq_can_task["runtime_auth_enabled"])
         self.assertEqual(pq_can_task["oracle_reason"], "meeting_scheduled")
+
+    def test_security_evidence_tables_expose_u9_u10_rows(self) -> None:
+        """Paper tables should include U9 properties and U10 evidence mappings.
+
+        论文表格输出必须包含安全性质与证据映射，避免 U9/U10 只停留在文档。
+        """
+        tables = build_paper_tables(
+            {
+                "pq_can": _summary(
+                    runtime_auth_enabled=True,
+                    task_latency=12.0,
+                    model_call_count=3,
+                    llm_elapsed=9.75,
+                )
+            }
+        )
+
+        property_ids = {
+            row["property_id"]
+            for row in tables["security_property_rows"]
+        }
+        evidence_names = {
+            row["name"]
+            for row in tables["security_evidence_rows"]
+        }
+
+        self.assertEqual(property_ids, set(SECURITY_PROPERTY_ORDER))
+        self.assertIn("tampered_message", evidence_names)
+        self.assertIn("missing_request_envelope", evidence_names)
+        self.assertIn("shamir_secured_pq_can", evidence_names)
 
     def test_audit_counts_track_execution_gate_records_only(self) -> None:
         """Audit fields should preserve execution-gate counts without inventing tool failures."""
@@ -151,6 +195,99 @@ class PaperTablesTests(unittest.TestCase):
                 "| baseline |  | 1.23 |",
             ],
         )
+
+    def test_format_paper_tables_markdown_outputs_all_sections(self) -> None:
+        """Full Markdown formatter should render all paper-table sections."""
+        tables = build_paper_tables(
+            {
+                "baseline": _summary(
+                    runtime_auth_enabled=False,
+                    task_latency=10.0,
+                    model_call_count=2,
+                    llm_elapsed=8.5,
+                )
+            }
+        )
+
+        markdown = format_paper_tables_markdown(tables)
+
+        self.assertIn("## Run-Level Summary", markdown)
+        self.assertIn("## Task-Level Summary", markdown)
+        self.assertIn("## Security Properties", markdown)
+        self.assertIn("## Security Evidence", markdown)
+        self.assertTrue(markdown.endswith("\n"))
+
+    def test_write_paper_table_archive_writes_json_and_markdown(self) -> None:
+        """Archive writer should persist both machine-readable and reviewable outputs."""
+        tables = build_paper_tables(
+            {
+                "baseline": _summary(
+                    runtime_auth_enabled=False,
+                    task_latency=10.0,
+                    model_call_count=2,
+                    llm_elapsed=8.5,
+                )
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = write_paper_table_archive(tables, tmpdir)
+
+            self.assertEqual(paths["json"], Path(tmpdir) / "paper_tables.json")
+            self.assertEqual(paths["markdown"], Path(tmpdir) / "paper_tables.md")
+            self.assertEqual(
+                json.loads(paths["json"].read_text(encoding="utf-8")),
+                tables,
+            )
+            self.assertIn(
+                "## Run-Level Summary",
+                paths["markdown"].read_text(encoding="utf-8"),
+            )
+
+    def test_cli_output_dir_archives_without_suppressing_stdout(self) -> None:
+        """CLI archive mode should write files while keeping the selected stdout format."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            baseline_path = Path(tmpdir) / "baseline.json"
+            pq_can_path = Path(tmpdir) / "pq_can.json"
+            archive_dir = Path(tmpdir) / "archive"
+            baseline_path.write_text(
+                json.dumps(
+                    _summary(
+                        runtime_auth_enabled=False,
+                        task_latency=10.0,
+                        model_call_count=2,
+                        llm_elapsed=8.5,
+                    )
+                ),
+                encoding="utf-8",
+            )
+            pq_can_path.write_text(
+                json.dumps(
+                    _summary(
+                        runtime_auth_enabled=True,
+                        task_latency=12.0,
+                        model_call_count=3,
+                        llm_elapsed=9.75,
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code = main(
+                [
+                    "--baseline-summary",
+                    str(baseline_path),
+                    "--pq-can-summary",
+                    str(pq_can_path),
+                    "--format",
+                    "markdown",
+                    "--output-dir",
+                    str(archive_dir),
+                ]
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((archive_dir / "paper_tables.json").exists())
+            self.assertTrue((archive_dir / "paper_tables.md").exists())
 
     def test_default_summary_paths_can_build_current_20260527_tables(self) -> None:
         """Checked local run summaries should remain readable when present in the workspace."""

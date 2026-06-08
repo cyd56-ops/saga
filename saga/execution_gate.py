@@ -4,19 +4,28 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Literal, Protocol
+import sqlite3
+import threading
+from typing import Any, Literal, ParamSpec, Protocol, TypeVar
 
 from saga.messages import (
     RequestEnvelope,
+    action_scopes_are_attenuated,
     action_scopes_allow,
     parse_request_envelope,
     sha256_hex,
 )
+
+
+P = ParamSpec("P")
+T = TypeVar("T")
+ActionScopeSpec = str | tuple[str, ...] | Callable[..., str | tuple[str, ...]]
 
 
 def bytes_to_bits(payload: bytes) -> list[int]:
@@ -149,6 +158,11 @@ def build_execution_gate_audit_record(
         record["signed_receiver_aid"] = envelope.receiver_aid
         record["signed_action_scope"] = envelope.action_scope
         record["signed_authorized_scopes"] = list(envelope.authorized_scopes)
+        record["signed_capability_id"] = envelope.capability_id
+        record["signed_parent_envelope_digest"] = envelope.parent_envelope_digest
+        record["signed_parent_authorized_scopes"] = list(envelope.parent_authorized_scopes)
+        record["signed_delegation_depth"] = envelope.delegation_depth
+        record["signed_max_delegation_depth"] = envelope.max_delegation_depth
     return record
 
 
@@ -239,6 +253,166 @@ class FileReplayStateStore:
         return self.state_dir / f"{request_id}.json"
 
 
+class SQLiteReplayStateStore:
+    """使用 SQLite 唯一约束实现 SQL 风格的 replay 状态预留。"""
+
+    def __init__(self, database_path: str | Path, *, timeout_seconds: float = 5.0) -> None:
+        """初始化 SQLite replay store，并创建记录已消费信封的表。"""
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        self.database_path = Path(database_path)
+        if self.database_path.parent != Path("."):
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.timeout_seconds = timeout_seconds
+        self._ensure_schema()
+
+    def load_consumed_request_ids(self) -> set[str]:
+        """从 SQLite 表恢复已消费 request id，供新 gate 实例复用。"""
+        try:
+            with closing(self._connect()) as connection:
+                rows = connection.execute(
+                    "SELECT request_id FROM saga_replay_requests"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            raise OSError("sqlite replay state database is unavailable") from exc
+        return {row[0] for row in rows}
+
+    def reserve_request(
+        self,
+        request_id: str,
+        envelope: RequestEnvelope,
+    ) -> Literal["reserved", "replayed"]:
+        """用主键唯一插入原子预留 request id；冲突即视为 replay。"""
+        payload = (
+            request_id,
+            datetime.now(tz=timezone.utc).isoformat(),
+            envelope.sender_aid,
+            envelope.receiver_aid,
+            envelope.action_scope,
+            envelope.token_digest,
+            envelope.message_digest,
+        )
+        try:
+            with closing(self._connect()) as connection:
+                with connection:
+                    connection.execute(
+                        """
+                        INSERT INTO saga_replay_requests (
+                            request_id,
+                            recorded_at,
+                            sender_aid,
+                            receiver_aid,
+                            action_scope,
+                            token_digest,
+                            message_digest
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        payload,
+                    )
+        except sqlite3.IntegrityError:
+            return "replayed"
+        except sqlite3.Error as exc:
+            raise OSError("sqlite replay state database is unavailable") from exc
+        return "reserved"
+
+    def _connect(self) -> sqlite3.Connection:
+        """打开短生命周期连接，避免跨线程共享 SQLite connection 状态。"""
+        connection = sqlite3.connect(self.database_path, timeout=self.timeout_seconds)
+        connection.execute(f"PRAGMA busy_timeout = {int(self.timeout_seconds * 1000)}")
+        return connection
+
+    def _ensure_schema(self) -> None:
+        """创建 replay 状态表；request_id 主键保证 reserve 原子性。"""
+        try:
+            with closing(self._connect()) as connection:
+                with connection:
+                    connection.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS saga_replay_requests (
+                            request_id TEXT PRIMARY KEY,
+                            recorded_at TEXT NOT NULL,
+                            sender_aid TEXT NOT NULL,
+                            receiver_aid TEXT NOT NULL,
+                            action_scope TEXT NOT NULL,
+                            token_digest TEXT NOT NULL,
+                            message_digest TEXT NOT NULL
+                        )
+                        """
+                    )
+        except sqlite3.Error as exc:
+            raise RuntimeError("sqlite replay state database is unavailable") from exc
+
+
+class RedisReplayStateStore:
+    """使用 Redis SET NX 实现部署级 replay request id 原子预留。"""
+
+    def __init__(
+        self,
+        client: object,
+        *,
+        key_prefix: str = "saga:pqcan:replay:",
+        ttl_seconds: int | None = None,
+    ) -> None:
+        """保存外部 Redis client；真实连接与认证由调用方负责注入。"""
+        if not key_prefix:
+            raise ValueError("key_prefix must be non-empty")
+        if ttl_seconds is not None and ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive when provided")
+        self.client = client
+        self.key_prefix = key_prefix
+        self.ttl_seconds = ttl_seconds
+
+    def load_consumed_request_ids(self) -> set[str]:
+        """从 Redis keyspace 恢复 request id；不支持 scan_iter 时返回空集合。"""
+        scan_iter = getattr(self.client, "scan_iter", None)
+        if scan_iter is None:
+            return set()
+        consumed: set[str] = set()
+        try:
+            for key in scan_iter(match=f"{self.key_prefix}*"):
+                key_text = key.decode("utf-8") if isinstance(key, bytes) else str(key)
+                if key_text.startswith(self.key_prefix):
+                    consumed.add(key_text[len(self.key_prefix) :])
+        except Exception as exc:
+            raise OSError("redis replay state backend is unavailable") from exc
+        return consumed
+
+    def reserve_request(
+        self,
+        request_id: str,
+        envelope: RequestEnvelope,
+    ) -> Literal["reserved", "replayed"]:
+        """用 Redis SET NX 原子预留 request id；已存在时返回 replayed。"""
+        payload = json.dumps(
+            {
+                "request_id": request_id,
+                "recorded_at": datetime.now(tz=timezone.utc).isoformat(),
+                "sender_aid": envelope.sender_aid,
+                "receiver_aid": envelope.receiver_aid,
+                "action_scope": envelope.action_scope,
+                "token_digest": envelope.token_digest,
+                "message_digest": envelope.message_digest,
+            },
+            sort_keys=True,
+            ensure_ascii=True,
+        )
+        try:
+            reserved = self.client.set(
+                self._key(request_id),
+                payload,
+                nx=True,
+                ex=self.ttl_seconds,
+            )
+        except Exception as exc:
+            raise OSError("redis replay state backend is unavailable") from exc
+        return "reserved" if bool(reserved) else "replayed"
+
+    def _key(self, request_id: str) -> str:
+        """返回 Redis replay marker key。"""
+        return f"{self.key_prefix}{request_id}"
+
+
 @dataclass(frozen=True)
 class LocalExecutionContext:
     """Execution context propagated into local prompt/tool execution."""
@@ -296,6 +470,153 @@ class LocalExecutionContext:
         self.require_action("delegation")
 
 
+class ExecutionCapabilityFacade:
+    """用本地执行上下文保护 tool、memory 和 delegation 的统一能力 facade。"""
+
+    def __init__(
+        self,
+        context_provider: Callable[[], LocalExecutionContext | None],
+        *,
+        context_required: Callable[[], bool] | bool = False,
+    ) -> None:
+        """保存动态上下文提供者；严格模式下缺少上下文会 fail-closed。"""
+        self._context_provider = context_provider
+        self._context_required = context_required
+
+    def require_action(self, action_scope: str) -> None:
+        """要求当前 capability 覆盖指定执行面，否则抛出稳定授权错误。"""
+        context = self._current_context(action_scope)
+        if context is None:
+            return
+        context.require_action(action_scope)
+
+    def require_any_action(self, action_scopes: str | tuple[str, ...]) -> None:
+        """要求当前 capability 至少覆盖一个候选执行面 scope。"""
+        scopes = self._normalize_action_scopes(action_scopes)
+        context = self._current_context(scopes[0])
+        if context is None:
+            return
+        if not any(context.authorize_action(action_scope) for action_scope in scopes):
+            raise ExecutionAuthorizationError(
+                reason_for_unauthorized_scope(scopes[0]),
+                scopes[0],
+            )
+
+    def call_action(
+        self,
+        action_scope: str,
+        operation: Callable[P, T],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> T:
+        """在调用底层操作前检查指定执行面 capability。"""
+        self.require_action(action_scope)
+        return operation(*args, **kwargs)
+
+    def call_any_action(
+        self,
+        action_scopes: str | tuple[str, ...],
+        operation: Callable[P, T],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> T:
+        """在调用底层操作前检查候选 capability 集合中的任一授权。"""
+        self.require_any_action(action_scopes)
+        return operation(*args, **kwargs)
+
+    def call_tool(
+        self,
+        tool_name: str,
+        operation: Callable[P, T],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> T:
+        """以 ``tool_call:<name>`` scope 保护一个底层工具调用。"""
+        return self.call_action(f"tool_call:{tool_name}", operation, *args, **kwargs)
+
+    def read_memory_steps(self, memory: object) -> tuple[Any, ...]:
+        """在 ``memory_read`` capability 通过后返回不可变 memory 快照。"""
+        self.require_action("memory_read")
+        return tuple(getattr(memory, "steps"))
+
+    def append_memory_step(self, memory: object, step: object) -> None:
+        """在 ``memory_write`` capability 通过后追加一条 memory step。"""
+        self.require_action("memory_write")
+        getattr(memory, "steps").append(step)
+
+    def delegate(
+        self,
+        handler: Callable[..., T],
+        target_aid: str,
+        message: str,
+        **kwargs: Any,
+    ) -> T:
+        """在 ``delegation`` capability 通过后调用下游委托处理器。"""
+        self.require_action("delegation")
+        return handler(target_aid, message, **kwargs)
+
+    def _normalize_action_scopes(self, action_scopes: str | tuple[str, ...]) -> tuple[str, ...]:
+        """规范化候选 scope，避免空集合导致授权语义不明。"""
+        scopes = (action_scopes,) if isinstance(action_scopes, str) else tuple(action_scopes)
+        if not scopes:
+            raise ValueError("action_scopes must be non-empty")
+        return scopes
+
+    def _current_context(self, action_scope: str) -> LocalExecutionContext | None:
+        """读取当前上下文；严格 capability 路径缺失上下文时拒绝执行。"""
+        context = self._context_provider()
+        if context is None and self._context_required_now():
+            raise ExecutionAuthorizationError(
+                "missing_local_execution_context",
+                action_scope,
+            )
+        return context
+
+    def _context_required_now(self) -> bool:
+        """解析动态或静态 strict-context 要求。"""
+        if callable(self._context_required):
+            return bool(self._context_required())
+        return bool(self._context_required)
+
+
+class GatedExecutionResource:
+    """把底层工具 backend 方法包装为 capability 检查后的受保护资源。"""
+
+    def __init__(
+        self,
+        resource: object,
+        capabilities: ExecutionCapabilityFacade,
+        method_scopes: Mapping[str, ActionScopeSpec],
+    ) -> None:
+        """保存底层资源和方法到 scope 的映射，未列出方法保持原行为。"""
+        self._resource = resource
+        self._capabilities = capabilities
+        self._method_scopes = dict(method_scopes)
+
+    def __getattr__(self, name: str) -> Any:
+        """按需返回经过 capability 包装的底层方法或原始属性。"""
+        attribute = getattr(self._resource, name)
+        action_scopes = self._method_scopes.get(name)
+        if action_scopes is None or not callable(attribute):
+            return attribute
+
+        def gated_method(*args: Any, **kwargs: Any) -> Any:
+            """在 backend 方法执行前检查已签名 capability。"""
+            resolved_scopes = (
+                action_scopes(*args, **kwargs)
+                if callable(action_scopes)
+                else action_scopes
+            )
+            return self._capabilities.call_any_action(
+                resolved_scopes,
+                attribute,
+                *args,
+                **kwargs,
+            )
+
+        return gated_method
+
+
 def reason_for_unauthorized_scope(action_scope: str) -> str:
     """将未授权执行面 scope 映射为稳定的本地拒绝原因。"""
     if action_scope.startswith("tool_call:") or action_scope == "tool_call":
@@ -327,14 +648,20 @@ class SignedRequestExecutionGate:
         now_fn: Callable[[], datetime] | None = None,
         replay_state_dir: str | Path | None = None,
         replay_state_store: ReplayStateStore | None = None,
+        parent_capability_store: Mapping[str, Iterable[str]] | None = None,
     ) -> None:
         """Store a CAN gate, trusted public keys, and optional shared replay state."""
         if replay_state_dir is not None and replay_state_store is not None:
             raise ValueError("configure either replay_state_dir or replay_state_store, not both")
         self.can_gate = can_gate
         self.trusted_public_keys = dict(trusted_public_keys)
+        self.parent_capability_store = {
+            digest.lower(): tuple(scopes)
+            for digest, scopes in (parent_capability_store or {}).items()
+        }
         self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
         self._seen_request_ids: set[str] = set()
+        self._replay_lock = threading.Lock()
         self._replay_state_store = replay_state_store
         if replay_state_dir is not None:
             self._replay_state_store = FileReplayStateStore(replay_state_dir)
@@ -394,6 +721,10 @@ class SignedRequestExecutionGate:
             return ExecutionGateDecision(False, "envelope_expired")
 
         request_envelope_valid = True
+        delegation_decision = self._evaluate_delegation_capability(envelope)
+        if delegation_decision is not None:
+            return delegation_decision
+
         execution_scope_allowed = action_scopes_allow(
             envelope.authorized_scopes,
             request.action_scope,
@@ -441,6 +772,70 @@ class SignedRequestExecutionGate:
             sender_public_key=public_key,
         )
 
+    def _evaluate_delegation_capability(
+        self,
+        envelope: RequestEnvelope,
+    ) -> ExecutionGateDecision | None:
+        """校验委托子 capability 的父摘要绑定与 scope attenuation 关系。"""
+        is_delegated = envelope.delegation_depth > 0 or bool(envelope.parent_envelope_digest)
+        if not is_delegated:
+            return None
+        if not envelope.parent_envelope_digest:
+            return ExecutionGateDecision(
+                False,
+                "missing_parent_envelope_digest",
+                request_envelope_valid=True,
+                request_envelope=envelope,
+            )
+        parent_scopes = self.parent_capability_store.get(envelope.parent_envelope_digest)
+        if parent_scopes is None:
+            return ExecutionGateDecision(
+                False,
+                "unknown_parent_envelope_digest",
+                request_envelope_valid=True,
+                request_envelope=envelope,
+            )
+        if not envelope.parent_authorized_scopes:
+            return ExecutionGateDecision(
+                False,
+                "missing_parent_authorized_scopes",
+                request_envelope_valid=True,
+                request_envelope=envelope,
+            )
+        if tuple(envelope.parent_authorized_scopes) != tuple(parent_scopes):
+            return ExecutionGateDecision(
+                False,
+                "parent_authorized_scopes_mismatch",
+                request_envelope_valid=True,
+                request_envelope=envelope,
+            )
+        if envelope.delegation_depth <= 0:
+            return ExecutionGateDecision(
+                False,
+                "invalid_delegation_depth",
+                request_envelope_valid=True,
+                request_envelope=envelope,
+            )
+        if envelope.delegation_depth > envelope.max_delegation_depth:
+            return ExecutionGateDecision(
+                False,
+                "delegation_depth_exceeded",
+                request_envelope_valid=True,
+                request_envelope=envelope,
+            )
+        if not action_scopes_are_attenuated(
+            parent_scopes,
+            envelope.authorized_scopes,
+        ):
+            return ExecutionGateDecision(
+                False,
+                "delegation_scope_escalation",
+                request_envelope_valid=True,
+                execution_scope_allowed=False,
+                request_envelope=envelope,
+            )
+        return None
+
     def consume_request(
         self,
         request: ExecutionGateRequest,
@@ -452,23 +847,25 @@ class SignedRequestExecutionGate:
 
         assert decision.request_envelope is not None
         request_id = self._request_replay_id(decision.request_envelope)
-        if request_id in self._seen_request_ids:
-            return replace(decision, allowed=False, reason="replayed_request_envelope")
-
-        if self._replay_state_store is not None:
-            try:
-                reservation = self._replay_state_store.reserve_request(
-                    request_id,
-                    decision.request_envelope,
-                )
-            except OSError:
-                return replace(decision, allowed=False, reason="replay_state_persistence_failed")
-            if reservation == "replayed":
-                self._seen_request_ids.add(request_id)
+        # 同一 gate 实例内的内存集合也要在锁内检查/写入，避免并发消费双放行。
+        with self._replay_lock:
+            if request_id in self._seen_request_ids:
                 return replace(decision, allowed=False, reason="replayed_request_envelope")
 
-        self._seen_request_ids.add(request_id)
-        return decision
+            if self._replay_state_store is not None:
+                try:
+                    reservation = self._replay_state_store.reserve_request(
+                        request_id,
+                        decision.request_envelope,
+                    )
+                except OSError:
+                    return replace(decision, allowed=False, reason="replay_state_persistence_failed")
+                if reservation == "replayed":
+                    self._seen_request_ids.add(request_id)
+                    return replace(decision, allowed=False, reason="replayed_request_envelope")
+
+            self._seen_request_ids.add(request_id)
+            return decision
 
     def build_local_execution_context_from_decision(
         self,
@@ -527,6 +924,7 @@ def build_toy_lwe_execution_gate(
     now_fn: Callable[[], datetime] | None = None,
     replay_state_dir: str | Path | None = None,
     replay_state_store: ReplayStateStore | None = None,
+    parent_capability_store: Mapping[str, Iterable[str]] | None = None,
 ) -> SignedRequestExecutionGate:
     """Build a signed execution gate for the research-only toy LWE scheme.
 
@@ -555,6 +953,7 @@ def build_toy_lwe_execution_gate(
         now_fn=now_fn,
         replay_state_dir=replay_state_dir,
         replay_state_store=replay_state_store,
+        parent_capability_store=parent_capability_store,
     )
 
 

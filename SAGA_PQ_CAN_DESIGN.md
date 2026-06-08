@@ -358,7 +358,12 @@ If any check fails:
 Final authorization is:
 
 ```text
-allow = saga_token_valid AND can_accept AND internal_policy_accept
+allow = saga_token_valid
+    AND request_envelope_valid
+    AND pq_signature_valid
+    AND can_accept
+    AND execution_scope_allowed
+    AND internal_policy_accept
 ```
 
 中文说明：
@@ -397,7 +402,12 @@ LLM prompt / memory / tool / delegation
 最终授权为：
 
 ```text
-allow = saga_token_valid AND can_accept AND internal_policy_accept
+allow = saga_token_valid
+    AND request_envelope_valid
+    AND pq_signature_valid
+    AND can_accept
+    AND execution_scope_allowed
+    AND internal_policy_accept
 ```
 
 ---
@@ -935,11 +945,14 @@ Boundary requirements:
 - `neural/` and `pq/` are extension modules and must not become mandatory for the SAGA paper reproduction path.
 
 Replay protection belongs to the PQ-CAN extension kernel. The current
-`FileReplayStateStore` gives one local/shared-filesystem backend with atomic
-marker creation. It is enough to make different local workdirs or fresh gate
-instances share consumed envelope state, but it is not a complete distributed
+`ReplayStoreConfig` separates the default agent-workdir marker backend from an
+explicit `file_marker` backend. `FileReplayStateStore` gives one
+local/shared-filesystem backend with atomic marker creation. It is enough to
+make different local workdirs or fresh gate instances share consumed envelope
+state in local/dev/test experiments, but it is not a complete distributed
 systems claim. Multi-host deployments should inject a strongly consistent
-`ReplayStateStore` implementation instead of relying on per-agent local state.
+`ReplayStateStore` implementation instead of relying on per-agent local state
+or shared marker files.
 
 方案一“用 LWE-CNN 替换 SAGA VerifyPK primitive”只保留为 Future Work / Alternative Design，不是当前实现主线。
 
@@ -1093,7 +1106,12 @@ Internal policy gates cannot be bypassed by CAN.
 The final decision is:
 
 ```text
-allow = saga_token_valid AND can_accept AND internal_policy_accept
+allow = saga_token_valid
+    AND request_envelope_valid
+    AND pq_signature_valid
+    AND can_accept
+    AND execution_scope_allowed
+    AND internal_policy_accept
 ```
 
 CAN 不能覆盖 SAGA token 失败；
@@ -1101,7 +1119,12 @@ CAN 也不能绕过内部执行策略。
 最终决策是：
 
 ```text
-allow = saga_token_valid AND can_accept AND internal_policy_accept
+allow = saga_token_valid
+    AND request_envelope_valid
+    AND pq_signature_valid
+    AND can_accept
+    AND execution_scope_allowed
+    AND internal_policy_accept
 ```
 
 ### I7. Signed envelope binding / 已签名 envelope 绑定
@@ -1126,7 +1149,104 @@ Missing, malformed, or mismatched signed request material must fail closed.
 
 ---
 
-## 15. Test plan / 测试计划
+## 15. Paper-facing security properties / 面向论文的安全性质
+
+The U9/U10 claim surface is the strict runtime kernel only. It excludes legacy
+compatibility paths, direct raw backend use outside gated facades, and
+production post-quantum claims for toy LWE. The machine-readable evidence map
+is `experiments/security_evidence.py`.
+
+### P1. Unforgeability of execution capabilities / 执行 capability 不可伪造
+
+A request can reach a protected execution surface only if the sender AID maps to
+a trusted public key and the detached post-quantum signature verifies over the
+canonical signed intent capability envelope digest. The relevant formula terms
+are `request_envelope_valid`, `pq_signature_valid`, and `can_accept`.
+
+请求只有在发送方 AID 映射到受信公钥，且分离的后量子签名能验证 canonical
+signed intent capability envelope digest 时，才能进入受保护执行面。相关公式项是
+`request_envelope_valid`、`pq_signature_valid` 和 `can_accept`。
+
+### P2. Context binding / 上下文绑定
+
+The signed envelope binds sender, receiver, token digest, message digest, action
+scope, time window, session, turn, provider, and capability metadata. Moving the
+same signature or envelope to another request context must reject before local
+execution.
+
+已签名 envelope 绑定发送方、接收方、token digest、message digest、action
+scope、时间窗、session、turn、provider 和 capability metadata。把同一签名或
+envelope 移到另一个请求上下文必须在本地执行前拒绝。
+
+### P3. Scope non-escalation / Scope 不提升
+
+LLM-requested scopes are proposals only. The signed `authorized_scopes` are
+compiled from local policy, and downstream `LocalExecutionContext` checks can
+grant only scopes that survived policy compilation and signature verification.
+Delegated child capabilities must bind a known parent digest and attenuate the
+parent scope set.
+
+LLM 请求的 scope 只能作为 proposal。已签名的 `authorized_scopes` 来自本地
+policy 编译；下游 `LocalExecutionContext` 只能授予通过 policy 编译并完成签名验
+证的 scope。delegated child capability 必须绑定已知 parent digest，并且只能收窄
+parent scope 集合。
+
+### P4. Replay resistance / 不可重放
+
+The execution path consumes each signed envelope digest at most once. Duplicate
+consumption, replay after gate restart, replay-store write failure, and
+concurrent reserve races fail closed.
+
+执行路径中每个已签名 envelope digest 最多只能被消费一次。重复消费、gate 重启后
+重放、replay store 写入失败以及并发 reserve 竞争都必须 fail-closed。
+
+### P5. Side-effect-free rejection / 无副作用拒绝
+
+Rejected prompt, tool, memory, and delegation requests must return, drop, or
+audit before the protected local action runs. Offline and real-service negative
+runners use local run counters and protected-action records as the side-effect
+oracle.
+
+被拒绝的 prompt、tool、memory 和 delegation 请求必须在受保护本地动作运行前返
+回、丢弃或审计。离线和真实服务负向 runner 使用本地运行计数与受保护动作记录作
+为副作用 oracle。
+
+### Evidence mapping / 证据映射
+
+U10 maps the evidence as follows:
+
+- `experiments/negative_injection_runner.py` covers deterministic offline
+  failures for tampered message/action/scope, expired envelope, replay,
+  unauthorized tool/memory/delegation, real-valued signature input, untrusted or
+  wrong sender keys, and strict Agent runtime probes.
+- `experiments/real_negative_runner.py` covers opt-in Provider/token/TLS/socket
+  paths for missing envelope, tampered message, prompt-surface tool-only scope,
+  replay, wrong trusted sender key, and tool/memory/delegation scope probes.
+- `experiments/ablation_overhead_runner.py` compares `saga_only`,
+  `ordinary_pq_middleware`, `naive_neural_verifier`, and
+  `shamir_secured_pq_can`. The expected current negative-rejection counts are
+  0, 2, 2, and 5 respectively.
+- `tests/test_security_evidence.py` checks that these mappings stay aligned
+  with the runner constants and ablation summary.
+
+U10 证据映射如下：
+
+- `experiments/negative_injection_runner.py` 覆盖确定性离线失败样本，包括
+  message/action/scope 篡改、过期 envelope、重放、未授权 tool/memory/delegation、
+  实数值签名输入、不受信或错误 sender key，以及 strict Agent runtime 探针。
+- `experiments/real_negative_runner.py` 覆盖 opt-in 的
+  Provider/token/TLS/socket 路径，包括缺失 envelope、message 篡改、prompt surface
+  上的 tool-only scope、重放、错误 trusted sender key，以及 tool/memory/delegation
+  scope probe。
+- `experiments/ablation_overhead_runner.py` 比较 `saga_only`、
+  `ordinary_pq_middleware`、`naive_neural_verifier` 与
+  `shamir_secured_pq_can`。当前期望负向拒绝数量分别为 0、2、2、5。
+- `tests/test_security_evidence.py` 检查上述映射与 runner 常量和消融 summary 保
+  持一致。
+
+---
+
+## 16. Test plan / 测试计划
 
 ### Unit tests / 单元测试
 
@@ -1177,7 +1297,7 @@ These empirical tests are not a proof. The proof obligation follows from the Sha
 
 ---
 
-## 16. Suggested package layout / 推荐包结构
+## 17. Suggested package layout / 推荐包结构
 
 ```text
 pq/
@@ -1226,7 +1346,7 @@ docs/
 
 ---
 
-## 17. Implementation phases / 实现阶段
+## 18. Implementation phases / 实现阶段
 
 ### Phase 1: Skeleton and canonical context / 阶段 1：骨架与 canonical context
 
@@ -1287,14 +1407,16 @@ docs/
 ### Phase 5: SAGA middleware / 阶段 5：SAGA middleware
 
 - Add token pre-check interface.
-- Add `allow = saga_token_valid and can_accept and internal_policy_accept`.
+- Add the six-term authorization formula:
+  `saga_token_valid AND request_envelope_valid AND pq_signature_valid AND can_accept AND execution_scope_allowed AND internal_policy_accept`.
 - Add reject/drop/audit behavior.
 - Add integration tests.
 
 
 
 - 添加 token pre-check 接口；
-- 添加 `allow = saga_token_valid and can_accept and internal_policy_accept`；
+- 添加六项授权公式：
+  `saga_token_valid AND request_envelope_valid AND pq_signature_valid AND can_accept AND execution_scope_allowed AND internal_policy_accept`；
 - 添加 reject/drop/audit 行为；
 - 添加集成测试。
 
@@ -1314,7 +1436,7 @@ docs/
 
 ---
 
-## 18. Acceptance criteria / 验收标准
+## 19. Acceptance criteria / 验收标准
 
 The prototype is acceptable if:
 
@@ -1344,7 +1466,7 @@ The prototype is acceptable if:
 
 ---
 
-## 19. Known limitations / 已知限制
+## 20. Known limitations / 已知限制
 
 **English**
 

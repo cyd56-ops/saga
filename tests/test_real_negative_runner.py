@@ -19,6 +19,11 @@ from experiments import real_negative_runner
 class RealNegativeRunnerTests(unittest.TestCase):
     """Verify the real-service negative runner without starting live services."""
 
+    def setUp(self) -> None:
+        """Create a temporary workdir root for helper-wired Agent shells."""
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+
     def _agent(self) -> Agent:
         """Create a helper-wired Agent shell for payload-construction tests."""
         scheme = ToyLWESignatureScheme(seed=47)
@@ -26,6 +31,7 @@ class RealNegativeRunnerTests(unittest.TestCase):
         bob_keys = scheme.keygen()
         agent = Agent.__new__(Agent)
         agent.aid = "alice@example.com:calendar_agent"
+        agent.workdir = str(Path(self.tempdir.name) / agent.aid)
         agent.provider_id = "https://provider.example.test"
         agent.execution_gate = None
         agent.pq_signature_scheme = None
@@ -262,6 +268,81 @@ class RealNegativeRunnerTests(unittest.TestCase):
         self.assertIn("query", query)
         self.assertIn("--scenario", query)
         self.assertIn("missing_request_envelope", query)
+
+    def test_listen_command_passes_explicit_sqlite_replay_store(self) -> None:
+        """Run mode 应把显式 SQLite replay store 参数传给 listener 子进程。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = real_negative_runner.RealNegativeRunConfig(
+                repo_root=root,
+                python_executable="/venv/bin/python",
+                scenarios=("replayed_envelope",),
+                initiator_config=root / "emma.yaml",
+                receiver_config=root / "raj.yaml",
+                agent_name="calendar_agent",
+                run_dir=root / "run",
+                ca_static_dir=root / ".ca_static",
+                mongo_dbpath=root / ".mongodata",
+                mongo_binary=root / ".mongodb" / "bin" / "mongod",
+                provider_db_uri="mongodb://localhost:27017/saga",
+                startup_timeout_seconds=1,
+                listener_startup_timeout_seconds=1,
+                query_timeout_seconds=1,
+                audit_timeout_seconds=2,
+                skip_db_preflight=False,
+                replay_store_backend="sqlite",
+                replay_store_sqlite_path=root / "run" / "replay.sqlite3",
+            )
+
+            listen = real_negative_runner._listen_command(
+                config,
+                side_effect_path=root / "run" / "side_effects.jsonl",
+            )
+
+        self.assertIn("--replay-store-backend", listen)
+        self.assertIn("sqlite", listen)
+        self.assertIn("--replay-store-sqlite-path", listen)
+        self.assertIn(str(root / "run" / "replay.sqlite3"), listen)
+
+    def test_run_config_defaults_sqlite_replay_store_to_run_directory(self) -> None:
+        """run CLI 选择 SQLite backend 但不传路径时，应默认写入 run 目录。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "run"
+            args = real_negative_runner.parse_args(
+                [
+                    "run",
+                    "--scenario",
+                    "replayed_envelope",
+                    "--run-dir",
+                    str(run_dir),
+                    "--replay-store-backend",
+                    "sqlite",
+                ]
+            )
+
+            config = real_negative_runner._config_from_run_args(args)
+
+        self.assertEqual(config.replay_store_backend, "sqlite")
+        self.assertEqual(config.replay_store_sqlite_path, run_dir / "replay_state.sqlite3")
+
+    def test_runtime_auth_config_is_normalized_for_injected_replay_store(self) -> None:
+        """显式 replay store 注入时，runtime auth config 应声明强一致 backend。"""
+        runtime_auth_config = real_negative_runner.ToyRuntimeAuthConfig(
+            enabled=True,
+            replay_state_dir="/tmp/legacy-replay",
+        )
+
+        normalized = real_negative_runner._runtime_auth_config_for_injected_replay_store(
+            runtime_auth_config
+        )
+
+        self.assertIsNotNone(normalized)
+        assert normalized is not None
+        replay_store = normalized.resolved_replay_store()
+        self.assertIsNotNone(replay_store)
+        assert replay_store is not None
+        self.assertEqual(replay_store.backend, "external_strong_consistency")
+        self.assertIsNone(normalized.replay_state_dir)
 
     def test_replayed_envelope_uses_two_real_connections(self) -> None:
         """确认 replay 样本会对同一 listener 发起两次真实握手。"""

@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from experiments.security_evidence import evidence_mappings, property_claims
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE_SUMMARY_PATH = (
@@ -64,6 +66,21 @@ TASK_LEVEL_COLUMNS = (
     "total_tokens",
     "oracle_reason",
 )
+SECURITY_PROPERTY_COLUMNS = (
+    "property_id",
+    "title",
+    "enforcement_terms",
+    "assumptions",
+    "limitations",
+)
+SECURITY_EVIDENCE_COLUMNS = (
+    "source",
+    "name",
+    "properties",
+    "expected_reason",
+    "evidence_kind",
+    "side_effect_expectation",
+)
 
 
 def load_end_to_end_summary(path: str | Path) -> dict[str, Any]:
@@ -89,11 +106,17 @@ def build_paper_tables(
         for mode, summary in summaries_by_mode.items()
         for task in _tasks(summary)
     ]
+    security_property_rows = build_security_property_rows()
+    security_evidence_rows = build_security_evidence_rows()
     return {
         "run_level_columns": list(RUN_LEVEL_COLUMNS),
         "task_level_columns": list(TASK_LEVEL_COLUMNS),
+        "security_property_columns": list(SECURITY_PROPERTY_COLUMNS),
+        "security_evidence_columns": list(SECURITY_EVIDENCE_COLUMNS),
         "run_level_rows": run_level_rows,
         "task_level_rows": task_level_rows,
+        "security_property_rows": security_property_rows,
+        "security_evidence_rows": security_evidence_rows,
         "notes": {
             "api_cost": (
                 "API cost is reported only when model diagnostics expose explicit cost fields."
@@ -103,6 +126,9 @@ def build_paper_tables(
             ),
             "audit_counts": (
                 "Audit counts refer to execution-gate audit records, not model/tool permission text."
+            ),
+            "security_evidence": (
+                "Security-property rows and evidence rows are generated from experiments/security_evidence.py."
             ),
         },
     }
@@ -177,6 +203,45 @@ def build_task_level_row(mode: str, task_record: Mapping[str, Any]) -> dict[str,
     return _ordered_row(TASK_LEVEL_COLUMNS, row)
 
 
+def build_security_property_rows() -> list[dict[str, object]]:
+    """构造 U9 安全性质表格行。"""
+    rows = []
+    for claim in property_claims():
+        rows.append(
+            _ordered_row(
+                SECURITY_PROPERTY_COLUMNS,
+                {
+                    "property_id": claim.property_id,
+                    "title": claim.title,
+                    "enforcement_terms": ", ".join(claim.enforcement_terms),
+                    "assumptions": "; ".join(claim.assumptions),
+                    "limitations": "; ".join(claim.limitations),
+                },
+            )
+        )
+    return rows
+
+
+def build_security_evidence_rows() -> list[dict[str, object]]:
+    """构造 U10 证据映射表格行。"""
+    rows = []
+    for mapping in evidence_mappings():
+        rows.append(
+            _ordered_row(
+                SECURITY_EVIDENCE_COLUMNS,
+                {
+                    "source": mapping.source,
+                    "name": mapping.name,
+                    "properties": ", ".join(mapping.properties),
+                    "expected_reason": mapping.expected_reason,
+                    "evidence_kind": mapping.evidence_kind,
+                    "side_effect_expectation": mapping.side_effect_expectation,
+                },
+            )
+        )
+    return rows
+
+
 def format_markdown_table(
     rows: Sequence[Mapping[str, object]],
     columns: Sequence[str],
@@ -191,6 +256,68 @@ def format_markdown_table(
         for row in rows
     ]
     return "\n".join([header, separator, *body])
+
+
+def format_paper_tables_markdown(tables: Mapping[str, object]) -> str:
+    """将完整论文表格集合格式化为带章节标题的 Markdown 文档。"""
+    sections = [
+        (
+            "Run-Level Summary",
+            "run_level_rows",
+            "run_level_columns",
+        ),
+        (
+            "Task-Level Summary",
+            "task_level_rows",
+            "task_level_columns",
+        ),
+        (
+            "Security Properties",
+            "security_property_rows",
+            "security_property_columns",
+        ),
+        (
+            "Security Evidence",
+            "security_evidence_rows",
+            "security_evidence_columns",
+        ),
+    ]
+    rendered_sections = []
+    for title, rows_key, columns_key in sections:
+        rows = _mapping_sequence(tables.get(rows_key), rows_key)
+        columns = _string_sequence(tables.get(columns_key), columns_key)
+        rendered_sections.append(
+            "\n".join(
+                [
+                    f"## {title}",
+                    format_markdown_table(rows, columns),
+                ]
+            )
+        )
+    return "\n\n".join(rendered_sections) + "\n"
+
+
+def write_paper_table_archive(
+    tables: Mapping[str, object],
+    output_dir: str | Path,
+) -> dict[str, Path]:
+    """把论文表格同时归档为 JSON 与 Markdown 文件。"""
+    archive_dir = Path(output_dir)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    json_path = archive_dir / "paper_tables.json"
+    markdown_path = archive_dir / "paper_tables.md"
+    json_path.write_text(
+        json.dumps(tables, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    markdown_path.write_text(
+        format_paper_tables_markdown(tables),
+        encoding="utf-8",
+    )
+    return {
+        "json": json_path,
+        "markdown": markdown_path,
+    }
 
 
 def build_default_paper_tables() -> dict[str, object]:
@@ -226,6 +353,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="json",
         help="Output format.",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Optional directory where paper_tables.json and paper_tables.md are archived.",
+    )
     args = parser.parse_args(argv)
 
     tables = build_paper_tables(
@@ -234,22 +366,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "pq_can": load_end_to_end_summary(args.pq_can_summary),
         }
     )
+    if args.output_dir is not None:
+        write_paper_table_archive(tables, args.output_dir)
+
     if args.format == "markdown":
-        print("## Run-Level Summary")
-        print(
-            format_markdown_table(
-                tables["run_level_rows"],
-                tables["run_level_columns"],
-            )
-        )
-        print()
-        print("## Task-Level Summary")
-        print(
-            format_markdown_table(
-                tables["task_level_rows"],
-                tables["task_level_columns"],
-            )
-        )
+        print(format_paper_tables_markdown(tables), end="")
     else:
         print(json.dumps(tables, indent=2, sort_keys=True))
     return 0
@@ -294,6 +415,30 @@ def _ordered_row(
 ) -> dict[str, object]:
     """按列顺序构造 dict，保持 JSON 和 Markdown 输出稳定。"""
     return {column: row.get(column) for column in columns}
+
+
+def _mapping_sequence(value: object, field_name: str) -> list[Mapping[str, object]]:
+    """校验并返回 Markdown 渲染需要的行对象序列。"""
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ValueError(f"{field_name} must be a sequence")
+    rows = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ValueError(f"{field_name} must contain mapping rows")
+        rows.append(item)
+    return rows
+
+
+def _string_sequence(value: object, field_name: str) -> list[str]:
+    """校验并返回 Markdown 渲染需要的列名序列。"""
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ValueError(f"{field_name} must be a sequence")
+    columns = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"{field_name} must contain string columns")
+        columns.append(item)
+    return columns
 
 
 def _format_markdown_cell(value: object) -> str:

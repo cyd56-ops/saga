@@ -14,6 +14,7 @@ from saga.common.contact_policy import check_aid
 
 
 DEFAULT_ENVELOPE_DOMAIN = "SAGA-PQ-CAN-v1"
+DEFAULT_MAX_DELEGATION_DEPTH = 8
 BASE_ACTION_SCOPES = frozenset(
     {
         "llm_prompt",
@@ -96,6 +97,18 @@ def action_scopes_allow(granted_scopes: Iterable[str], requested_scope: str) -> 
     return any(action_scope_allows(granted_scope, requested_scope) for granted_scope in granted_scopes)
 
 
+def action_scopes_are_attenuated(
+    parent_scopes: Iterable[str],
+    child_scopes: Iterable[str],
+) -> bool:
+    """Return ``True`` when every child scope is authorized by the parent set.
+
+    委托子 capability 只能缩小父 capability 的授权面，不能新增动作族或工具细分权限。
+    """
+    parent_scope_tuple = tuple(parent_scopes)
+    return all(action_scopes_allow(parent_scope_tuple, child_scope) for child_scope in child_scopes)
+
+
 def _normalize_timestamp(value: datetime | str, field_name: str) -> str:
     """Normalize a timestamp to a canonical UTC RFC3339-like string."""
     if isinstance(value, str):
@@ -114,9 +127,9 @@ def _normalize_timestamp(value: datetime | str, field_name: str) -> str:
 
 @dataclass(frozen=True)
 class RequestEnvelope:
-    """Canonical execution-authentication envelope for SAGA-PQ-CAN.
+    """Canonical signed intent-capability envelope for SAGA-PQ-CAN.
 
-    信封绑定入口动作、额外授权 scope、消息摘要和 token 摘要，供 PQ-CAN 验签。
+    信封绑定入口动作、额外授权 scope、消息摘要、token 摘要和委托 capability 关系。
     """
 
     sender_aid: str
@@ -133,17 +146,25 @@ class RequestEnvelope:
     content_type: str = "text"
     provider_id: str = ""
     timestamp: datetime | str | None = None
+    capability_id: str = ""
+    parent_envelope_digest: str = ""
+    parent_authorized_scopes: tuple[str, ...] | list[str] | None = None
+    delegation_depth: int = 0
+    max_delegation_depth: int = DEFAULT_MAX_DELEGATION_DEPTH
 
     def __post_init__(self) -> None:
         """Validate and normalize the envelope into a deterministic form.
 
-        所有 scope 和时间戳在签名前规范化，确保不同节点得到相同摘要。
+        所有 scope、capability 关系和时间戳在签名前规范化，确保不同节点得到相同摘要。
         """
         if not check_aid(self.sender_aid):
             raise ValueError("sender_aid must be a valid AID")
         if not check_aid(self.receiver_aid):
             raise ValueError("receiver_aid must be a valid AID")
         authorized_scopes = normalize_authorized_scopes(self.action_scope, self.authorized_scopes)
+        parent_authorized_scopes = self._normalize_parent_authorized_scopes(
+            self.parent_authorized_scopes
+        )
         if not self.domain:
             raise ValueError("domain must be non-empty")
         if not self.session_id:
@@ -156,7 +177,16 @@ class RequestEnvelope:
             raise ValueError("message_digest must be non-empty")
         if not self.content_type:
             raise ValueError("content_type must be non-empty")
-
+        capability_id = self.capability_id or self.turn_id
+        if not capability_id:
+            raise ValueError("capability_id must be non-empty")
+        parent_envelope_digest = self.parent_envelope_digest.lower()
+        if parent_envelope_digest and not self._is_sha256_hex(parent_envelope_digest):
+            raise ValueError("parent_envelope_digest must be a SHA-256 hex digest")
+        if self.delegation_depth < 0:
+            raise ValueError("delegation_depth must be non-negative")
+        if self.max_delegation_depth < 0:
+            raise ValueError("max_delegation_depth must be non-negative")
         issued_at = _normalize_timestamp(self.issued_at, "issued_at")
         expires_at = _normalize_timestamp(self.expires_at, "expires_at")
         timestamp = issued_at if self.timestamp is None else _normalize_timestamp(
@@ -169,6 +199,9 @@ class RequestEnvelope:
         object.__setattr__(self, "token_digest", self.token_digest.lower())
         object.__setattr__(self, "message_digest", self.message_digest.lower())
         object.__setattr__(self, "authorized_scopes", authorized_scopes)
+        object.__setattr__(self, "capability_id", capability_id)
+        object.__setattr__(self, "parent_envelope_digest", parent_envelope_digest)
+        object.__setattr__(self, "parent_authorized_scopes", parent_authorized_scopes)
 
     def as_dict(self) -> dict[str, Any]:
         """Return the canonical dictionary representation of the envelope.
@@ -178,11 +211,16 @@ class RequestEnvelope:
         return {
             "action_scope": self.action_scope,
             "authorized_scopes": list(self.authorized_scopes),
+            "capability_id": self.capability_id,
             "content_type": self.content_type,
+            "delegation_depth": self.delegation_depth,
             "domain": self.domain,
             "expires_at": self.expires_at,
             "issued_at": self.issued_at,
+            "max_delegation_depth": self.max_delegation_depth,
             "message_digest": self.message_digest,
+            "parent_authorized_scopes": list(self.parent_authorized_scopes),
+            "parent_envelope_digest": self.parent_envelope_digest,
             "provider_id": self.provider_id,
             "receiver_aid": self.receiver_aid,
             "sender_aid": self.sender_aid,
@@ -213,6 +251,26 @@ class RequestEnvelope:
         """Return the lowercase SHA-256 hex digest of the canonical envelope."""
         return self.digest().hex()
 
+    @staticmethod
+    def _is_sha256_hex(value: str) -> bool:
+        """校验字段是否为规范小写或大写 SHA-256 hex 文本。"""
+        return bool(re.fullmatch(r"[0-9a-fA-F]{64}", value))
+
+    @staticmethod
+    def _normalize_parent_authorized_scopes(
+        parent_authorized_scopes: Iterable[str] | None,
+    ) -> tuple[str, ...]:
+        """规范化父 capability scope 列表，供 scope attenuation 检查使用。"""
+        if parent_authorized_scopes is None:
+            return ()
+        scopes: set[str] = set()
+        for scope in parent_authorized_scopes:
+            if not isinstance(scope, str):
+                raise TypeError("parent_authorized_scopes entries must be strings")
+            parse_action_scope(scope)
+            scopes.add(scope)
+        return tuple(sorted(scopes))
+
 
 def build_request_envelope(
     *,
@@ -230,13 +288,26 @@ def build_request_envelope(
     content_type: str = "text",
     provider_id: str = "",
     timestamp: datetime | str | None = None,
+    capability_id: str = "",
+    parent_envelope: RequestEnvelope | None = None,
+    parent_envelope_digest: str = "",
+    parent_authorized_scopes: Iterable[str] | None = None,
+    delegation_depth: int = 0,
+    max_delegation_depth: int = DEFAULT_MAX_DELEGATION_DEPTH,
 ) -> RequestEnvelope:
     """Build a request envelope by hashing the token and message payload.
 
-    调用方可传入额外 ``authorized_scopes``，它们会和入口动作一起进入签名信封。
+    调用方可传入额外 ``authorized_scopes`` 和父 capability，用于签名绑定委托衰减关系。
     """
     token_bytes = token.encode("utf-8") if isinstance(token, str) else token
     message_bytes = message.encode("utf-8") if isinstance(message, str) else message
+    effective_parent_digest = parent_envelope_digest
+    effective_parent_scopes = parent_authorized_scopes
+    effective_delegation_depth = delegation_depth
+    if parent_envelope is not None:
+        effective_parent_digest = parent_envelope.hex_digest()
+        effective_parent_scopes = parent_envelope.authorized_scopes
+        effective_delegation_depth = parent_envelope.delegation_depth + 1
 
     return RequestEnvelope(
         sender_aid=sender_aid,
@@ -253,6 +324,15 @@ def build_request_envelope(
         content_type=content_type,
         provider_id=provider_id,
         timestamp=timestamp,
+        capability_id=capability_id,
+        parent_envelope_digest=effective_parent_digest,
+        parent_authorized_scopes=(
+            tuple(effective_parent_scopes)
+            if effective_parent_scopes is not None
+            else None
+        ),
+        delegation_depth=effective_delegation_depth,
+        max_delegation_depth=max_delegation_depth,
     )
 
 
