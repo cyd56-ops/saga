@@ -1,0 +1,1487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>saga.execution_gate API documentation</title>
+<meta name="description" content="Execution-layer authorization interfaces for SAGA-PQ-CAN.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>saga.execution_gate</code></h1>
+</header>
+<section id="section-intro">
+<p>Execution-layer authorization interfaces for SAGA-PQ-CAN.</p>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-functions">Functions</h2>
+<dl>
+<dt id="saga.execution_gate.append_execution_gate_audit_record"><code class="name flex">
+<span>def <span class="ident">append_execution_gate_audit_record</span></span>(<span>workdir: str | Path | None, record: Mapping[str, object]) ‑> pathlib.Path | None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def append_execution_gate_audit_record(
+    workdir: str | Path | None,
+    record: Mapping[str, object],
+) -&gt; Path | None:
+    &#34;&#34;&#34;Append an execution-gate audit record to a local JSONL audit file.&#34;&#34;&#34;
+    if workdir is None:
+        return None
+
+    audit_dir = Path(workdir) / &#34;audit&#34;
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = audit_dir / &#34;execution_gate.jsonl&#34;
+    payload = dict(record)
+    payload[&#34;recorded_at&#34;] = datetime.now(tz=timezone.utc).isoformat()
+    with audit_path.open(&#34;a&#34;, encoding=&#34;utf-8&#34;) as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + &#34;\n&#34;)
+    return audit_path</code></pre>
+</details>
+<div class="desc"><p>Append an execution-gate audit record to a local JSONL audit file.</p></div>
+</dd>
+<dt id="saga.execution_gate.build_execution_gate_audit_record"><code class="name flex">
+<span>def <span class="ident">build_execution_gate_audit_record</span></span>(<span>request: <a title="saga.execution_gate.ExecutionGateRequest" href="#saga.execution_gate.ExecutionGateRequest">ExecutionGateRequest</a>,<br>decision: <a title="saga.execution_gate.ExecutionGateDecision" href="#saga.execution_gate.ExecutionGateDecision">ExecutionGateDecision</a>) ‑> dict[str, object]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def build_execution_gate_audit_record(
+    request: ExecutionGateRequest,
+    decision: ExecutionGateDecision,
+) -&gt; dict[str, object]:
+    &#34;&#34;&#34;Build a stable local audit record for execution-gate decisions.
+
+    审计记录保存签名中的入口动作和授权 scope，便于排查 fail-closed 原因。
+    &#34;&#34;&#34;
+    record: dict[str, object] = {
+        &#34;allowed&#34;: decision.allowed,
+        &#34;reason&#34;: decision.reason,
+        &#34;sender_aid&#34;: request.sender_aid,
+        &#34;receiver_aid&#34;: request.receiver_aid,
+        &#34;action_scope&#34;: request.action_scope,
+        &#34;token_digest&#34;: sha256_hex(request.token.encode(&#34;utf-8&#34;)),
+        &#34;has_request_envelope&#34;: request.request_envelope is not None,
+        &#34;has_pq_signature&#34;: request.pq_signature is not None,
+    }
+    formula_terms = {
+        &#34;saga_token_valid&#34;: getattr(decision, &#34;protocol_allow&#34;, None),
+        &#34;request_envelope_valid&#34;: getattr(decision, &#34;request_envelope_valid&#34;, False),
+        &#34;pq_signature_valid&#34;: getattr(decision, &#34;pq_signature_valid&#34;, False),
+        &#34;can_accept&#34;: getattr(decision, &#34;can_accept&#34;, False),
+        &#34;execution_scope_allowed&#34;: getattr(decision, &#34;execution_scope_allowed&#34;, False),
+        &#34;internal_policy_accept&#34;: getattr(decision, &#34;internal_policy_accept&#34;, None),
+    }
+    record[&#34;authorization_formula&#34;] = formula_terms
+    envelope = getattr(decision, &#34;request_envelope&#34;, None)
+    if envelope is not None:
+        record[&#34;signed_sender_aid&#34;] = envelope.sender_aid
+        record[&#34;signed_receiver_aid&#34;] = envelope.receiver_aid
+        record[&#34;signed_action_scope&#34;] = envelope.action_scope
+        record[&#34;signed_authorized_scopes&#34;] = list(envelope.authorized_scopes)
+    return record</code></pre>
+</details>
+<div class="desc"><p>Build a stable local audit record for execution-gate decisions.</p>
+<p>审计记录保存签名中的入口动作和授权 scope，便于排查 fail-closed 原因。</p></div>
+</dd>
+<dt id="saga.execution_gate.build_toy_lwe_execution_gate"><code class="name flex">
+<span>def <span class="ident">build_toy_lwe_execution_gate</span></span>(<span>scheme: ToyLWESignatureScheme,<br>trusted_public_keys: Mapping[str, bytes],<br>*,<br>verifier_flavor: "Literal['compiled', 'wrapper']" = 'compiled',<br>message_bytes: int = 32,<br>now_fn: Callable[[], datetime] | None = None,<br>replay_state_dir: str | Path | None = None,<br>replay_state_store: <a title="saga.execution_gate.ReplayStateStore" href="#saga.execution_gate.ReplayStateStore">ReplayStateStore</a> | None = None) ‑> <a title="saga.execution_gate.SignedRequestExecutionGate" href="#saga.execution_gate.SignedRequestExecutionGate">SignedRequestExecutionGate</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def build_toy_lwe_execution_gate(
+    scheme: ToyLWESignatureScheme,
+    trusted_public_keys: Mapping[str, bytes],
+    *,
+    verifier_flavor: Literal[&#34;compiled&#34;, &#34;wrapper&#34;] = &#34;compiled&#34;,
+    message_bytes: int = 32,
+    now_fn: Callable[[], datetime] | None = None,
+    replay_state_dir: str | Path | None = None,
+    replay_state_store: ReplayStateStore | None = None,
+) -&gt; SignedRequestExecutionGate:
+    &#34;&#34;&#34;Build a signed execution gate for the research-only toy LWE scheme.
+
+    This helper centralizes the current prototype wiring so real agent/runtime
+    entry points do not need to manually assemble ``CAN`` plus verifier objects.
+    replay_state_dir 或 replay_state_store 提供时，会把已消费信封持久化到共享 replay 后端。
+    &#34;&#34;&#34;
+    # toy/PQ-CAN 依赖只在启用 research runtime auth 时加载，保持 SAGA 核心导入路径轻量。
+    from neural import CAN, CompiledToyLWEVerifier
+
+    public_key_bytes = _validate_trusted_public_keys(trusted_public_keys)
+    if verifier_flavor == &#34;compiled&#34;:
+        verifier = CompiledToyLWEVerifier(scheme, message_bytes=message_bytes)
+    elif verifier_flavor == &#34;wrapper&#34;:
+        verifier = _build_toy_lwe_wrapper_verifier(
+            scheme,
+            public_key_bytes=public_key_bytes,
+            message_bytes=message_bytes,
+        )
+    else:
+        raise ValueError(f&#34;unsupported verifier_flavor: {verifier_flavor}&#34;)
+
+    return SignedRequestExecutionGate(
+        CAN(verifier),
+        trusted_public_keys,
+        now_fn=now_fn,
+        replay_state_dir=replay_state_dir,
+        replay_state_store=replay_state_store,
+    )</code></pre>
+</details>
+<div class="desc"><p>Build a signed execution gate for the research-only toy LWE scheme.</p>
+<p>This helper centralizes the current prototype wiring so real agent/runtime
+entry points do not need to manually assemble <code>CAN</code> plus verifier objects.
+replay_state_dir 或 replay_state_store 提供时，会把已消费信封持久化到共享 replay 后端。</p></div>
+</dd>
+<dt id="saga.execution_gate.bytes_to_bits"><code class="name flex">
+<span>def <span class="ident">bytes_to_bits</span></span>(<span>payload: bytes) ‑> list[int]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def bytes_to_bits(payload: bytes) -&gt; list[int]:
+    &#34;&#34;&#34;把字节串展开为大端序比特列表，避免核心 gate 导入 neural 包。&#34;&#34;&#34;
+    bits: list[int] = []
+    for byte in payload:
+        for shift in range(7, -1, -1):
+            bits.append((byte &gt;&gt; shift) &amp; 1)
+    return bits</code></pre>
+</details>
+<div class="desc"><p>把字节串展开为大端序比特列表，避免核心 gate 导入 neural 包。</p></div>
+</dd>
+<dt id="saga.execution_gate.reason_for_unauthorized_scope"><code class="name flex">
+<span>def <span class="ident">reason_for_unauthorized_scope</span></span>(<span>action_scope: str) ‑> str</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def reason_for_unauthorized_scope(action_scope: str) -&gt; str:
+    &#34;&#34;&#34;将未授权执行面 scope 映射为稳定的本地拒绝原因。&#34;&#34;&#34;
+    if action_scope.startswith(&#34;tool_call:&#34;) or action_scope == &#34;tool_call&#34;:
+        return &#34;unauthorized_tool_scope&#34;
+    if action_scope == &#34;memory_read&#34;:
+        return &#34;unauthorized_memory_read&#34;
+    if action_scope == &#34;memory_write&#34;:
+        return &#34;unauthorized_memory_write&#34;
+    if action_scope == &#34;delegation&#34;:
+        return &#34;unauthorized_delegation&#34;
+    if action_scope == &#34;llm_prompt&#34;:
+        return &#34;prompt_scope_not_authorized&#34;
+    return &#34;execution_scope_not_authorized&#34;</code></pre>
+</details>
+<div class="desc"><p>将未授权执行面 scope 映射为稳定的本地拒绝原因。</p></div>
+</dd>
+</dl>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="saga.execution_gate.ExecutionAuthorizationError"><code class="flex name class">
+<span>class <span class="ident">ExecutionAuthorizationError</span></span>
+<span>(</span><span>reason: str, action_scope: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ExecutionAuthorizationError(PermissionError):
+    &#34;&#34;&#34;表示本地执行面授权失败，并携带稳定审计 reason。&#34;&#34;&#34;
+
+    def __init__(self, reason: str, action_scope: str) -&gt; None:
+        &#34;&#34;&#34;保存被拒绝的动作 scope，供诊断区分 gate 拒绝和工具权限失败。&#34;&#34;&#34;
+        self.reason = reason
+        self.action_scope = action_scope
+        super().__init__(f&#34;{reason}: {action_scope}&#34;)</code></pre>
+</details>
+<div class="desc"><p>表示本地执行面授权失败，并携带稳定审计 reason。</p>
+<p>保存被拒绝的动作 scope，供诊断区分 gate 拒绝和工具权限失败。</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>builtins.PermissionError</li>
+<li>builtins.OSError</li>
+<li>builtins.Exception</li>
+<li>builtins.BaseException</li>
+</ul>
+</dd>
+<dt id="saga.execution_gate.ExecutionGate"><code class="flex name class">
+<span>class <span class="ident">ExecutionGate</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ExecutionGate(Protocol):
+    &#34;&#34;&#34;Protocol implemented by execution-layer gate adapters.&#34;&#34;&#34;
+
+    def authorize(self, request: ExecutionGateRequest) -&gt; bool:
+        &#34;&#34;&#34;Return ``True`` only when the request is allowed into the execution path.&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>Protocol implemented by execution-layer gate adapters.</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>typing.Protocol</li>
+<li>typing.Generic</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="saga.execution_gate.ExecutionGate.authorize"><code class="name flex">
+<span>def <span class="ident">authorize</span></span>(<span>self,<br>request: <a title="saga.execution_gate.ExecutionGateRequest" href="#saga.execution_gate.ExecutionGateRequest">ExecutionGateRequest</a>) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def authorize(self, request: ExecutionGateRequest) -&gt; bool:
+    &#34;&#34;&#34;Return ``True`` only when the request is allowed into the execution path.&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>Return <code>True</code> only when the request is allowed into the execution path.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision"><code class="flex name class">
+<span>class <span class="ident">ExecutionGateDecision</span></span>
+<span>(</span><span>allowed: bool,<br>reason: str,<br>protocol_allow: bool | None = None,<br>request_envelope_valid: bool = False,<br>pq_signature_valid: bool = False,<br>can_accept: bool = False,<br>execution_scope_allowed: bool = False,<br>internal_policy_accept: bool | None = None,<br>request_envelope: RequestEnvelope | None = None,<br>pq_signature: bytes | None = None,<br>sender_public_key: bytes | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass(frozen=True)
+class ExecutionGateDecision:
+    &#34;&#34;&#34;执行层授权检查的结构化结果，并显式记录最终公式中的各项。&#34;&#34;&#34;
+
+    allowed: bool
+    &#34;&#34;&#34;Whether the request may enter the local execution path.&#34;&#34;&#34;
+    reason: str
+    &#34;&#34;&#34;Stable local audit reason for allow/deny handling.&#34;&#34;&#34;
+    protocol_allow: bool | None = None
+    &#34;&#34;&#34;Whether the SAGA token/protocol layer admitted the request when known.&#34;&#34;&#34;
+    request_envelope_valid: bool = False
+    &#34;&#34;&#34;Whether the canonical envelope is present, parseable, and context-bound.&#34;&#34;&#34;
+    pq_signature_valid: bool = False
+    &#34;&#34;&#34;Whether the detached signature material verifies for the envelope.&#34;&#34;&#34;
+    can_accept: bool = False
+    &#34;&#34;&#34;Whether the Shamir-secured CAN returned a hard accept bit.&#34;&#34;&#34;
+    execution_scope_allowed: bool = False
+    &#34;&#34;&#34;Whether the signed scopes authorize the concrete execution surface.&#34;&#34;&#34;
+    internal_policy_accept: bool | None = None
+    &#34;&#34;&#34;Whether the local runtime policy accepted the requested action when known.&#34;&#34;&#34;
+    request_envelope: RequestEnvelope | None = None
+    &#34;&#34;&#34;Parsed request envelope when validation succeeded.&#34;&#34;&#34;
+    pq_signature: bytes | None = None
+    &#34;&#34;&#34;Detached signature bytes when validation succeeded.&#34;&#34;&#34;
+    sender_public_key: bytes | None = None
+    &#34;&#34;&#34;Trusted sender public key used for verification when validation succeeded.&#34;&#34;&#34;
+
+    def with_formula_values(
+        self,
+        *,
+        protocol_allow: bool | None = None,
+        request_envelope_valid: bool | None = None,
+        pq_signature_valid: bool | None = None,
+        can_accept: bool | None = None,
+        execution_scope_allowed: bool | None = None,
+        internal_policy_accept: bool | None = None,
+    ) -&gt; &#34;ExecutionGateDecision&#34;:
+        &#34;&#34;&#34;返回带有更新公式项的新 decision，避免原地修改审计状态。&#34;&#34;&#34;
+        updates: dict[str, bool | None] = {}
+        if protocol_allow is not None:
+            updates[&#34;protocol_allow&#34;] = protocol_allow
+        if request_envelope_valid is not None:
+            updates[&#34;request_envelope_valid&#34;] = request_envelope_valid
+        if pq_signature_valid is not None:
+            updates[&#34;pq_signature_valid&#34;] = pq_signature_valid
+        if can_accept is not None:
+            updates[&#34;can_accept&#34;] = can_accept
+        if execution_scope_allowed is not None:
+            updates[&#34;execution_scope_allowed&#34;] = execution_scope_allowed
+        if internal_policy_accept is not None:
+            updates[&#34;internal_policy_accept&#34;] = internal_policy_accept
+        return replace(self, **updates)
+
+    def formula_terms(self) -&gt; dict[str, bool | None]:
+        &#34;&#34;&#34;导出最终授权公式各项，供测试、审计和论文统计复用。&#34;&#34;&#34;
+        return {
+            &#34;saga_token_valid&#34;: self.protocol_allow,
+            &#34;request_envelope_valid&#34;: self.request_envelope_valid,
+            &#34;pq_signature_valid&#34;: self.pq_signature_valid,
+            &#34;can_accept&#34;: self.can_accept,
+            &#34;execution_scope_allowed&#34;: self.execution_scope_allowed,
+            &#34;internal_policy_accept&#34;: self.internal_policy_accept,
+        }</code></pre>
+</details>
+<div class="desc"><p>执行层授权检查的结构化结果，并显式记录最终公式中的各项。</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="saga.execution_gate.ExecutionGateDecision.allowed"><code class="name">var <span class="ident">allowed</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether the request may enter the local execution path.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.can_accept"><code class="name">var <span class="ident">can_accept</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether the Shamir-secured CAN returned a hard accept bit.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.execution_scope_allowed"><code class="name">var <span class="ident">execution_scope_allowed</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether the signed scopes authorize the concrete execution surface.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.internal_policy_accept"><code class="name">var <span class="ident">internal_policy_accept</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>Whether the local runtime policy accepted the requested action when known.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.pq_signature"><code class="name">var <span class="ident">pq_signature</span> : bytes | None</code></dt>
+<dd>
+<div class="desc"><p>Detached signature bytes when validation succeeded.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.pq_signature_valid"><code class="name">var <span class="ident">pq_signature_valid</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether the detached signature material verifies for the envelope.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.protocol_allow"><code class="name">var <span class="ident">protocol_allow</span> : bool | None</code></dt>
+<dd>
+<div class="desc"><p>Whether the SAGA token/protocol layer admitted the request when known.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.reason"><code class="name">var <span class="ident">reason</span> : str</code></dt>
+<dd>
+<div class="desc"><p>Stable local audit reason for allow/deny handling.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.request_envelope"><code class="name">var <span class="ident">request_envelope</span> : <a title="saga.messages.RequestEnvelope" href="messages.html#saga.messages.RequestEnvelope">RequestEnvelope</a> | None</code></dt>
+<dd>
+<div class="desc"><p>Parsed request envelope when validation succeeded.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.request_envelope_valid"><code class="name">var <span class="ident">request_envelope_valid</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether the canonical envelope is present, parseable, and context-bound.</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.sender_public_key"><code class="name">var <span class="ident">sender_public_key</span> : bytes | None</code></dt>
+<dd>
+<div class="desc"><p>Trusted sender public key used for verification when validation succeeded.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="saga.execution_gate.ExecutionGateDecision.formula_terms"><code class="name flex">
+<span>def <span class="ident">formula_terms</span></span>(<span>self) ‑> dict[str, bool | None]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def formula_terms(self) -&gt; dict[str, bool | None]:
+    &#34;&#34;&#34;导出最终授权公式各项，供测试、审计和论文统计复用。&#34;&#34;&#34;
+    return {
+        &#34;saga_token_valid&#34;: self.protocol_allow,
+        &#34;request_envelope_valid&#34;: self.request_envelope_valid,
+        &#34;pq_signature_valid&#34;: self.pq_signature_valid,
+        &#34;can_accept&#34;: self.can_accept,
+        &#34;execution_scope_allowed&#34;: self.execution_scope_allowed,
+        &#34;internal_policy_accept&#34;: self.internal_policy_accept,
+    }</code></pre>
+</details>
+<div class="desc"><p>导出最终授权公式各项，供测试、审计和论文统计复用。</p></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateDecision.with_formula_values"><code class="name flex">
+<span>def <span class="ident">with_formula_values</span></span>(<span>self,<br>*,<br>protocol_allow: bool | None = None,<br>request_envelope_valid: bool | None = None,<br>pq_signature_valid: bool | None = None,<br>can_accept: bool | None = None,<br>execution_scope_allowed: bool | None = None,<br>internal_policy_accept: bool | None = None) ‑> <a title="saga.execution_gate.ExecutionGateDecision" href="#saga.execution_gate.ExecutionGateDecision">ExecutionGateDecision</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def with_formula_values(
+    self,
+    *,
+    protocol_allow: bool | None = None,
+    request_envelope_valid: bool | None = None,
+    pq_signature_valid: bool | None = None,
+    can_accept: bool | None = None,
+    execution_scope_allowed: bool | None = None,
+    internal_policy_accept: bool | None = None,
+) -&gt; &#34;ExecutionGateDecision&#34;:
+    &#34;&#34;&#34;返回带有更新公式项的新 decision，避免原地修改审计状态。&#34;&#34;&#34;
+    updates: dict[str, bool | None] = {}
+    if protocol_allow is not None:
+        updates[&#34;protocol_allow&#34;] = protocol_allow
+    if request_envelope_valid is not None:
+        updates[&#34;request_envelope_valid&#34;] = request_envelope_valid
+    if pq_signature_valid is not None:
+        updates[&#34;pq_signature_valid&#34;] = pq_signature_valid
+    if can_accept is not None:
+        updates[&#34;can_accept&#34;] = can_accept
+    if execution_scope_allowed is not None:
+        updates[&#34;execution_scope_allowed&#34;] = execution_scope_allowed
+    if internal_policy_accept is not None:
+        updates[&#34;internal_policy_accept&#34;] = internal_policy_accept
+    return replace(self, **updates)</code></pre>
+</details>
+<div class="desc"><p>返回带有更新公式项的新 decision，避免原地修改审计状态。</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateRequest"><code class="flex name class">
+<span>class <span class="ident">ExecutionGateRequest</span></span>
+<span>(</span><span>sender_aid: str | None,<br>receiver_aid: str,<br>token: str,<br>message: str,<br>action_scope: str,<br>request_envelope: dict | str | bytes | None = None,<br>pq_signature: str | bytes | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass(frozen=True)
+class ExecutionGateRequest:
+    &#34;&#34;&#34;Execution-layer authorization input for a received request.&#34;&#34;&#34;
+
+    sender_aid: str | None
+    receiver_aid: str
+    token: str
+    message: str
+    action_scope: str
+    request_envelope: dict | str | bytes | None = None
+    pq_signature: str | bytes | None = None</code></pre>
+</details>
+<div class="desc"><p>Execution-layer authorization input for a received request.</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="saga.execution_gate.ExecutionGateRequest.action_scope"><code class="name">var <span class="ident">action_scope</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateRequest.message"><code class="name">var <span class="ident">message</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateRequest.pq_signature"><code class="name">var <span class="ident">pq_signature</span> : str | bytes | None</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateRequest.receiver_aid"><code class="name">var <span class="ident">receiver_aid</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateRequest.request_envelope"><code class="name">var <span class="ident">request_envelope</span> : dict | str | bytes | None</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateRequest.sender_aid"><code class="name">var <span class="ident">sender_aid</span> : str | None</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.execution_gate.ExecutionGateRequest.token"><code class="name">var <span class="ident">token</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="saga.execution_gate.FileReplayStateStore"><code class="flex name class">
+<span>class <span class="ident">FileReplayStateStore</span></span>
+<span>(</span><span>state_dir: str | Path)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class FileReplayStateStore:
+    &#34;&#34;&#34;使用共享目录中的原子 marker 文件保存 replay 状态。&#34;&#34;&#34;
+
+    def __init__(self, state_dir: str | Path) -&gt; None:
+        &#34;&#34;&#34;初始化文件型 replay store，并确保目录可用。&#34;&#34;&#34;
+        self.state_dir = Path(state_dir)
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(&#34;replay state directory is unavailable&#34;) from exc
+
+    def load_consumed_request_ids(self) -&gt; set[str]:
+        &#34;&#34;&#34;从 marker 目录恢复已消费 request id，供新 gate 实例复用。&#34;&#34;&#34;
+        consumed: set[str] = set()
+        for marker_path in self.state_dir.glob(&#34;*.json&#34;):
+            if marker_path.is_file():
+                consumed.add(marker_path.stem)
+        return consumed
+
+    def reserve_request(
+        self,
+        request_id: str,
+        envelope: RequestEnvelope,
+    ) -&gt; Literal[&#34;reserved&#34;, &#34;replayed&#34;]:
+        &#34;&#34;&#34;用独占创建 marker 的方式原子预留 request id。&#34;&#34;&#34;
+        marker_path = self._marker_path(request_id)
+        payload = {
+            &#34;request_id&#34;: request_id,
+            &#34;recorded_at&#34;: datetime.now(tz=timezone.utc).isoformat(),
+            &#34;sender_aid&#34;: envelope.sender_aid,
+            &#34;receiver_aid&#34;: envelope.receiver_aid,
+            &#34;action_scope&#34;: envelope.action_scope,
+            &#34;token_digest&#34;: envelope.token_digest,
+            &#34;message_digest&#34;: envelope.message_digest,
+        }
+        try:
+            with marker_path.open(&#34;x&#34;, encoding=&#34;utf-8&#34;) as handle:
+                handle.write(json.dumps(payload, sort_keys=True, ensure_ascii=True))
+                handle.write(&#34;\n&#34;)
+        except FileExistsError:
+            return &#34;replayed&#34;
+        return &#34;reserved&#34;
+
+    def _marker_path(self, request_id: str) -&gt; Path:
+        &#34;&#34;&#34;返回 request id 对应的 marker 文件路径。&#34;&#34;&#34;
+        return self.state_dir / f&#34;{request_id}.json&#34;</code></pre>
+</details>
+<div class="desc"><p>使用共享目录中的原子 marker 文件保存 replay 状态。</p>
+<p>初始化文件型 replay store，并确保目录可用。</p></div>
+<h3>Methods</h3>
+<dl>
+<dt id="saga.execution_gate.FileReplayStateStore.load_consumed_request_ids"><code class="name flex">
+<span>def <span class="ident">load_consumed_request_ids</span></span>(<span>self) ‑> set[str]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def load_consumed_request_ids(self) -&gt; set[str]:
+    &#34;&#34;&#34;从 marker 目录恢复已消费 request id，供新 gate 实例复用。&#34;&#34;&#34;
+    consumed: set[str] = set()
+    for marker_path in self.state_dir.glob(&#34;*.json&#34;):
+        if marker_path.is_file():
+            consumed.add(marker_path.stem)
+    return consumed</code></pre>
+</details>
+<div class="desc"><p>从 marker 目录恢复已消费 request id，供新 gate 实例复用。</p></div>
+</dd>
+<dt id="saga.execution_gate.FileReplayStateStore.reserve_request"><code class="name flex">
+<span>def <span class="ident">reserve_request</span></span>(<span>self, request_id: str, envelope: RequestEnvelope) ‑> Literal['reserved', 'replayed']</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def reserve_request(
+    self,
+    request_id: str,
+    envelope: RequestEnvelope,
+) -&gt; Literal[&#34;reserved&#34;, &#34;replayed&#34;]:
+    &#34;&#34;&#34;用独占创建 marker 的方式原子预留 request id。&#34;&#34;&#34;
+    marker_path = self._marker_path(request_id)
+    payload = {
+        &#34;request_id&#34;: request_id,
+        &#34;recorded_at&#34;: datetime.now(tz=timezone.utc).isoformat(),
+        &#34;sender_aid&#34;: envelope.sender_aid,
+        &#34;receiver_aid&#34;: envelope.receiver_aid,
+        &#34;action_scope&#34;: envelope.action_scope,
+        &#34;token_digest&#34;: envelope.token_digest,
+        &#34;message_digest&#34;: envelope.message_digest,
+    }
+    try:
+        with marker_path.open(&#34;x&#34;, encoding=&#34;utf-8&#34;) as handle:
+            handle.write(json.dumps(payload, sort_keys=True, ensure_ascii=True))
+            handle.write(&#34;\n&#34;)
+    except FileExistsError:
+        return &#34;replayed&#34;
+    return &#34;reserved&#34;</code></pre>
+</details>
+<div class="desc"><p>用独占创建 marker 的方式原子预留 request id。</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext"><code class="flex name class">
+<span>class <span class="ident">LocalExecutionContext</span></span>
+<span>(</span><span>sender_aid: str,<br>receiver_aid: str,<br>request_envelope: RequestEnvelope,<br>pq_signature: bytes)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass(frozen=True)
+class LocalExecutionContext:
+    &#34;&#34;&#34;Execution context propagated into local prompt/tool execution.&#34;&#34;&#34;
+
+    sender_aid: str
+    receiver_aid: str
+    request_envelope: RequestEnvelope
+    pq_signature: bytes
+
+    def authorize_action(self, action_scope: str) -&gt; bool:
+        &#34;&#34;&#34;Return ``True`` only when signed scopes authorize ``action_scope``.
+
+        下游执行权限来自信封中的显式授权列表，而不是入口 ``action_scope`` 的隐式扩展。
+        &#34;&#34;&#34;
+        return action_scopes_allow(self.request_envelope.authorized_scopes, action_scope)
+
+    def require_action(self, action_scope: str) -&gt; None:
+        &#34;&#34;&#34;Raise ``PermissionError`` unless ``action_scope`` is authorized.&#34;&#34;&#34;
+        if not self.authorize_action(action_scope):
+            raise ExecutionAuthorizationError(
+                reason_for_unauthorized_scope(action_scope),
+                action_scope,
+            )
+
+    def authorize_tool_call(self, tool_name: str) -&gt; bool:
+        &#34;&#34;&#34;Return ``True`` only when the named tool call is authorized.&#34;&#34;&#34;
+        return self.authorize_action(f&#34;tool_call:{tool_name}&#34;)
+
+    def require_tool_call(self, tool_name: str) -&gt; None:
+        &#34;&#34;&#34;Raise ``PermissionError`` unless the named tool call is authorized.&#34;&#34;&#34;
+        self.require_action(f&#34;tool_call:{tool_name}&#34;)
+
+    def authorize_memory_read(self) -&gt; bool:
+        &#34;&#34;&#34;Return ``True`` only when memory reads are authorized.&#34;&#34;&#34;
+        return self.authorize_action(&#34;memory_read&#34;)
+
+    def require_memory_read(self) -&gt; None:
+        &#34;&#34;&#34;Raise ``PermissionError`` unless memory reads are authorized.&#34;&#34;&#34;
+        self.require_action(&#34;memory_read&#34;)
+
+    def authorize_memory_write(self) -&gt; bool:
+        &#34;&#34;&#34;Return ``True`` only when memory writes are authorized.&#34;&#34;&#34;
+        return self.authorize_action(&#34;memory_write&#34;)
+
+    def require_memory_write(self) -&gt; None:
+        &#34;&#34;&#34;Raise ``PermissionError`` unless memory writes are authorized.&#34;&#34;&#34;
+        self.require_action(&#34;memory_write&#34;)
+
+    def authorize_delegation(self) -&gt; bool:
+        &#34;&#34;&#34;Return ``True`` only when delegation is authorized.&#34;&#34;&#34;
+        return self.authorize_action(&#34;delegation&#34;)
+
+    def require_delegation(self) -&gt; None:
+        &#34;&#34;&#34;Raise ``PermissionError`` unless delegation is authorized.&#34;&#34;&#34;
+        self.require_action(&#34;delegation&#34;)</code></pre>
+</details>
+<div class="desc"><p>Execution context propagated into local prompt/tool execution.</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="saga.execution_gate.LocalExecutionContext.pq_signature"><code class="name">var <span class="ident">pq_signature</span> : bytes</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.receiver_aid"><code class="name">var <span class="ident">receiver_aid</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.request_envelope"><code class="name">var <span class="ident">request_envelope</span> : <a title="saga.messages.RequestEnvelope" href="messages.html#saga.messages.RequestEnvelope">RequestEnvelope</a></code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.sender_aid"><code class="name">var <span class="ident">sender_aid</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="saga.execution_gate.LocalExecutionContext.authorize_action"><code class="name flex">
+<span>def <span class="ident">authorize_action</span></span>(<span>self, action_scope: str) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def authorize_action(self, action_scope: str) -&gt; bool:
+    &#34;&#34;&#34;Return ``True`` only when signed scopes authorize ``action_scope``.
+
+    下游执行权限来自信封中的显式授权列表，而不是入口 ``action_scope`` 的隐式扩展。
+    &#34;&#34;&#34;
+    return action_scopes_allow(self.request_envelope.authorized_scopes, action_scope)</code></pre>
+</details>
+<div class="desc"><p>Return <code>True</code> only when signed scopes authorize <code>action_scope</code>.</p>
+<p>下游执行权限来自信封中的显式授权列表，而不是入口 <code>action_scope</code> 的隐式扩展。</p></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.authorize_delegation"><code class="name flex">
+<span>def <span class="ident">authorize_delegation</span></span>(<span>self) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def authorize_delegation(self) -&gt; bool:
+    &#34;&#34;&#34;Return ``True`` only when delegation is authorized.&#34;&#34;&#34;
+    return self.authorize_action(&#34;delegation&#34;)</code></pre>
+</details>
+<div class="desc"><p>Return <code>True</code> only when delegation is authorized.</p></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.authorize_memory_read"><code class="name flex">
+<span>def <span class="ident">authorize_memory_read</span></span>(<span>self) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def authorize_memory_read(self) -&gt; bool:
+    &#34;&#34;&#34;Return ``True`` only when memory reads are authorized.&#34;&#34;&#34;
+    return self.authorize_action(&#34;memory_read&#34;)</code></pre>
+</details>
+<div class="desc"><p>Return <code>True</code> only when memory reads are authorized.</p></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.authorize_memory_write"><code class="name flex">
+<span>def <span class="ident">authorize_memory_write</span></span>(<span>self) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def authorize_memory_write(self) -&gt; bool:
+    &#34;&#34;&#34;Return ``True`` only when memory writes are authorized.&#34;&#34;&#34;
+    return self.authorize_action(&#34;memory_write&#34;)</code></pre>
+</details>
+<div class="desc"><p>Return <code>True</code> only when memory writes are authorized.</p></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.authorize_tool_call"><code class="name flex">
+<span>def <span class="ident">authorize_tool_call</span></span>(<span>self, tool_name: str) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def authorize_tool_call(self, tool_name: str) -&gt; bool:
+    &#34;&#34;&#34;Return ``True`` only when the named tool call is authorized.&#34;&#34;&#34;
+    return self.authorize_action(f&#34;tool_call:{tool_name}&#34;)</code></pre>
+</details>
+<div class="desc"><p>Return <code>True</code> only when the named tool call is authorized.</p></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.require_action"><code class="name flex">
+<span>def <span class="ident">require_action</span></span>(<span>self, action_scope: str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def require_action(self, action_scope: str) -&gt; None:
+    &#34;&#34;&#34;Raise ``PermissionError`` unless ``action_scope`` is authorized.&#34;&#34;&#34;
+    if not self.authorize_action(action_scope):
+        raise ExecutionAuthorizationError(
+            reason_for_unauthorized_scope(action_scope),
+            action_scope,
+        )</code></pre>
+</details>
+<div class="desc"><p>Raise <code>PermissionError</code> unless <code>action_scope</code> is authorized.</p></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.require_delegation"><code class="name flex">
+<span>def <span class="ident">require_delegation</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def require_delegation(self) -&gt; None:
+    &#34;&#34;&#34;Raise ``PermissionError`` unless delegation is authorized.&#34;&#34;&#34;
+    self.require_action(&#34;delegation&#34;)</code></pre>
+</details>
+<div class="desc"><p>Raise <code>PermissionError</code> unless delegation is authorized.</p></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.require_memory_read"><code class="name flex">
+<span>def <span class="ident">require_memory_read</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def require_memory_read(self) -&gt; None:
+    &#34;&#34;&#34;Raise ``PermissionError`` unless memory reads are authorized.&#34;&#34;&#34;
+    self.require_action(&#34;memory_read&#34;)</code></pre>
+</details>
+<div class="desc"><p>Raise <code>PermissionError</code> unless memory reads are authorized.</p></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.require_memory_write"><code class="name flex">
+<span>def <span class="ident">require_memory_write</span></span>(<span>self) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def require_memory_write(self) -&gt; None:
+    &#34;&#34;&#34;Raise ``PermissionError`` unless memory writes are authorized.&#34;&#34;&#34;
+    self.require_action(&#34;memory_write&#34;)</code></pre>
+</details>
+<div class="desc"><p>Raise <code>PermissionError</code> unless memory writes are authorized.</p></div>
+</dd>
+<dt id="saga.execution_gate.LocalExecutionContext.require_tool_call"><code class="name flex">
+<span>def <span class="ident">require_tool_call</span></span>(<span>self, tool_name: str) ‑> None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def require_tool_call(self, tool_name: str) -&gt; None:
+    &#34;&#34;&#34;Raise ``PermissionError`` unless the named tool call is authorized.&#34;&#34;&#34;
+    self.require_action(f&#34;tool_call:{tool_name}&#34;)</code></pre>
+</details>
+<div class="desc"><p>Raise <code>PermissionError</code> unless the named tool call is authorized.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="saga.execution_gate.ReplayStateStore"><code class="flex name class">
+<span>class <span class="ident">ReplayStateStore</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class ReplayStateStore(Protocol):
+    &#34;&#34;&#34;记录已消费 request id 的 replay 状态后端。&#34;&#34;&#34;
+
+    def load_consumed_request_ids(self) -&gt; set[str]:
+        &#34;&#34;&#34;返回后端已记录的 request id 集合。&#34;&#34;&#34;
+
+    def reserve_request(
+        self,
+        request_id: str,
+        envelope: RequestEnvelope,
+    ) -&gt; Literal[&#34;reserved&#34;, &#34;replayed&#34;]:
+        &#34;&#34;&#34;原子预留 request id；已存在时返回 replayed。&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>记录已消费 request id 的 replay 状态后端。</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>typing.Protocol</li>
+<li>typing.Generic</li>
+</ul>
+<h3>Methods</h3>
+<dl>
+<dt id="saga.execution_gate.ReplayStateStore.load_consumed_request_ids"><code class="name flex">
+<span>def <span class="ident">load_consumed_request_ids</span></span>(<span>self) ‑> set[str]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def load_consumed_request_ids(self) -&gt; set[str]:
+    &#34;&#34;&#34;返回后端已记录的 request id 集合。&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>返回后端已记录的 request id 集合。</p></div>
+</dd>
+<dt id="saga.execution_gate.ReplayStateStore.reserve_request"><code class="name flex">
+<span>def <span class="ident">reserve_request</span></span>(<span>self, request_id: str, envelope: RequestEnvelope) ‑> Literal['reserved', 'replayed']</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def reserve_request(
+    self,
+    request_id: str,
+    envelope: RequestEnvelope,
+) -&gt; Literal[&#34;reserved&#34;, &#34;replayed&#34;]:
+    &#34;&#34;&#34;原子预留 request id；已存在时返回 replayed。&#34;&#34;&#34;</code></pre>
+</details>
+<div class="desc"><p>原子预留 request id；已存在时返回 replayed。</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="saga.execution_gate.SignedRequestExecutionGate"><code class="flex name class">
+<span>class <span class="ident">SignedRequestExecutionGate</span></span>
+<span>(</span><span>can_gate: CAN,<br>trusted_public_keys: Mapping[str, bytes],<br>*,<br>now_fn: Callable[[], datetime] | None = None,<br>replay_state_dir: str | Path | None = None,<br>replay_state_store: <a title="saga.execution_gate.ReplayStateStore" href="#saga.execution_gate.ReplayStateStore">ReplayStateStore</a> | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class SignedRequestExecutionGate:
+    &#34;&#34;&#34;Verify signed request envelopes before local execution.
+
+    This adapter is transport-facing and consumes canonical request envelopes
+    plus detached signatures. It does not hold any private signing material.
+    replay_state_dir 或 replay_state_store 指定时，已消费信封会持久化到共享后端，用于跨实例重放拒绝。
+    &#34;&#34;&#34;
+
+    def __init__(
+        self,
+        can_gate: CAN,
+        trusted_public_keys: Mapping[str, bytes],
+        *,
+        now_fn: Callable[[], datetime] | None = None,
+        replay_state_dir: str | Path | None = None,
+        replay_state_store: ReplayStateStore | None = None,
+    ) -&gt; None:
+        &#34;&#34;&#34;Store a CAN gate, trusted public keys, and optional shared replay state.&#34;&#34;&#34;
+        if replay_state_dir is not None and replay_state_store is not None:
+            raise ValueError(&#34;configure either replay_state_dir or replay_state_store, not both&#34;)
+        self.can_gate = can_gate
+        self.trusted_public_keys = dict(trusted_public_keys)
+        self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
+        self._seen_request_ids: set[str] = set()
+        self._replay_state_store = replay_state_store
+        if replay_state_dir is not None:
+            self._replay_state_store = FileReplayStateStore(replay_state_dir)
+        if self._replay_state_store is not None:
+            self._load_persisted_request_ids()
+
+    def authorize(self, request: ExecutionGateRequest) -&gt; bool:
+        &#34;&#34;&#34;Return ``True`` only when the signed request envelope verifies.&#34;&#34;&#34;
+        return self.evaluate_request(request).allowed
+
+    def evaluate_request(
+        self,
+        request: ExecutionGateRequest,
+    ) -&gt; ExecutionGateDecision:
+        &#34;&#34;&#34;验证请求并返回逐项公式结果；本层不持有签名私钥。&#34;&#34;&#34;
+        if request.sender_aid is None:
+            return ExecutionGateDecision(False, &#34;missing_sender_aid&#34;)
+        if request.request_envelope is None:
+            return ExecutionGateDecision(False, &#34;missing_request_envelope&#34;)
+        if request.pq_signature is None:
+            return ExecutionGateDecision(False, &#34;missing_pq_signature&#34;)
+
+        public_key = self.trusted_public_keys.get(request.sender_aid)
+        if public_key is None:
+            return ExecutionGateDecision(False, &#34;untrusted_sender_aid&#34;)
+
+        try:
+            envelope = parse_request_envelope(request.request_envelope)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ExecutionGateDecision(False, &#34;invalid_request_envelope&#34;)
+
+        try:
+            signature = self._coerce_signature_bytes(request.pq_signature)
+        except (TypeError, ValueError, binascii.Error):
+            return ExecutionGateDecision(False, &#34;invalid_pq_signature&#34;)
+
+        if envelope.sender_aid != request.sender_aid:
+            return ExecutionGateDecision(False, &#34;sender_aid_mismatch&#34;)
+        if envelope.receiver_aid != request.receiver_aid:
+            return ExecutionGateDecision(False, &#34;receiver_aid_mismatch&#34;)
+        if envelope.action_scope != request.action_scope:
+            return ExecutionGateDecision(False, &#34;action_scope_mismatch&#34;)
+        if envelope.token_digest != sha256_hex(request.token.encode(&#34;utf-8&#34;)):
+            return ExecutionGateDecision(False, &#34;token_digest_mismatch&#34;)
+        if envelope.message_digest != sha256_hex(request.message.encode(&#34;utf-8&#34;)):
+            return ExecutionGateDecision(False, &#34;message_digest_mismatch&#34;)
+
+        # 先校验信封时间窗，再进入神经验签路径；失败默认拒绝并审计。
+        issued_at = datetime.fromisoformat(envelope.issued_at.replace(&#34;Z&#34;, &#34;+00:00&#34;))
+        expires_at = datetime.fromisoformat(envelope.expires_at.replace(&#34;Z&#34;, &#34;+00:00&#34;))
+        now = self._now_fn()
+        if issued_at &gt; expires_at:
+            return ExecutionGateDecision(False, &#34;invalid_envelope_window&#34;)
+        if now &lt; issued_at:
+            return ExecutionGateDecision(False, &#34;envelope_not_yet_valid&#34;)
+        if now &gt; expires_at:
+            return ExecutionGateDecision(False, &#34;envelope_expired&#34;)
+
+        request_envelope_valid = True
+        execution_scope_allowed = action_scopes_allow(
+            envelope.authorized_scopes,
+            request.action_scope,
+        )
+        if not execution_scope_allowed:
+            return ExecutionGateDecision(
+                False,
+                &#34;execution_scope_not_authorized&#34;,
+                request_envelope_valid=request_envelope_valid,
+                pq_signature_valid=False,
+                can_accept=False,
+                execution_scope_allowed=False,
+                request_envelope=envelope,
+                pq_signature=signature,
+                sender_public_key=public_key,
+            )
+
+        # CAN 只接收公开密钥、信封摘要和签名字节的 0/1 比特，不接触私钥。
+        verified = self.can_gate.can_accept(
+            bytes_to_bits(public_key),
+            bytes_to_bits(envelope.digest()),
+            bytes_to_bits(signature),
+        )
+        if verified != 1:
+            return ExecutionGateDecision(
+                False,
+                &#34;signature_verification_failed&#34;,
+                request_envelope_valid=request_envelope_valid,
+                pq_signature_valid=False,
+                can_accept=False,
+                execution_scope_allowed=execution_scope_allowed,
+                request_envelope=envelope,
+                pq_signature=signature,
+                sender_public_key=public_key,
+            )
+        return ExecutionGateDecision(
+            True,
+            &#34;authorized&#34;,
+            request_envelope_valid=request_envelope_valid,
+            pq_signature_valid=True,
+            can_accept=True,
+            execution_scope_allowed=execution_scope_allowed,
+            request_envelope=envelope,
+            pq_signature=signature,
+            sender_public_key=public_key,
+        )
+
+    def consume_request(
+        self,
+        request: ExecutionGateRequest,
+    ) -&gt; ExecutionGateDecision:
+        &#34;&#34;&#34;验证并消费一次签名信封，重复 envelope 会被 replay 拒绝。&#34;&#34;&#34;
+        decision = self.evaluate_request(request)
+        if not decision.allowed:
+            return decision
+
+        assert decision.request_envelope is not None
+        request_id = self._request_replay_id(decision.request_envelope)
+        if request_id in self._seen_request_ids:
+            return replace(decision, allowed=False, reason=&#34;replayed_request_envelope&#34;)
+
+        if self._replay_state_store is not None:
+            try:
+                reservation = self._replay_state_store.reserve_request(
+                    request_id,
+                    decision.request_envelope,
+                )
+            except OSError:
+                return replace(decision, allowed=False, reason=&#34;replay_state_persistence_failed&#34;)
+            if reservation == &#34;replayed&#34;:
+                self._seen_request_ids.add(request_id)
+                return replace(decision, allowed=False, reason=&#34;replayed_request_envelope&#34;)
+
+        self._seen_request_ids.add(request_id)
+        return decision
+
+    def build_local_execution_context_from_decision(
+        self,
+        request: ExecutionGateRequest,
+        decision: ExecutionGateDecision,
+    ) -&gt; LocalExecutionContext | None:
+        &#34;&#34;&#34;从已验证的 gate decision 构造本地执行上下文，不重复消费 replay 状态。&#34;&#34;&#34;
+        if not decision.allowed:
+            return None
+
+        assert decision.request_envelope is not None
+        assert decision.pq_signature is not None
+        return LocalExecutionContext(
+            sender_aid=request.sender_aid,
+            receiver_aid=request.receiver_aid,
+            request_envelope=decision.request_envelope,
+            pq_signature=decision.pq_signature,
+        )
+
+    def build_local_execution_context(
+        self,
+        request: ExecutionGateRequest,
+    ) -&gt; LocalExecutionContext | None:
+        &#34;&#34;&#34;Build a validated execution context for downstream local actions.&#34;&#34;&#34;
+        decision = self.evaluate_request(request)
+        if not decision.allowed:
+            return None
+
+        return self.build_local_execution_context_from_decision(request, decision)
+
+    def _coerce_signature_bytes(self, signature: str | bytes) -&gt; bytes:
+        &#34;&#34;&#34;Decode a transported detached signature into raw bytes.&#34;&#34;&#34;
+        if isinstance(signature, bytes):
+            return signature
+        if isinstance(signature, str):
+            return base64.b64decode(signature, validate=True)
+        raise TypeError(&#34;pq_signature must be bytes or base64 text&#34;)
+
+    def _load_persisted_request_ids(self) -&gt; None:
+        &#34;&#34;&#34;从 replay 状态目录恢复已消费信封标识。&#34;&#34;&#34;
+        if self._replay_state_store is None:
+            return
+        self._seen_request_ids.update(self._replay_state_store.load_consumed_request_ids())
+
+    def _request_replay_id(self, envelope: RequestEnvelope) -&gt; str:
+        &#34;&#34;&#34;返回用于 replay 防护的稳定信封标识。&#34;&#34;&#34;
+        return envelope.hex_digest()</code></pre>
+</details>
+<div class="desc"><p>Verify signed request envelopes before local execution.</p>
+<p>This adapter is transport-facing and consumes canonical request envelopes
+plus detached signatures. It does not hold any private signing material.
+replay_state_dir 或 replay_state_store 指定时，已消费信封会持久化到共享后端，用于跨实例重放拒绝。</p>
+<p>Store a CAN gate, trusted public keys, and optional shared replay state.</p></div>
+<h3>Methods</h3>
+<dl>
+<dt id="saga.execution_gate.SignedRequestExecutionGate.authorize"><code class="name flex">
+<span>def <span class="ident">authorize</span></span>(<span>self,<br>request: <a title="saga.execution_gate.ExecutionGateRequest" href="#saga.execution_gate.ExecutionGateRequest">ExecutionGateRequest</a>) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def authorize(self, request: ExecutionGateRequest) -&gt; bool:
+    &#34;&#34;&#34;Return ``True`` only when the signed request envelope verifies.&#34;&#34;&#34;
+    return self.evaluate_request(request).allowed</code></pre>
+</details>
+<div class="desc"><p>Return <code>True</code> only when the signed request envelope verifies.</p></div>
+</dd>
+<dt id="saga.execution_gate.SignedRequestExecutionGate.build_local_execution_context"><code class="name flex">
+<span>def <span class="ident">build_local_execution_context</span></span>(<span>self,<br>request: <a title="saga.execution_gate.ExecutionGateRequest" href="#saga.execution_gate.ExecutionGateRequest">ExecutionGateRequest</a>) ‑> <a title="saga.execution_gate.LocalExecutionContext" href="#saga.execution_gate.LocalExecutionContext">LocalExecutionContext</a> | None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def build_local_execution_context(
+    self,
+    request: ExecutionGateRequest,
+) -&gt; LocalExecutionContext | None:
+    &#34;&#34;&#34;Build a validated execution context for downstream local actions.&#34;&#34;&#34;
+    decision = self.evaluate_request(request)
+    if not decision.allowed:
+        return None
+
+    return self.build_local_execution_context_from_decision(request, decision)</code></pre>
+</details>
+<div class="desc"><p>Build a validated execution context for downstream local actions.</p></div>
+</dd>
+<dt id="saga.execution_gate.SignedRequestExecutionGate.build_local_execution_context_from_decision"><code class="name flex">
+<span>def <span class="ident">build_local_execution_context_from_decision</span></span>(<span>self,<br>request: <a title="saga.execution_gate.ExecutionGateRequest" href="#saga.execution_gate.ExecutionGateRequest">ExecutionGateRequest</a>,<br>decision: <a title="saga.execution_gate.ExecutionGateDecision" href="#saga.execution_gate.ExecutionGateDecision">ExecutionGateDecision</a>) ‑> <a title="saga.execution_gate.LocalExecutionContext" href="#saga.execution_gate.LocalExecutionContext">LocalExecutionContext</a> | None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def build_local_execution_context_from_decision(
+    self,
+    request: ExecutionGateRequest,
+    decision: ExecutionGateDecision,
+) -&gt; LocalExecutionContext | None:
+    &#34;&#34;&#34;从已验证的 gate decision 构造本地执行上下文，不重复消费 replay 状态。&#34;&#34;&#34;
+    if not decision.allowed:
+        return None
+
+    assert decision.request_envelope is not None
+    assert decision.pq_signature is not None
+    return LocalExecutionContext(
+        sender_aid=request.sender_aid,
+        receiver_aid=request.receiver_aid,
+        request_envelope=decision.request_envelope,
+        pq_signature=decision.pq_signature,
+    )</code></pre>
+</details>
+<div class="desc"><p>从已验证的 gate decision 构造本地执行上下文，不重复消费 replay 状态。</p></div>
+</dd>
+<dt id="saga.execution_gate.SignedRequestExecutionGate.consume_request"><code class="name flex">
+<span>def <span class="ident">consume_request</span></span>(<span>self,<br>request: <a title="saga.execution_gate.ExecutionGateRequest" href="#saga.execution_gate.ExecutionGateRequest">ExecutionGateRequest</a>) ‑> <a title="saga.execution_gate.ExecutionGateDecision" href="#saga.execution_gate.ExecutionGateDecision">ExecutionGateDecision</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def consume_request(
+    self,
+    request: ExecutionGateRequest,
+) -&gt; ExecutionGateDecision:
+    &#34;&#34;&#34;验证并消费一次签名信封，重复 envelope 会被 replay 拒绝。&#34;&#34;&#34;
+    decision = self.evaluate_request(request)
+    if not decision.allowed:
+        return decision
+
+    assert decision.request_envelope is not None
+    request_id = self._request_replay_id(decision.request_envelope)
+    if request_id in self._seen_request_ids:
+        return replace(decision, allowed=False, reason=&#34;replayed_request_envelope&#34;)
+
+    if self._replay_state_store is not None:
+        try:
+            reservation = self._replay_state_store.reserve_request(
+                request_id,
+                decision.request_envelope,
+            )
+        except OSError:
+            return replace(decision, allowed=False, reason=&#34;replay_state_persistence_failed&#34;)
+        if reservation == &#34;replayed&#34;:
+            self._seen_request_ids.add(request_id)
+            return replace(decision, allowed=False, reason=&#34;replayed_request_envelope&#34;)
+
+    self._seen_request_ids.add(request_id)
+    return decision</code></pre>
+</details>
+<div class="desc"><p>验证并消费一次签名信封，重复 envelope 会被 replay 拒绝。</p></div>
+</dd>
+<dt id="saga.execution_gate.SignedRequestExecutionGate.evaluate_request"><code class="name flex">
+<span>def <span class="ident">evaluate_request</span></span>(<span>self,<br>request: <a title="saga.execution_gate.ExecutionGateRequest" href="#saga.execution_gate.ExecutionGateRequest">ExecutionGateRequest</a>) ‑> <a title="saga.execution_gate.ExecutionGateDecision" href="#saga.execution_gate.ExecutionGateDecision">ExecutionGateDecision</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def evaluate_request(
+    self,
+    request: ExecutionGateRequest,
+) -&gt; ExecutionGateDecision:
+    &#34;&#34;&#34;验证请求并返回逐项公式结果；本层不持有签名私钥。&#34;&#34;&#34;
+    if request.sender_aid is None:
+        return ExecutionGateDecision(False, &#34;missing_sender_aid&#34;)
+    if request.request_envelope is None:
+        return ExecutionGateDecision(False, &#34;missing_request_envelope&#34;)
+    if request.pq_signature is None:
+        return ExecutionGateDecision(False, &#34;missing_pq_signature&#34;)
+
+    public_key = self.trusted_public_keys.get(request.sender_aid)
+    if public_key is None:
+        return ExecutionGateDecision(False, &#34;untrusted_sender_aid&#34;)
+
+    try:
+        envelope = parse_request_envelope(request.request_envelope)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ExecutionGateDecision(False, &#34;invalid_request_envelope&#34;)
+
+    try:
+        signature = self._coerce_signature_bytes(request.pq_signature)
+    except (TypeError, ValueError, binascii.Error):
+        return ExecutionGateDecision(False, &#34;invalid_pq_signature&#34;)
+
+    if envelope.sender_aid != request.sender_aid:
+        return ExecutionGateDecision(False, &#34;sender_aid_mismatch&#34;)
+    if envelope.receiver_aid != request.receiver_aid:
+        return ExecutionGateDecision(False, &#34;receiver_aid_mismatch&#34;)
+    if envelope.action_scope != request.action_scope:
+        return ExecutionGateDecision(False, &#34;action_scope_mismatch&#34;)
+    if envelope.token_digest != sha256_hex(request.token.encode(&#34;utf-8&#34;)):
+        return ExecutionGateDecision(False, &#34;token_digest_mismatch&#34;)
+    if envelope.message_digest != sha256_hex(request.message.encode(&#34;utf-8&#34;)):
+        return ExecutionGateDecision(False, &#34;message_digest_mismatch&#34;)
+
+    # 先校验信封时间窗，再进入神经验签路径；失败默认拒绝并审计。
+    issued_at = datetime.fromisoformat(envelope.issued_at.replace(&#34;Z&#34;, &#34;+00:00&#34;))
+    expires_at = datetime.fromisoformat(envelope.expires_at.replace(&#34;Z&#34;, &#34;+00:00&#34;))
+    now = self._now_fn()
+    if issued_at &gt; expires_at:
+        return ExecutionGateDecision(False, &#34;invalid_envelope_window&#34;)
+    if now &lt; issued_at:
+        return ExecutionGateDecision(False, &#34;envelope_not_yet_valid&#34;)
+    if now &gt; expires_at:
+        return ExecutionGateDecision(False, &#34;envelope_expired&#34;)
+
+    request_envelope_valid = True
+    execution_scope_allowed = action_scopes_allow(
+        envelope.authorized_scopes,
+        request.action_scope,
+    )
+    if not execution_scope_allowed:
+        return ExecutionGateDecision(
+            False,
+            &#34;execution_scope_not_authorized&#34;,
+            request_envelope_valid=request_envelope_valid,
+            pq_signature_valid=False,
+            can_accept=False,
+            execution_scope_allowed=False,
+            request_envelope=envelope,
+            pq_signature=signature,
+            sender_public_key=public_key,
+        )
+
+    # CAN 只接收公开密钥、信封摘要和签名字节的 0/1 比特，不接触私钥。
+    verified = self.can_gate.can_accept(
+        bytes_to_bits(public_key),
+        bytes_to_bits(envelope.digest()),
+        bytes_to_bits(signature),
+    )
+    if verified != 1:
+        return ExecutionGateDecision(
+            False,
+            &#34;signature_verification_failed&#34;,
+            request_envelope_valid=request_envelope_valid,
+            pq_signature_valid=False,
+            can_accept=False,
+            execution_scope_allowed=execution_scope_allowed,
+            request_envelope=envelope,
+            pq_signature=signature,
+            sender_public_key=public_key,
+        )
+    return ExecutionGateDecision(
+        True,
+        &#34;authorized&#34;,
+        request_envelope_valid=request_envelope_valid,
+        pq_signature_valid=True,
+        can_accept=True,
+        execution_scope_allowed=execution_scope_allowed,
+        request_envelope=envelope,
+        pq_signature=signature,
+        sender_public_key=public_key,
+    )</code></pre>
+</details>
+<div class="desc"><p>验证请求并返回逐项公式结果；本层不持有签名私钥。</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<header>
+<a class="homelink" rel="home" title="SAGA Home" href="https://gsiros.github.io/saga/">
+<img src="https://raw.githubusercontent.com/gsiros/saga/94f3562b8f9821717bff825aa4111b2ee5cecec5/assets/logo.png" alt="SAGA" width="256">
+</a>
+</header>
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="saga" href="index.html">saga</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-functions">Functions</a></h3>
+<ul class="">
+<li><code><a title="saga.execution_gate.append_execution_gate_audit_record" href="#saga.execution_gate.append_execution_gate_audit_record">append_execution_gate_audit_record</a></code></li>
+<li><code><a title="saga.execution_gate.build_execution_gate_audit_record" href="#saga.execution_gate.build_execution_gate_audit_record">build_execution_gate_audit_record</a></code></li>
+<li><code><a title="saga.execution_gate.build_toy_lwe_execution_gate" href="#saga.execution_gate.build_toy_lwe_execution_gate">build_toy_lwe_execution_gate</a></code></li>
+<li><code><a title="saga.execution_gate.bytes_to_bits" href="#saga.execution_gate.bytes_to_bits">bytes_to_bits</a></code></li>
+<li><code><a title="saga.execution_gate.reason_for_unauthorized_scope" href="#saga.execution_gate.reason_for_unauthorized_scope">reason_for_unauthorized_scope</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="saga.execution_gate.ExecutionAuthorizationError" href="#saga.execution_gate.ExecutionAuthorizationError">ExecutionAuthorizationError</a></code></h4>
+</li>
+<li>
+<h4><code><a title="saga.execution_gate.ExecutionGate" href="#saga.execution_gate.ExecutionGate">ExecutionGate</a></code></h4>
+<ul class="">
+<li><code><a title="saga.execution_gate.ExecutionGate.authorize" href="#saga.execution_gate.ExecutionGate.authorize">authorize</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="saga.execution_gate.ExecutionGateDecision" href="#saga.execution_gate.ExecutionGateDecision">ExecutionGateDecision</a></code></h4>
+<ul class="">
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.allowed" href="#saga.execution_gate.ExecutionGateDecision.allowed">allowed</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.can_accept" href="#saga.execution_gate.ExecutionGateDecision.can_accept">can_accept</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.execution_scope_allowed" href="#saga.execution_gate.ExecutionGateDecision.execution_scope_allowed">execution_scope_allowed</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.formula_terms" href="#saga.execution_gate.ExecutionGateDecision.formula_terms">formula_terms</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.internal_policy_accept" href="#saga.execution_gate.ExecutionGateDecision.internal_policy_accept">internal_policy_accept</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.pq_signature" href="#saga.execution_gate.ExecutionGateDecision.pq_signature">pq_signature</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.pq_signature_valid" href="#saga.execution_gate.ExecutionGateDecision.pq_signature_valid">pq_signature_valid</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.protocol_allow" href="#saga.execution_gate.ExecutionGateDecision.protocol_allow">protocol_allow</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.reason" href="#saga.execution_gate.ExecutionGateDecision.reason">reason</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.request_envelope" href="#saga.execution_gate.ExecutionGateDecision.request_envelope">request_envelope</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.request_envelope_valid" href="#saga.execution_gate.ExecutionGateDecision.request_envelope_valid">request_envelope_valid</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.sender_public_key" href="#saga.execution_gate.ExecutionGateDecision.sender_public_key">sender_public_key</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateDecision.with_formula_values" href="#saga.execution_gate.ExecutionGateDecision.with_formula_values">with_formula_values</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="saga.execution_gate.ExecutionGateRequest" href="#saga.execution_gate.ExecutionGateRequest">ExecutionGateRequest</a></code></h4>
+<ul class="two-column">
+<li><code><a title="saga.execution_gate.ExecutionGateRequest.action_scope" href="#saga.execution_gate.ExecutionGateRequest.action_scope">action_scope</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateRequest.message" href="#saga.execution_gate.ExecutionGateRequest.message">message</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateRequest.pq_signature" href="#saga.execution_gate.ExecutionGateRequest.pq_signature">pq_signature</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateRequest.receiver_aid" href="#saga.execution_gate.ExecutionGateRequest.receiver_aid">receiver_aid</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateRequest.request_envelope" href="#saga.execution_gate.ExecutionGateRequest.request_envelope">request_envelope</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateRequest.sender_aid" href="#saga.execution_gate.ExecutionGateRequest.sender_aid">sender_aid</a></code></li>
+<li><code><a title="saga.execution_gate.ExecutionGateRequest.token" href="#saga.execution_gate.ExecutionGateRequest.token">token</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="saga.execution_gate.FileReplayStateStore" href="#saga.execution_gate.FileReplayStateStore">FileReplayStateStore</a></code></h4>
+<ul class="">
+<li><code><a title="saga.execution_gate.FileReplayStateStore.load_consumed_request_ids" href="#saga.execution_gate.FileReplayStateStore.load_consumed_request_ids">load_consumed_request_ids</a></code></li>
+<li><code><a title="saga.execution_gate.FileReplayStateStore.reserve_request" href="#saga.execution_gate.FileReplayStateStore.reserve_request">reserve_request</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="saga.execution_gate.LocalExecutionContext" href="#saga.execution_gate.LocalExecutionContext">LocalExecutionContext</a></code></h4>
+<ul class="">
+<li><code><a title="saga.execution_gate.LocalExecutionContext.authorize_action" href="#saga.execution_gate.LocalExecutionContext.authorize_action">authorize_action</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.authorize_delegation" href="#saga.execution_gate.LocalExecutionContext.authorize_delegation">authorize_delegation</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.authorize_memory_read" href="#saga.execution_gate.LocalExecutionContext.authorize_memory_read">authorize_memory_read</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.authorize_memory_write" href="#saga.execution_gate.LocalExecutionContext.authorize_memory_write">authorize_memory_write</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.authorize_tool_call" href="#saga.execution_gate.LocalExecutionContext.authorize_tool_call">authorize_tool_call</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.pq_signature" href="#saga.execution_gate.LocalExecutionContext.pq_signature">pq_signature</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.receiver_aid" href="#saga.execution_gate.LocalExecutionContext.receiver_aid">receiver_aid</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.request_envelope" href="#saga.execution_gate.LocalExecutionContext.request_envelope">request_envelope</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.require_action" href="#saga.execution_gate.LocalExecutionContext.require_action">require_action</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.require_delegation" href="#saga.execution_gate.LocalExecutionContext.require_delegation">require_delegation</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.require_memory_read" href="#saga.execution_gate.LocalExecutionContext.require_memory_read">require_memory_read</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.require_memory_write" href="#saga.execution_gate.LocalExecutionContext.require_memory_write">require_memory_write</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.require_tool_call" href="#saga.execution_gate.LocalExecutionContext.require_tool_call">require_tool_call</a></code></li>
+<li><code><a title="saga.execution_gate.LocalExecutionContext.sender_aid" href="#saga.execution_gate.LocalExecutionContext.sender_aid">sender_aid</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="saga.execution_gate.ReplayStateStore" href="#saga.execution_gate.ReplayStateStore">ReplayStateStore</a></code></h4>
+<ul class="">
+<li><code><a title="saga.execution_gate.ReplayStateStore.load_consumed_request_ids" href="#saga.execution_gate.ReplayStateStore.load_consumed_request_ids">load_consumed_request_ids</a></code></li>
+<li><code><a title="saga.execution_gate.ReplayStateStore.reserve_request" href="#saga.execution_gate.ReplayStateStore.reserve_request">reserve_request</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="saga.execution_gate.SignedRequestExecutionGate" href="#saga.execution_gate.SignedRequestExecutionGate">SignedRequestExecutionGate</a></code></h4>
+<ul class="">
+<li><code><a title="saga.execution_gate.SignedRequestExecutionGate.authorize" href="#saga.execution_gate.SignedRequestExecutionGate.authorize">authorize</a></code></li>
+<li><code><a title="saga.execution_gate.SignedRequestExecutionGate.build_local_execution_context" href="#saga.execution_gate.SignedRequestExecutionGate.build_local_execution_context">build_local_execution_context</a></code></li>
+<li><code><a title="saga.execution_gate.SignedRequestExecutionGate.build_local_execution_context_from_decision" href="#saga.execution_gate.SignedRequestExecutionGate.build_local_execution_context_from_decision">build_local_execution_context_from_decision</a></code></li>
+<li><code><a title="saga.execution_gate.SignedRequestExecutionGate.consume_request" href="#saga.execution_gate.SignedRequestExecutionGate.consume_request">consume_request</a></code></li>
+<li><code><a title="saga.execution_gate.SignedRequestExecutionGate.evaluate_request" href="#saga.execution_gate.SignedRequestExecutionGate.evaluate_request">evaluate_request</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

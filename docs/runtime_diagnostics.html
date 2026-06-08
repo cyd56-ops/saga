@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>saga.runtime_diagnostics API documentation</title>
+<meta name="description" content="Structured local runtime diagnostics for experiment triage.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>saga.runtime_diagnostics</code></h1>
+</header>
+<section id="section-intro">
+<p>Structured local runtime diagnostics for experiment triage.</p>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-functions">Functions</h2>
+<dl>
+<dt id="saga.runtime_diagnostics.append_local_run_diagnostic_record"><code class="name flex">
+<span>def <span class="ident">append_local_run_diagnostic_record</span></span>(<span>workdir: str | Path | None, record: Mapping[str, object]) ‑> pathlib.Path | None</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def append_local_run_diagnostic_record(
+    workdir: str | Path | None,
+    record: Mapping[str, object],
+) -&gt; Path | None:
+    &#34;&#34;&#34;Append one local runtime diagnostic row to a JSONL file.&#34;&#34;&#34;
+    if workdir is None:
+        return None
+
+    diagnostics_dir = Path(workdir) / &#34;diagnostics&#34;
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics_path = diagnostics_dir / &#34;local_agent_runs.jsonl&#34;
+    payload = dict(record)
+    payload[&#34;recorded_at&#34;] = datetime.now(tz=timezone.utc).isoformat()
+    with diagnostics_path.open(&#34;a&#34;, encoding=&#34;utf-8&#34;) as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + &#34;\n&#34;)
+    return diagnostics_path</code></pre>
+</details>
+<div class="desc"><p>Append one local runtime diagnostic row to a JSONL file.</p></div>
+</dd>
+<dt id="saga.runtime_diagnostics.build_local_run_diagnostic_record"><code class="name flex">
+<span>def <span class="ident">build_local_run_diagnostic_record</span></span>(<span>*,<br>agent_aid: str,<br>peer_aid: str | None,<br>conversation_side: str,<br>turn_index: int,<br>query: str,<br>response: object,<br>llm_elapsed_seconds: float | None,<br>agent_instance: object | None,<br>step_start_index: int = 0) ‑> dict[str, object]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def build_local_run_diagnostic_record(
+    *,
+    agent_aid: str,
+    peer_aid: str | None,
+    conversation_side: str,
+    turn_index: int,
+    query: str,
+    response: object,
+    llm_elapsed_seconds: float | None,
+    agent_instance: object | None,
+    step_start_index: int = 0,
+) -&gt; dict[str, object]:
+    &#34;&#34;&#34;Build one structured local runtime diagnostic record.&#34;&#34;&#34;
+    record: dict[str, object] = {
+        &#34;agent_aid&#34;: agent_aid,
+        &#34;peer_aid&#34;: peer_aid,
+        &#34;conversation_side&#34;: conversation_side,
+        &#34;turn_index&#34;: turn_index,
+        &#34;query_length&#34;: len(str(query)),
+        &#34;query_preview&#34;: _truncate_text(query),
+        &#34;response_length&#34;: len(str(response)),
+        &#34;response_preview&#34;: _truncate_text(response),
+        &#34;response_is_task_finished&#34;: str(response) == &#34;&lt;TASK_FINISHED&gt;&#34;,
+        &#34;llm_elapsed_seconds&#34;: llm_elapsed_seconds,
+    }
+    record.update(
+        summarize_agent_memory_steps(
+            agent_instance,
+            step_start_index=step_start_index,
+        )
+    )
+    return record</code></pre>
+</details>
+<div class="desc"><p>Build one structured local runtime diagnostic record.</p></div>
+</dd>
+<dt id="saga.runtime_diagnostics.filter_diagnostics_since"><code class="name flex">
+<span>def <span class="ident">filter_diagnostics_since</span></span>(<span>diagnostic_records: Sequence[Mapping[str, Any]], *, started_at: datetime) ‑> list[dict[str, typing.Any]]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def filter_diagnostics_since(
+    diagnostic_records: Sequence[Mapping[str, Any]],
+    *,
+    started_at: datetime,
+) -&gt; list[dict[str, Any]]:
+    &#34;&#34;&#34;Return diagnostic rows recorded at or after ``started_at``.&#34;&#34;&#34;
+    if started_at.tzinfo is None:
+        raise ValueError(&#34;started_at must be timezone-aware&#34;)
+
+    rows: list[dict[str, Any]] = []
+    for record in diagnostic_records:
+        recorded_at = record.get(&#34;recorded_at&#34;)
+        if not isinstance(recorded_at, str):
+            continue
+        try:
+            recorded_dt = datetime.fromisoformat(recorded_at)
+        except ValueError:
+            continue
+        if recorded_dt.tzinfo is None:
+            recorded_dt = recorded_dt.replace(tzinfo=timezone.utc)
+        if recorded_dt &gt;= started_at:
+            rows.append(dict(record))
+    return rows</code></pre>
+</details>
+<div class="desc"><p>Return diagnostic rows recorded at or after <code>started_at</code>.</p></div>
+</dd>
+<dt id="saga.runtime_diagnostics.load_local_run_diagnostic_records"><code class="name flex">
+<span>def <span class="ident">load_local_run_diagnostic_records</span></span>(<span>agent_workdir: str | Path | None) ‑> list[dict[str, typing.Any]]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def load_local_run_diagnostic_records(
+    agent_workdir: str | Path | None,
+) -&gt; list[dict[str, Any]]:
+    &#34;&#34;&#34;Load local runtime diagnostics from an agent workdir if present.&#34;&#34;&#34;
+    if agent_workdir is None:
+        return []
+
+    diagnostics_path = Path(agent_workdir) / &#34;diagnostics&#34; / &#34;local_agent_runs.jsonl&#34;
+    if not diagnostics_path.exists():
+        return []
+
+    records: list[dict[str, Any]] = []
+    with diagnostics_path.open(&#34;r&#34;, encoding=&#34;utf-8&#34;) as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            records.append(json.loads(line))
+    return records</code></pre>
+</details>
+<div class="desc"><p>Load local runtime diagnostics from an agent workdir if present.</p></div>
+</dd>
+<dt id="saga.runtime_diagnostics.summarize_agent_memory_steps"><code class="name flex">
+<span>def <span class="ident">summarize_agent_memory_steps</span></span>(<span>agent_instance: object | None, *, step_start_index: int = 0) ‑> dict[str, object]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def summarize_agent_memory_steps(
+    agent_instance: object | None,
+    *,
+    step_start_index: int = 0,
+) -&gt; dict[str, object]:
+    &#34;&#34;&#34;Summarize newly added memory steps after one local-agent run.
+
+    诊断中的模型调用次数按新增非 TaskStep 记忆步骤估算，避免只统计外层 run 次数。
+    &#34;&#34;&#34;
+    memory = getattr(agent_instance, &#34;memory&#34;, None)
+    steps = list(getattr(memory, &#34;steps&#34;, []) or [])
+    new_steps = steps[step_start_index:]
+
+    tool_call_names: list[str] = []
+    error_count = 0
+    final_answer_count = 0
+    step_type_counts: Counter[str] = Counter()
+    for step in new_steps:
+        step_type_counts[type(step).__name__] += 1
+        tool_call_names.extend(_extract_step_tool_names(step))
+        if getattr(step, &#34;error&#34;, None) is not None:
+            error_count += 1
+        if bool(getattr(step, &#34;is_final_answer&#34;, False)):
+            final_answer_count += 1
+
+    return {
+        &#34;memory_step_count&#34;: len(steps),
+        &#34;new_memory_step_count&#34;: len(new_steps),
+        &#34;step_type_counts&#34;: dict(sorted(step_type_counts.items())),
+        &#34;model_call_count&#34;: sum(
+            count
+            for step_type, count in step_type_counts.items()
+            if step_type not in {&#34;TaskStep&#34;, &#34;SystemPromptStep&#34;}
+        ),
+        &#34;tool_call_count&#34;: len(tool_call_names),
+        &#34;tool_call_names&#34;: tool_call_names,
+        &#34;error_step_count&#34;: error_count,
+        &#34;final_answer_step_count&#34;: final_answer_count,
+        &#34;last_step_type&#34;: type(steps[-1]).__name__ if steps else None,
+    }</code></pre>
+</details>
+<div class="desc"><p>Summarize newly added memory steps after one local-agent run.</p>
+<p>诊断中的模型调用次数按新增非 TaskStep 记忆步骤估算，避免只统计外层 run 次数。</p></div>
+</dd>
+<dt id="saga.runtime_diagnostics.summarize_local_run_diagnostics"><code class="name flex">
+<span>def <span class="ident">summarize_local_run_diagnostics</span></span>(<span>diagnostic_records: Sequence[Mapping[str, object]],<br>*,<br>prefix: str = 'local_run') ‑> dict[str, object]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def summarize_local_run_diagnostics(
+    diagnostic_records: Sequence[Mapping[str, object]],
+    *,
+    prefix: str = &#34;local_run&#34;,
+) -&gt; dict[str, object]:
+    &#34;&#34;&#34;Summarize local runtime diagnostics into stable result fields.&#34;&#34;&#34;
+    tool_names: list[str] = []
+    model_call_count = 0
+    error_step_count = 0
+    final_answer_count = 0
+    by_side: Counter[str] = Counter()
+    by_status: Counter[str] = Counter()
+    failed_count = 0
+    errors: list[str] = []
+    for record in diagnostic_records:
+        tool_names.extend(str(name) for name in record.get(&#34;tool_call_names&#34;, []) or [])
+        model_call_count += int(record.get(&#34;model_call_count&#34;, 0))
+        error_step_count += int(record.get(&#34;error_step_count&#34;, 0))
+        final_answer_count += int(record.get(&#34;final_answer_step_count&#34;, 0))
+        side = record.get(&#34;conversation_side&#34;)
+        if side is not None:
+            by_side[str(side)] += 1
+        status = record.get(&#34;run_status&#34;)
+        if status is not None:
+            status_text = str(status)
+            by_status[status_text] += 1
+            if status_text == &#34;failed&#34;:
+                failed_count += 1
+        error = record.get(&#34;error&#34;)
+        if isinstance(error, str) and error:
+            errors.append(error)
+
+    return {
+        f&#34;{prefix}_count&#34;: len(diagnostic_records),
+        f&#34;{prefix}_model_call_count&#34;: model_call_count,
+        f&#34;{prefix}_tool_call_count&#34;: len(tool_names),
+        f&#34;{prefix}_tool_names&#34;: sorted(set(tool_names)),
+        f&#34;{prefix}_error_step_count&#34;: error_step_count,
+        f&#34;{prefix}_final_answer_step_count&#34;: final_answer_count,
+        f&#34;{prefix}_by_side&#34;: dict(sorted(by_side.items())),
+        f&#34;{prefix}_by_status&#34;: dict(sorted(by_status.items())),
+        f&#34;{prefix}_failed_count&#34;: failed_count,
+        f&#34;{prefix}_errors&#34;: errors,
+    }</code></pre>
+</details>
+<div class="desc"><p>Summarize local runtime diagnostics into stable result fields.</p></div>
+</dd>
+</dl>
+</section>
+<section>
+</section>
+</article>
+<nav id="sidebar">
+<header>
+<a class="homelink" rel="home" title="SAGA Home" href="https://gsiros.github.io/saga/">
+<img src="https://raw.githubusercontent.com/gsiros/saga/94f3562b8f9821717bff825aa4111b2ee5cecec5/assets/logo.png" alt="SAGA" width="256">
+</a>
+</header>
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="saga" href="index.html">saga</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-functions">Functions</a></h3>
+<ul class="">
+<li><code><a title="saga.runtime_diagnostics.append_local_run_diagnostic_record" href="#saga.runtime_diagnostics.append_local_run_diagnostic_record">append_local_run_diagnostic_record</a></code></li>
+<li><code><a title="saga.runtime_diagnostics.build_local_run_diagnostic_record" href="#saga.runtime_diagnostics.build_local_run_diagnostic_record">build_local_run_diagnostic_record</a></code></li>
+<li><code><a title="saga.runtime_diagnostics.filter_diagnostics_since" href="#saga.runtime_diagnostics.filter_diagnostics_since">filter_diagnostics_since</a></code></li>
+<li><code><a title="saga.runtime_diagnostics.load_local_run_diagnostic_records" href="#saga.runtime_diagnostics.load_local_run_diagnostic_records">load_local_run_diagnostic_records</a></code></li>
+<li><code><a title="saga.runtime_diagnostics.summarize_agent_memory_steps" href="#saga.runtime_diagnostics.summarize_agent_memory_steps">summarize_agent_memory_steps</a></code></li>
+<li><code><a title="saga.runtime_diagnostics.summarize_local_run_diagnostics" href="#saga.runtime_diagnostics.summarize_local_run_diagnostics">summarize_local_run_diagnostics</a></code></li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

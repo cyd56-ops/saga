@@ -96,6 +96,7 @@ el.replaceWith(d);
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">class A8:
+    &#34;&#34;&#34;防御回归场景：观察有效 token 仅在过期或配额耗尽前可用。&#34;&#34;&#34;
     # =======================================================================
     # ADVERSARIAL AGENT 8: An adversarial agent contacts the victim agent 
     # with the TLS public keys and a valid access control token. In this 
@@ -290,27 +291,15 @@ el.replaceWith(d);
 
     def lookup(self, t_aid: str):
         &#34;&#34;&#34;
-        Looks up the target agent by its AID.
-        This function sends a request to the provider to look up the target agent&#39;s AID.
-
-        Args:
-            t_aid (str): The AID of the target agent.
+        Compatibility shim for a provider endpoint that is not implemented.
+        Use access() for the active protocol flow.
         &#34;&#34;&#34;
-        response = requests.post(f&#34;{saga.config.PROVIDER_CONFIG.get(&#39;endpoint&#39;)}/lookup&#34;, json={&#39;t_aid&#39;: t_aid}, verify=saga.config.CA_CERT_PATH, cert=(
-            self.workdir+&#34;agent.crt&#34;, self.workdir+&#34;agent.key&#34;
-        )) 
-        if response.status_code == 200:
-            data = response.json()
-            # Convert extended-json dict to python dict:
-            data = bson.json_util.loads(json.dumps(data))
-            return data
-        elif response.status_code == 403:
-            logger.log(&#34;ACCESS&#34;, f&#34;Access denied to {t_aid}.&#34;)
-            print(response.json())
-            return None        
+        raise NotImplementedError(
+            &#34;Provider /lookup is not implemented in this codebase. Use access() instead.&#34;
+        )
         
     def access(self, t_aid):
-        # TODO: How is this different from lookup()?
+        &#34;&#34;&#34;向 provider 请求目标 agent 的访问材料并解析响应。&#34;&#34;&#34;
         response = requests.post(f&#34;{saga.config.PROVIDER_CONFIG.get(&#39;endpoint&#39;)}/access&#34;, json={&#39;i_aid&#39;:self.aid, &#39;t_aid&#39;: t_aid}, verify=saga.config.CA_CERT_PATH, cert=(
             self.workdir+&#34;agent.crt&#34;, self.workdir+&#34;agent.key&#34;
         )) 
@@ -413,6 +402,20 @@ el.replaceWith(d);
 
             return True
 
+    def _received_token_is_valid_unlocked(self, token_dict: dict) -&gt; bool:
+        expiration_date = token_dict.get(&#34;expiration_timestamp&#34;)
+        expiration_timestamp = datetime.fromisoformat(expiration_date)
+        if datetime.now(tz=timezone.utc) &gt; expiration_timestamp:
+            logger.log(&#34;ACCESS&#34;, &#34;Token expired.&#34;)
+            return False
+
+        remaining_quota = token_dict.get(&#34;communication_quota&#34;)
+        if remaining_quota == 0:
+            logger.log(&#34;ACCESS&#34;, &#34;Token&#39;s max quota has been exceeded.&#34;)
+            return False
+
+        return True
+
     def received_token_is_valid(self, token: str) -&gt; bool:
         &#34;&#34;&#34;
         Makes sure that the token that was received from the receiving agent is valid.
@@ -427,23 +430,8 @@ el.replaceWith(d);
                 logger.log(&#34;ACCESS&#34;, &#34;Token provided by receiving agent not found in given tokens.&#34;)
                 return False
             
-            # Check if the token is still valid:
             token_dict = self.received_tokens[token]
-            
-            # Check the expiration date
-            expiration_date = token_dict.get(&#34;expiration_timestamp&#34;)
-            expiration_timestamp = datetime.fromisoformat(expiration_date)        
-            if datetime.now(tz=timezone.utc) &gt; expiration_timestamp:
-                logger.log(&#34;ACCESS&#34;, &#34;Token expired.&#34;)
-                return False
-            
-            # Check the communication quota:
-            remaining_quota = token_dict.get(&#34;communication_quota&#34;)
-            if remaining_quota == 0:
-                logger.log(&#34;ACCESS&#34;, &#34;Token&#39;s max quota has been exceeded.&#34;)
-                return False
-
-            return True
+            return self._received_token_is_valid_unlocked(token_dict)
 
     def store_received_token(self, r_aid, token_str, token_dict):
         &#34;&#34;&#34;
@@ -464,18 +452,22 @@ el.replaceWith(d);
         This function checks if the token is valid and if it is, returns it.
         If the token is not valid, it removes it from the received tokens and the aid_to_token dict.
         &#34;&#34;&#34;
-        with self.received_tokens_lock: # THIS CREATES A DEADLOCK
+        with self.received_tokens_lock:
             token = self.aid_to_token.get(r_aid, None)
-        if token is None:
-            return None
-        if not self.received_token_is_valid(token):
-            with self.received_tokens_lock:
-                # remove the token from the received tokens:
-                del self.received_tokens[token]
-                # remove the token from the aid_to_token dict:
+            if token is None:
+                return None
+
+            token_dict = self.received_tokens.get(token)
+            if token_dict is None:
                 del self.aid_to_token[r_aid]
-            return None
-        return token
+                return None
+
+            if not self._received_token_is_valid_unlocked(token_dict):
+                del self.received_tokens[token]
+                del self.aid_to_token[r_aid]
+                return None
+
+            return token
 
     def send(self, conn, payload):
         &#34;&#34;&#34;
@@ -1220,7 +1212,8 @@ el.replaceWith(d);
             bindsocket.close()
             print(&#34;Server socket closed. Exiting.&#34;)</code></pre>
 </details>
-<div class="desc"><p>Initializes the Agent object with the given work directory and material.</p>
+<div class="desc"><p>防御回归场景：观察有效 token 仅在过期或配额耗尽前可用。</p>
+<p>Initializes the Agent object with the given work directory and material.</p>
 <h2 id="args">Args</h2>
 <dl>
 <dt><strong><code>workdir</code></strong></dt>
@@ -1241,7 +1234,7 @@ el.replaceWith(d);
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def access(self, t_aid):
-    # TODO: How is this different from lookup()?
+    &#34;&#34;&#34;向 provider 请求目标 agent 的访问材料并解析响应。&#34;&#34;&#34;
     response = requests.post(f&#34;{saga.config.PROVIDER_CONFIG.get(&#39;endpoint&#39;)}/access&#34;, json={&#39;i_aid&#39;:self.aid, &#39;t_aid&#39;: t_aid}, verify=saga.config.CA_CERT_PATH, cert=(
         self.workdir+&#34;agent.crt&#34;, self.workdir+&#34;agent.key&#34;
     )) 
@@ -1255,7 +1248,7 @@ el.replaceWith(d);
         print(response.json())
         return None</code></pre>
 </details>
-<div class="desc"></div>
+<div class="desc"><p>向 provider 请求目标 agent 的访问材料并解析响应。</p></div>
 </dd>
 <dt id="saga.attack_models.adversaries.A8.A8.connect"><code class="name flex">
 <span>def <span class="ident">connect</span></span>(<span>self, r_aid, message: str)</span>
@@ -2094,32 +2087,15 @@ and ensures proper socket closure on shutdown.</p></div>
 </summary>
 <pre><code class="python">def lookup(self, t_aid: str):
     &#34;&#34;&#34;
-    Looks up the target agent by its AID.
-    This function sends a request to the provider to look up the target agent&#39;s AID.
-
-    Args:
-        t_aid (str): The AID of the target agent.
+    Compatibility shim for a provider endpoint that is not implemented.
+    Use access() for the active protocol flow.
     &#34;&#34;&#34;
-    response = requests.post(f&#34;{saga.config.PROVIDER_CONFIG.get(&#39;endpoint&#39;)}/lookup&#34;, json={&#39;t_aid&#39;: t_aid}, verify=saga.config.CA_CERT_PATH, cert=(
-        self.workdir+&#34;agent.crt&#34;, self.workdir+&#34;agent.key&#34;
-    )) 
-    if response.status_code == 200:
-        data = response.json()
-        # Convert extended-json dict to python dict:
-        data = bson.json_util.loads(json.dumps(data))
-        return data
-    elif response.status_code == 403:
-        logger.log(&#34;ACCESS&#34;, f&#34;Access denied to {t_aid}.&#34;)
-        print(response.json())
-        return None        </code></pre>
+    raise NotImplementedError(
+        &#34;Provider /lookup is not implemented in this codebase. Use access() instead.&#34;
+    )</code></pre>
 </details>
-<div class="desc"><p>Looks up the target agent by its AID.
-This function sends a request to the provider to look up the target agent's AID.</p>
-<h2 id="args">Args</h2>
-<dl>
-<dt><strong><code>t_aid</code></strong> :&ensp;<code>str</code></dt>
-<dd>The AID of the target agent.</dd>
-</dl></div>
+<div class="desc"><p>Compatibility shim for a provider endpoint that is not implemented.
+Use access() for the active protocol flow.</p></div>
 </dd>
 <dt id="saga.attack_models.adversaries.A8.A8.receive_conversation"><code class="name flex">
 <span>def <span class="ident">receive_conversation</span></span>(<span>self, conn, token: str, recipient_pac) ‑> bool</span>
@@ -2252,23 +2228,8 @@ Returns true if the conversation ended from the receiving side.</p>
             logger.log(&#34;ACCESS&#34;, &#34;Token provided by receiving agent not found in given tokens.&#34;)
             return False
         
-        # Check if the token is still valid:
         token_dict = self.received_tokens[token]
-        
-        # Check the expiration date
-        expiration_date = token_dict.get(&#34;expiration_timestamp&#34;)
-        expiration_timestamp = datetime.fromisoformat(expiration_date)        
-        if datetime.now(tz=timezone.utc) &gt; expiration_timestamp:
-            logger.log(&#34;ACCESS&#34;, &#34;Token expired.&#34;)
-            return False
-        
-        # Check the communication quota:
-        remaining_quota = token_dict.get(&#34;communication_quota&#34;)
-        if remaining_quota == 0:
-            logger.log(&#34;ACCESS&#34;, &#34;Token&#39;s max quota has been exceeded.&#34;)
-            return False
-
-        return True</code></pre>
+        return self._received_token_is_valid_unlocked(token_dict)</code></pre>
 </details>
 <div class="desc"><p>Makes sure that the token that was received from the receiving agent is valid.
 - If it is expired, it is invalid.
@@ -2329,18 +2290,22 @@ Returns true if the conversation ended from the receiving side.</p>
     This function checks if the token is valid and if it is, returns it.
     If the token is not valid, it removes it from the received tokens and the aid_to_token dict.
     &#34;&#34;&#34;
-    with self.received_tokens_lock: # THIS CREATES A DEADLOCK
+    with self.received_tokens_lock:
         token = self.aid_to_token.get(r_aid, None)
-    if token is None:
-        return None
-    if not self.received_token_is_valid(token):
-        with self.received_tokens_lock:
-            # remove the token from the received tokens:
-            del self.received_tokens[token]
-            # remove the token from the aid_to_token dict:
+        if token is None:
+            return None
+
+        token_dict = self.received_tokens.get(token)
+        if token_dict is None:
             del self.aid_to_token[r_aid]
-        return None
-    return token</code></pre>
+            return None
+
+        if not self._received_token_is_valid_unlocked(token_dict):
+            del self.received_tokens[token]
+            del self.aid_to_token[r_aid]
+            return None
+
+        return token</code></pre>
 </details>
 <div class="desc"><p>Retrieves a valid token for the receiving agent.
 This function checks if the token is valid and if it is, returns it.
@@ -2525,6 +2490,7 @@ If the token is not valid, it removes it from the received tokens and the aid_to
         self.task_finished_token = &#34;&lt;TASK_FINISHED&gt;&#34;
 
     def run(self, query, initiating_agent=None, agent_instance=None):
+        &#34;&#34;&#34;返回固定或随机测试响应，用于安全回归通信场景。&#34;&#34;&#34;
         time.sleep(1)
         if query == self.task_finished_token:
             return self.task_finished_token
@@ -2549,12 +2515,13 @@ If the token is not valid, it removes it from the received tokens and the aid_to
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def run(self, query, initiating_agent=None, agent_instance=None):
+    &#34;&#34;&#34;返回固定或随机测试响应，用于安全回归通信场景。&#34;&#34;&#34;
     time.sleep(1)
     if query == self.task_finished_token:
         return self.task_finished_token
     return None, random.choice(DummyAgent.vocab)</code></pre>
 </details>
-<div class="desc"></div>
+<div class="desc"><p>返回固定或随机测试响应，用于安全回归通信场景。</p></div>
 </dd>
 </dl>
 </dd>

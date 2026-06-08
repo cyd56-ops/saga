@@ -133,7 +133,7 @@ el.replaceWith(d);
 <dl>
 <dt id="saga.config.AgentConfig"><code class="flex name class">
 <span>class <span class="ident">AgentConfig</span></span>
-<span>(</span><span>name: str,<br>description: str,<br>local_agent_config: agent_backend.config.LocalAgentConfig,<br>endpoint: <a title="saga.config.EndPointConfig" href="#saga.config.EndPointConfig">EndPointConfig</a>,<br>contact_rulebook: List[str] | None = &lt;factory&gt;,<br>num_one_time_keys: int | None = 100)</span>
+<span>(</span><span>name: str,<br>description: str,<br>local_agent_config: agent_backend.config.LocalAgentConfig,<br>endpoint: <a title="saga.config.EndPointConfig" href="#saga.config.EndPointConfig">EndPointConfig</a>,<br>contact_rulebook: List[str] | None = &lt;factory&gt;,<br>num_one_time_keys: int | None = 100,<br>toy_runtime_auth: <a title="saga.config.ToyRuntimeAuthConfig" href="#saga.config.ToyRuntimeAuthConfig">ToyRuntimeAuthConfig</a> | None = None)</span>
 </code></dt>
 <dd>
 <details class="source">
@@ -157,7 +157,9 @@ class AgentConfig(Serializable):
     contact_rulebook: Optional[List[str]] = field(default_factory=list)
     &#34;&#34;&#34;Contact rule-book for this particular agent (who can contact it, etc.)&#34;&#34;&#34;
     num_one_time_keys: Optional[int] = 100
-    &#34;&#34;&#34;Number of one-time-keys to generate for this agent. Defaults to 100&#34;&#34;&#34;</code></pre>
+    &#34;&#34;&#34;Number of one-time-keys to generate for this agent. Defaults to 100&#34;&#34;&#34;
+    toy_runtime_auth: Optional[ToyRuntimeAuthConfig] = None
+    &#34;&#34;&#34;Optional research-only toy LWE runtime-auth config.&#34;&#34;&#34;</code></pre>
 </details>
 <div class="desc"><p>Configuration for an agent.
 This includes the agent's name, description, local agent configuration, endpoint details, and contact rule-book.</p></div>
@@ -198,6 +200,10 @@ This includes the agent's name, description, local agent configuration, endpoint
 <dt id="saga.config.AgentConfig.num_one_time_keys"><code class="name">var <span class="ident">num_one_time_keys</span> : int | None</code></dt>
 <dd>
 <div class="desc"><p>Number of one-time-keys to generate for this agent. Defaults to 100</p></div>
+</dd>
+<dt id="saga.config.AgentConfig.toy_runtime_auth"><code class="name">var <span class="ident">toy_runtime_auth</span> : <a title="saga.config.ToyRuntimeAuthConfig" href="#saga.config.ToyRuntimeAuthConfig">ToyRuntimeAuthConfig</a> | None</code></dt>
+<dd>
+<div class="desc"><p>Optional research-only toy LWE runtime-auth config.</p></div>
 </dd>
 </dl>
 </dd>
@@ -251,6 +257,158 @@ class EndPointConfig(Serializable):
 <dt id="saga.config.EndPointConfig.port"><code class="name">var <span class="ident">port</span> : int</code></dt>
 <dd>
 <div class="desc"><p>Endpoint port of the agent.</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="saga.config.ToyRuntimeAuthConfig"><code class="flex name class">
+<span>class <span class="ident">ToyRuntimeAuthConfig</span></span>
+<span>(</span><span>enabled: bool = False,<br>mode: Literal['toy_compiled_research', 'toy_wrapper', 'mldsa_external'] | None = None,<br>strict_execution_gate: bool = True,<br>seed: int = 0,<br>verifier_flavor: str = 'compiled',<br>message_bytes: int = 32,<br>replay_state_dir: str | None = None,<br>trusted_public_keys: dict[str, str] = &lt;factory&gt;)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class ToyRuntimeAuthConfig(Serializable):
+    &#34;&#34;&#34;研究用 toy LWE 执行层认证配置。&#34;&#34;&#34;
+
+    enabled: bool = False
+    &#34;&#34;&#34;Whether to enable the toy LWE runtime-auth path for this agent.&#34;&#34;&#34;
+    mode: Literal[&#34;toy_compiled_research&#34;, &#34;toy_wrapper&#34;, &#34;mldsa_external&#34;] | None = None
+    &#34;&#34;&#34;Runtime-auth mode; omitted legacy configs are inferred from ``verifier_flavor``.&#34;&#34;&#34;
+    strict_execution_gate: bool = True
+    &#34;&#34;&#34;Whether runtime-auth mode rejects missing gate/context state.&#34;&#34;&#34;
+    seed: int = 0
+    &#34;&#34;&#34;Deterministic seed used to derive the toy LWE key pair.&#34;&#34;&#34;
+    verifier_flavor: str = &#34;compiled&#34;
+    &#34;&#34;&#34;Legacy toy verifier flavor; use ``mode`` for new configs.&#34;&#34;&#34;
+    message_bytes: int = 32
+    &#34;&#34;&#34;Envelope digest length expected by the verifier helper.&#34;&#34;&#34;
+    replay_state_dir: str | None = None
+    &#34;&#34;&#34;Optional shared replay marker directory for multi-workdir experiments.&#34;&#34;&#34;
+    trusted_public_keys: dict[str, str] = field(default_factory=dict)
+    &#34;&#34;&#34;Mapping from trusted peer AIDs to base64-encoded toy public keys.&#34;&#34;&#34;
+
+    def __post_init__(self) -&gt; None:
+        &#34;&#34;&#34;Validate the minimal research-only runtime-auth settings.&#34;&#34;&#34;
+        valid_modes = {&#34;toy_compiled_research&#34;, &#34;toy_wrapper&#34;, &#34;mldsa_external&#34;}
+        if self.mode is not None and self.mode not in valid_modes:
+            raise ValueError(
+                &#34;mode must be one of: toy_compiled_research, toy_wrapper, mldsa_external&#34;
+            )
+        if self.verifier_flavor not in {&#34;compiled&#34;, &#34;wrapper&#34;}:
+            raise ValueError(&#34;verifier_flavor must be &#39;compiled&#39; or &#39;wrapper&#39;&#34;)
+        if self.mode == &#34;toy_compiled_research&#34; and self.verifier_flavor != &#34;compiled&#34;:
+            raise ValueError(&#34;toy_compiled_research mode requires verifier_flavor=&#39;compiled&#39;&#34;)
+        if self.mode == &#34;toy_wrapper&#34; and self.verifier_flavor != &#34;wrapper&#34;:
+            raise ValueError(&#34;toy_wrapper mode requires verifier_flavor=&#39;wrapper&#39;&#34;)
+        if self.message_bytes &lt;= 0:
+            raise ValueError(&#34;message_bytes must be positive&#34;)
+
+    def resolved_mode(self) -&gt; Literal[&#34;toy_compiled_research&#34;, &#34;toy_wrapper&#34;, &#34;mldsa_external&#34;]:
+        &#34;&#34;&#34;返回规范化 runtime-auth mode，兼容旧的 verifier_flavor 配置。&#34;&#34;&#34;
+        if self.mode is not None:
+            return self.mode
+        if self.verifier_flavor == &#34;compiled&#34;:
+            return &#34;toy_compiled_research&#34;
+        return &#34;toy_wrapper&#34;
+
+    def toy_verifier_flavor(self) -&gt; Literal[&#34;compiled&#34;, &#34;wrapper&#34;]:
+        &#34;&#34;&#34;返回 toy mode 对应的 verifier flavor，ML-DSA mode 不允许调用。&#34;&#34;&#34;
+        resolved_mode = self.resolved_mode()
+        if resolved_mode == &#34;toy_compiled_research&#34;:
+            return &#34;compiled&#34;
+        if resolved_mode == &#34;toy_wrapper&#34;:
+            return &#34;wrapper&#34;
+        raise ValueError(&#34;mldsa_external mode does not use a toy verifier flavor&#34;)</code></pre>
+</details>
+<div class="desc"><p>研究用 toy LWE 执行层认证配置。</p></div>
+<h3>Ancestors</h3>
+<ul class="hlist">
+<li>simple_parsing.helpers.serialization.serializable.Serializable</li>
+<li>simple_parsing.helpers.serialization.serializable.SerializableMixin</li>
+</ul>
+<h3>Class variables</h3>
+<dl>
+<dt id="saga.config.ToyRuntimeAuthConfig.decode_into_subclasses"><code class="name">var <span class="ident">decode_into_subclasses</span> : ClassVar[bool]</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Instance variables</h3>
+<dl>
+<dt id="saga.config.ToyRuntimeAuthConfig.enabled"><code class="name">var <span class="ident">enabled</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether to enable the toy LWE runtime-auth path for this agent.</p></div>
+</dd>
+<dt id="saga.config.ToyRuntimeAuthConfig.message_bytes"><code class="name">var <span class="ident">message_bytes</span> : int</code></dt>
+<dd>
+<div class="desc"><p>Envelope digest length expected by the verifier helper.</p></div>
+</dd>
+<dt id="saga.config.ToyRuntimeAuthConfig.mode"><code class="name">var <span class="ident">mode</span> : Literal['toy_compiled_research', 'toy_wrapper', 'mldsa_external'] | None</code></dt>
+<dd>
+<div class="desc"><p>Runtime-auth mode; omitted legacy configs are inferred from <code>verifier_flavor</code>.</p></div>
+</dd>
+<dt id="saga.config.ToyRuntimeAuthConfig.replay_state_dir"><code class="name">var <span class="ident">replay_state_dir</span> : str | None</code></dt>
+<dd>
+<div class="desc"><p>Optional shared replay marker directory for multi-workdir experiments.</p></div>
+</dd>
+<dt id="saga.config.ToyRuntimeAuthConfig.seed"><code class="name">var <span class="ident">seed</span> : int</code></dt>
+<dd>
+<div class="desc"><p>Deterministic seed used to derive the toy LWE key pair.</p></div>
+</dd>
+<dt id="saga.config.ToyRuntimeAuthConfig.strict_execution_gate"><code class="name">var <span class="ident">strict_execution_gate</span> : bool</code></dt>
+<dd>
+<div class="desc"><p>Whether runtime-auth mode rejects missing gate/context state.</p></div>
+</dd>
+<dt id="saga.config.ToyRuntimeAuthConfig.trusted_public_keys"><code class="name">var <span class="ident">trusted_public_keys</span> : dict[str, str]</code></dt>
+<dd>
+<div class="desc"><p>Mapping from trusted peer AIDs to base64-encoded toy public keys.</p></div>
+</dd>
+<dt id="saga.config.ToyRuntimeAuthConfig.verifier_flavor"><code class="name">var <span class="ident">verifier_flavor</span> : str</code></dt>
+<dd>
+<div class="desc"><p>Legacy toy verifier flavor; use <code>mode</code> for new configs.</p></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="saga.config.ToyRuntimeAuthConfig.resolved_mode"><code class="name flex">
+<span>def <span class="ident">resolved_mode</span></span>(<span>self) ‑> Literal['toy_compiled_research', 'toy_wrapper', 'mldsa_external']</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def resolved_mode(self) -&gt; Literal[&#34;toy_compiled_research&#34;, &#34;toy_wrapper&#34;, &#34;mldsa_external&#34;]:
+    &#34;&#34;&#34;返回规范化 runtime-auth mode，兼容旧的 verifier_flavor 配置。&#34;&#34;&#34;
+    if self.mode is not None:
+        return self.mode
+    if self.verifier_flavor == &#34;compiled&#34;:
+        return &#34;toy_compiled_research&#34;
+    return &#34;toy_wrapper&#34;</code></pre>
+</details>
+<div class="desc"><p>返回规范化 runtime-auth mode，兼容旧的 verifier_flavor 配置。</p></div>
+</dd>
+<dt id="saga.config.ToyRuntimeAuthConfig.toy_verifier_flavor"><code class="name flex">
+<span>def <span class="ident">toy_verifier_flavor</span></span>(<span>self) ‑> Literal['compiled', 'wrapper']</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def toy_verifier_flavor(self) -&gt; Literal[&#34;compiled&#34;, &#34;wrapper&#34;]:
+    &#34;&#34;&#34;返回 toy mode 对应的 verifier flavor，ML-DSA mode 不允许调用。&#34;&#34;&#34;
+    resolved_mode = self.resolved_mode()
+    if resolved_mode == &#34;toy_compiled_research&#34;:
+        return &#34;compiled&#34;
+    if resolved_mode == &#34;toy_wrapper&#34;:
+        return &#34;wrapper&#34;
+    raise ValueError(&#34;mldsa_external mode does not use a toy verifier flavor&#34;)</code></pre>
+</details>
+<div class="desc"><p>返回 toy mode 对应的 verifier flavor，ML-DSA mode 不允许调用。</p></div>
 </dd>
 </dl>
 </dd>
@@ -340,6 +498,7 @@ class UserConfig(Serializable):
 <li><code><a title="saga.config.AgentConfig.local_agent_config" href="#saga.config.AgentConfig.local_agent_config">local_agent_config</a></code></li>
 <li><code><a title="saga.config.AgentConfig.name" href="#saga.config.AgentConfig.name">name</a></code></li>
 <li><code><a title="saga.config.AgentConfig.num_one_time_keys" href="#saga.config.AgentConfig.num_one_time_keys">num_one_time_keys</a></code></li>
+<li><code><a title="saga.config.AgentConfig.toy_runtime_auth" href="#saga.config.AgentConfig.toy_runtime_auth">toy_runtime_auth</a></code></li>
 </ul>
 </li>
 <li>
@@ -349,6 +508,22 @@ class UserConfig(Serializable):
 <li><code><a title="saga.config.EndPointConfig.device_name" href="#saga.config.EndPointConfig.device_name">device_name</a></code></li>
 <li><code><a title="saga.config.EndPointConfig.ip" href="#saga.config.EndPointConfig.ip">ip</a></code></li>
 <li><code><a title="saga.config.EndPointConfig.port" href="#saga.config.EndPointConfig.port">port</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="saga.config.ToyRuntimeAuthConfig" href="#saga.config.ToyRuntimeAuthConfig">ToyRuntimeAuthConfig</a></code></h4>
+<ul class="">
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.decode_into_subclasses" href="#saga.config.ToyRuntimeAuthConfig.decode_into_subclasses">decode_into_subclasses</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.enabled" href="#saga.config.ToyRuntimeAuthConfig.enabled">enabled</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.message_bytes" href="#saga.config.ToyRuntimeAuthConfig.message_bytes">message_bytes</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.mode" href="#saga.config.ToyRuntimeAuthConfig.mode">mode</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.replay_state_dir" href="#saga.config.ToyRuntimeAuthConfig.replay_state_dir">replay_state_dir</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.resolved_mode" href="#saga.config.ToyRuntimeAuthConfig.resolved_mode">resolved_mode</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.seed" href="#saga.config.ToyRuntimeAuthConfig.seed">seed</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.strict_execution_gate" href="#saga.config.ToyRuntimeAuthConfig.strict_execution_gate">strict_execution_gate</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.toy_verifier_flavor" href="#saga.config.ToyRuntimeAuthConfig.toy_verifier_flavor">toy_verifier_flavor</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.trusted_public_keys" href="#saga.config.ToyRuntimeAuthConfig.trusted_public_keys">trusted_public_keys</a></code></li>
+<li><code><a title="saga.config.ToyRuntimeAuthConfig.verifier_flavor" href="#saga.config.ToyRuntimeAuthConfig.verifier_flavor">verifier_flavor</a></code></li>
 </ul>
 </li>
 <li>

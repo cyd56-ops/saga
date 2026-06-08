@@ -53,6 +53,7 @@ el.replaceWith(d);
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def download_file(url, save_path):
+    &#34;&#34;&#34;从 CA 端点下载证书材料文件并写入本地路径。&#34;&#34;&#34;
     response = requests.get(url, stream=True)
     if response.status_code == 200:
         with open(save_path, &#39;wb&#39;) as file:
@@ -62,7 +63,7 @@ el.replaceWith(d);
     else:
         raise ValueError(f&#34;Failed to download file from {url}  Status code: {response.status_code}&#34;)</code></pre>
 </details>
-<div class="desc"></div>
+<div class="desc"><p>从 CA 端点下载证书材料文件并写入本地路径。</p></div>
 </dd>
 <dt id="saga.ca.CA.get_SAGA_CA"><code class="name flex">
 <span>def <span class="ident">get_SAGA_CA</span></span>(<span>)</span>

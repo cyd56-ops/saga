@@ -55,6 +55,8 @@ el.replaceWith(d);
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">class Logger:
+    &#34;&#34;&#34;提供带标签和颜色的轻量控制台日志输出。&#34;&#34;&#34;
+
     COLORS = [
         &#34;\033[91m&#34;,  # Red
         &#34;\033[92m&#34;,  # Green
@@ -86,17 +88,19 @@ el.replaceWith(d);
     
     @staticmethod
     def warn(message):
+        &#34;&#34;&#34;输出固定 WARNING 标签的告警日志。&#34;&#34;&#34;
         timestamp = time.strftime(&#34;%H:%M:%S&#34;)
         color = Logger.COLORS[2]
         print(f&#34;{timestamp} {color}[WARNING] {message} {Logger.RESET}&#34;)
 
     @staticmethod
     def error(message):
+        &#34;&#34;&#34;输出固定 ERROR 标签的错误日志。&#34;&#34;&#34;
         timestamp = time.strftime(&#34;%H:%M:%S&#34;)
         color = Logger.COLORS[0]
         print(f&#34;{timestamp} {color}[ERROR] {message} {Logger.RESET}&#34;)</code></pre>
 </details>
-<div class="desc"></div>
+<div class="desc"><p>提供带标签和颜色的轻量控制台日志输出。</p></div>
 <h3>Class variables</h3>
 <dl>
 <dt id="saga.common.logger.Logger.COLORS"><code class="name">var <span class="ident">COLORS</span></code></dt>
@@ -120,11 +124,12 @@ el.replaceWith(d);
 </summary>
 <pre><code class="python">@staticmethod
 def error(message):
+    &#34;&#34;&#34;输出固定 ERROR 标签的错误日志。&#34;&#34;&#34;
     timestamp = time.strftime(&#34;%H:%M:%S&#34;)
     color = Logger.COLORS[0]
     print(f&#34;{timestamp} {color}[ERROR] {message} {Logger.RESET}&#34;)</code></pre>
 </details>
-<div class="desc"></div>
+<div class="desc"><p>输出固定 ERROR 标签的错误日志。</p></div>
 </dd>
 <dt id="saga.common.logger.Logger.hash_tag"><code class="name flex">
 <span>def <span class="ident">hash_tag</span></span>(<span>tag)</span>
@@ -177,11 +182,12 @@ The tag is hashed in order to determine the color.</p></div>
 </summary>
 <pre><code class="python">@staticmethod
 def warn(message):
+    &#34;&#34;&#34;输出固定 WARNING 标签的告警日志。&#34;&#34;&#34;
     timestamp = time.strftime(&#34;%H:%M:%S&#34;)
     color = Logger.COLORS[2]
     print(f&#34;{timestamp} {color}[WARNING] {message} {Logger.RESET}&#34;)</code></pre>
 </details>
-<div class="desc"></div>
+<div class="desc"><p>输出固定 WARNING 标签的告警日志。</p></div>
 </dd>
 </dl>
 </dd>

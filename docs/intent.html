@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>saga.intent API documentation</title>
+<meta name="description" content="Policy-aware intent objects for SAGA-PQ-CAN execution scopes.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>saga.intent</code></h1>
+</header>
+<section id="section-intro">
+<p>Policy-aware intent objects for SAGA-PQ-CAN execution scopes.</p>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="saga.intent.AgentIntent"><code class="flex name class">
+<span>class <span class="ident">AgentIntent</span></span>
+<span>(</span><span>action_scope: str,<br>requested_scopes: tuple[str, ...] = (),<br>justification: str = '')</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass(frozen=True)
+class AgentIntent:
+    &#34;&#34;&#34;LLM 或本地 runtime 提出的执行 scope 请求。&#34;&#34;&#34;
+
+    action_scope: str
+    requested_scopes: tuple[str, ...] = ()
+    justification: str = &#34;&#34;
+
+    def __post_init__(self) -&gt; None:
+        &#34;&#34;&#34;规范化并校验 intent 中的 scope 字段。&#34;&#34;&#34;
+        parse_action_scope(self.action_scope)
+        normalized = []
+        for scope in self.requested_scopes:
+            parse_action_scope(scope)
+            normalized.append(scope)
+        object.__setattr__(self, &#34;requested_scopes&#34;, tuple(sorted(set(normalized))))</code></pre>
+</details>
+<div class="desc"><p>LLM 或本地 runtime 提出的执行 scope 请求。</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="saga.intent.AgentIntent.action_scope"><code class="name">var <span class="ident">action_scope</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.intent.AgentIntent.justification"><code class="name">var <span class="ident">justification</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.intent.AgentIntent.requested_scopes"><code class="name">var <span class="ident">requested_scopes</span> : tuple[str, ...]</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+<dt id="saga.intent.IntentCompiler"><code class="flex name class">
+<span>class <span class="ident">IntentCompiler</span></span>
+<span>(</span><span>policy_scopes: Iterable[str])</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class IntentCompiler:
+    &#34;&#34;&#34;Compile untrusted requested scopes into signed authorized scopes.
+
+    LLM/requested scopes 只是 proposal；最终签名 scope 只能来自本地 policy 允许集合。
+    &#34;&#34;&#34;
+
+    def __init__(self, policy_scopes: Iterable[str]) -&gt; None:
+        &#34;&#34;&#34;保存本地 policy 允许的 scope 集合。&#34;&#34;&#34;
+        normalized = []
+        for scope in policy_scopes:
+            parse_action_scope(scope)
+            normalized.append(scope)
+        self.policy_scopes = tuple(sorted(set(normalized)))
+
+    def compile(self, intent: AgentIntent) -&gt; PolicyDecision:
+        &#34;&#34;&#34;将 intent 编译为最终可签名的授权 scope 集合。&#34;&#34;&#34;
+        requested = (intent.action_scope, *intent.requested_scopes)
+        allowed = {
+            requested_scope
+            for requested_scope in requested
+            if self._policy_allows(requested_scope)
+        }
+        rejected = sorted(set(requested) - allowed)
+        reason = self._decision_reason(intent.action_scope, rejected)
+        return PolicyDecision(
+            allowed_scopes=tuple(sorted(allowed)),
+            rejected_scopes=tuple(rejected),
+            reason=reason,
+        )
+
+    def _policy_allows(self, requested_scope: str) -&gt; bool:
+        &#34;&#34;&#34;判断 requested scope 是否被本地 policy 允许。&#34;&#34;&#34;
+        return action_scopes_allow(self.policy_scopes, requested_scope)
+
+    def _decision_reason(
+        self,
+        action_scope: str,
+        rejected_scopes: list[str],
+    ) -&gt; str:
+        &#34;&#34;&#34;根据被拒绝 scope 生成稳定 policy 审计原因。&#34;&#34;&#34;
+        if not rejected_scopes:
+            return &#34;authorized&#34;
+        if action_scope in rejected_scopes:
+            return &#34;policy_reject&#34;
+        return &#34;scope_escalation&#34;</code></pre>
+</details>
+<div class="desc"><p>Compile untrusted requested scopes into signed authorized scopes.</p>
+<p>LLM/requested scopes 只是 proposal；最终签名 scope 只能来自本地 policy 允许集合。</p>
+<p>保存本地 policy 允许的 scope 集合。</p></div>
+<h3>Methods</h3>
+<dl>
+<dt id="saga.intent.IntentCompiler.compile"><code class="name flex">
+<span>def <span class="ident">compile</span></span>(<span>self,<br>intent: <a title="saga.intent.AgentIntent" href="#saga.intent.AgentIntent">AgentIntent</a>) ‑> <a title="saga.intent.PolicyDecision" href="#saga.intent.PolicyDecision">PolicyDecision</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def compile(self, intent: AgentIntent) -&gt; PolicyDecision:
+    &#34;&#34;&#34;将 intent 编译为最终可签名的授权 scope 集合。&#34;&#34;&#34;
+    requested = (intent.action_scope, *intent.requested_scopes)
+    allowed = {
+        requested_scope
+        for requested_scope in requested
+        if self._policy_allows(requested_scope)
+    }
+    rejected = sorted(set(requested) - allowed)
+    reason = self._decision_reason(intent.action_scope, rejected)
+    return PolicyDecision(
+        allowed_scopes=tuple(sorted(allowed)),
+        rejected_scopes=tuple(rejected),
+        reason=reason,
+    )</code></pre>
+</details>
+<div class="desc"><p>将 intent 编译为最终可签名的授权 scope 集合。</p></div>
+</dd>
+</dl>
+</dd>
+<dt id="saga.intent.PolicyDecision"><code class="flex name class">
+<span>class <span class="ident">PolicyDecision</span></span>
+<span>(</span><span>allowed_scopes: tuple[str, ...], rejected_scopes: tuple[str, ...], reason: str)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass(frozen=True)
+class PolicyDecision:
+    &#34;&#34;&#34;本地 policy 对 intent scope proposal 的裁定结果。&#34;&#34;&#34;
+
+    allowed_scopes: tuple[str, ...]
+    rejected_scopes: tuple[str, ...]
+    reason: str</code></pre>
+</details>
+<div class="desc"><p>本地 policy 对 intent scope proposal 的裁定结果。</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="saga.intent.PolicyDecision.allowed_scopes"><code class="name">var <span class="ident">allowed_scopes</span> : tuple[str, ...]</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.intent.PolicyDecision.reason"><code class="name">var <span class="ident">reason</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.intent.PolicyDecision.rejected_scopes"><code class="name">var <span class="ident">rejected_scopes</span> : tuple[str, ...]</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<header>
+<a class="homelink" rel="home" title="SAGA Home" href="https://gsiros.github.io/saga/">
+<img src="https://raw.githubusercontent.com/gsiros/saga/94f3562b8f9821717bff825aa4111b2ee5cecec5/assets/logo.png" alt="SAGA" width="256">
+</a>
+</header>
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="saga" href="index.html">saga</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="saga.intent.AgentIntent" href="#saga.intent.AgentIntent">AgentIntent</a></code></h4>
+<ul class="">
+<li><code><a title="saga.intent.AgentIntent.action_scope" href="#saga.intent.AgentIntent.action_scope">action_scope</a></code></li>
+<li><code><a title="saga.intent.AgentIntent.justification" href="#saga.intent.AgentIntent.justification">justification</a></code></li>
+<li><code><a title="saga.intent.AgentIntent.requested_scopes" href="#saga.intent.AgentIntent.requested_scopes">requested_scopes</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="saga.intent.IntentCompiler" href="#saga.intent.IntentCompiler">IntentCompiler</a></code></h4>
+<ul class="">
+<li><code><a title="saga.intent.IntentCompiler.compile" href="#saga.intent.IntentCompiler.compile">compile</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="saga.intent.PolicyDecision" href="#saga.intent.PolicyDecision">PolicyDecision</a></code></h4>
+<ul class="">
+<li><code><a title="saga.intent.PolicyDecision.allowed_scopes" href="#saga.intent.PolicyDecision.allowed_scopes">allowed_scopes</a></code></li>
+<li><code><a title="saga.intent.PolicyDecision.reason" href="#saga.intent.PolicyDecision.reason">reason</a></code></li>
+<li><code><a title="saga.intent.PolicyDecision.rejected_scopes" href="#saga.intent.PolicyDecision.rejected_scopes">rejected_scopes</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>

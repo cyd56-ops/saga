@@ -98,6 +98,12 @@ el.replaceWith(d);
             raise ValueError(f&#34;No timing data for run ID: {run_id}&#34;)
         return run[&#34;elapsed&#34;]
 
+    def has_run(self, run_id):
+        &#34;&#34;&#34;
+        Return whether the monitor has recorded a given run ID.
+        &#34;&#34;&#34;
+        return run_id in self._runs
+
     def elapsed_all(self):
         &#34;&#34;&#34;
         Returns a dictionary of all elapsed times.
@@ -150,6 +156,22 @@ el.replaceWith(d);
     return {rid: self.elapsed(rid) for rid in self._runs}</code></pre>
 </details>
 <div class="desc"><p>Returns a dictionary of all elapsed times.</p></div>
+</dd>
+<dt id="saga.common.overhead.Monitor.has_run"><code class="name flex">
+<span>def <span class="ident">has_run</span></span>(<span>self, run_id)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def has_run(self, run_id):
+    &#34;&#34;&#34;
+    Return whether the monitor has recorded a given run ID.
+    &#34;&#34;&#34;
+    return run_id in self._runs</code></pre>
+</details>
+<div class="desc"><p>Return whether the monitor has recorded a given run ID.</p></div>
 </dd>
 <dt id="saga.common.overhead.Monitor.reset"><code class="name flex">
 <span>def <span class="ident">reset</span></span>(<span>self, run_id=None)</span>
@@ -240,9 +262,10 @@ el.replaceWith(d);
 <ul>
 <li>
 <h4><code><a title="saga.common.overhead.Monitor" href="#saga.common.overhead.Monitor">Monitor</a></code></h4>
-<ul class="">
+<ul class="two-column">
 <li><code><a title="saga.common.overhead.Monitor.elapsed" href="#saga.common.overhead.Monitor.elapsed">elapsed</a></code></li>
 <li><code><a title="saga.common.overhead.Monitor.elapsed_all" href="#saga.common.overhead.Monitor.elapsed_all">elapsed_all</a></code></li>
+<li><code><a title="saga.common.overhead.Monitor.has_run" href="#saga.common.overhead.Monitor.has_run">has_run</a></code></li>
 <li><code><a title="saga.common.overhead.Monitor.reset" href="#saga.common.overhead.Monitor.reset">reset</a></code></li>
 <li><code><a title="saga.common.overhead.Monitor.start" href="#saga.common.overhead.Monitor.start">start</a></code></li>
 <li><code><a title="saga.common.overhead.Monitor.stop" href="#saga.common.overhead.Monitor.stop">stop</a></code></li>

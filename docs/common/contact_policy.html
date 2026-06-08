@@ -180,6 +180,7 @@ The rulebook is a list of rules, where each rule is a dictionary with the follow
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def compare_aid_patterns(p1, p2):
+    &#34;&#34;&#34;比较两个 AID 模式的特异度，供调试策略优先级使用。&#34;&#34;&#34;
     s1 = aid_specificity(p1)
     s2 = aid_specificity(p2)
     if s1 &gt; s2:
@@ -189,7 +190,7 @@ The rulebook is a list of rules, where each rule is a dictionary with the follow
     else:
         return f&#34;&#39;{p1}&#39; and &#39;{p2}&#39; are equally specific&#34;</code></pre>
 </details>
-<div class="desc"></div>
+<div class="desc"><p>比较两个 AID 模式的特异度，供调试策略优先级使用。</p></div>
 </dd>
 <dt id="saga.common.contact_policy.match"><code class="name flex">
 <span>def <span class="ident">match</span></span>(<span>contact_rulebook, t_aid)</span>
@@ -204,6 +205,7 @@ The rulebook is a list of rules, where each rule is a dictionary with the follow
     Returns the budget for a given AID.
     The budget is calculated by the specificity of the AID pattern.
     The budget that corresponds to the most specific pattern is returned.
+    If multiple patterns have the same specificity, the first match wins.
     &#34;&#34;&#34;
     # Check that the t_aid is valid (correct format)
     if not check_aid(t_aid):
@@ -211,17 +213,22 @@ The rulebook is a list of rules, where each rule is a dictionary with the follow
     
     # Init the vars to be returned
     best_pattern = None
+    best_specificity = -1
     budget = 0
     # Check for matching pattern:
     for rule in contact_rulebook:
         if fnmatch.fnmatch(t_aid, rule[&#39;pattern&#39;]):
-            if aid_specificity(rule[&#39;pattern&#39;]) &gt; aid_specificity(best_pattern):
+            rule_specificity = aid_specificity(rule[&#39;pattern&#39;])
+            if rule_specificity &gt; best_specificity:
+                best_pattern = rule[&#39;pattern&#39;]
+                best_specificity = rule_specificity
                 budget = rule[&#39;budget&#39;]
     return budget</code></pre>
 </details>
 <div class="desc"><p>Returns the budget for a given AID.
 The budget is calculated by the specificity of the AID pattern.
-The budget that corresponds to the most specific pattern is returned.</p></div>
+The budget that corresponds to the most specific pattern is returned.
+If multiple patterns have the same specificity, the first match wins.</p></div>
 </dd>
 <dt id="saga.common.contact_policy.pattern_specificity_component"><code class="name flex">
 <span>def <span class="ident">pattern_specificity_component</span></span>(<span>component, weight=1)</span>
@@ -232,6 +239,7 @@ The budget that corresponds to the most specific pattern is returned.</p></div>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def pattern_specificity_component(component, weight=1):
+    &#34;&#34;&#34;计算单个 AID 模式片段的匹配特异度分数。&#34;&#34;&#34;
     score = 0
     i = 0
     while i &lt; len(component):
@@ -252,7 +260,7 @@ The budget that corresponds to the most specific pattern is returned.</p></div>
         i += 1
     return score</code></pre>
 </details>
-<div class="desc"></div>
+<div class="desc"><p>计算单个 AID 模式片段的匹配特异度分数。</p></div>
 </dd>
 </dl>
 </section>

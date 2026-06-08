@@ -124,15 +124,73 @@ el.replaceWith(d);
 
         self.monitor = Monitor()
 
+    def _normalize_timestamp(self, timestamp):
+        &#34;&#34;&#34;Normalize timestamps to UTC for comparisons.&#34;&#34;&#34;
+        if timestamp is None:
+            return None
+        if timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.astimezone(timezone.utc)
+
+    def _get_authenticated_user(self, uid, user_jwt):
+        &#34;&#34;&#34;Validate a user + JWT pair and return the matching user record.&#34;&#34;&#34;
+        user = self.users_collection.find_one({&#34;uid&#34;: uid})
+        if not user:
+            logger.error(f&#34;User {uid} not found.&#34;)
+            return None, (jsonify({&#34;message&#34;: &#34;User not found&#34;}), 404)
+
+        token_record = next(
+            (token for token in user.get(&#34;auth_tokens&#34;, []) if token.get(&#34;token&#34;) == user_jwt),
+            None
+        )
+        if token_record is None:
+            logger.error(f&#34;User {uid} not authenticated.&#34;)
+            return None, (jsonify({&#34;message&#34;: &#34;User not authenticated&#34;}), 401)
+
+        now = datetime.now(timezone.utc)
+        exp = self._normalize_timestamp(token_record.get(&#34;exp&#34;))
+        if exp is None or now &gt; exp:
+            logger.error(f&#34;User {uid} token expired.&#34;)
+            return None, (jsonify({&#34;message&#34;: &#34;Token expired.&#34;}), 401)
+
+        return user, None
+
+    def _consume_auth_token(self, uid, user_jwt):
+        &#34;&#34;&#34;Invalidate a JWT after a privileged lifecycle operation succeeds.&#34;&#34;&#34;
+        self.users_collection.update_one(
+            {&#34;uid&#34;: uid},
+            {&#34;$pull&#34;: {&#34;auth_tokens&#34;: {&#34;token&#34;: user_jwt}}}
+        )
+
+    def _get_owned_agent(self, uid, aid):
+        &#34;&#34;&#34;Return the agent record if it belongs to the authenticated user.&#34;&#34;&#34;
+        agent = self.agents_collection.find_one({&#34;aid&#34;: aid})
+        if agent is None:
+            logger.error(f&#34;Agent {aid} not found.&#34;)
+            return None, (jsonify({&#34;message&#34;: &#34;Agent not found.&#34;}), 404)
+
+        owner_uid = agent.get(&#34;uid&#34;) or aid.split(&#34;:&#34;, 1)[0]
+        if owner_uid != uid:
+            logger.error(f&#34;User {uid} is not allowed to manage agent {aid}.&#34;)
+            return None, (jsonify({&#34;message&#34;: &#34;Agent ownership mismatch.&#34;}), 403)
+
+        return agent, None
+
+    def _is_agent_active(self, agent_metadata):
+        &#34;&#34;&#34;Treat missing active flags from old records as active.&#34;&#34;&#34;
+        return agent_metadata.get(&#34;active&#34;, True) is not False
+
     def _register_routes(self):
         &#34;&#34;&#34;Registers all Flask routes for the provider.&#34;&#34;&#34;
 
         @self.app.route(&#39;/&#39;)
         def index():
+            &#34;&#34;&#34;返回 provider 健康检查用的最小首页响应。&#34;&#34;&#34;
             return &#34;&lt;h1&gt;Hello, World!&lt;/h1&gt;&#34;
 
         @self.app.route(&#39;/certificate&#39;, methods=[&#39;GET&#39;])
         def certificate():
+            &#34;&#34;&#34;返回 provider 的 PEM 证书，供 agent 验证 provider 身份。&#34;&#34;&#34;
             return jsonify({&#34;certificate&#34;: base64.b64encode(self.cert.public_bytes(
                 sc.serialization.Encoding.PEM
             )).decode(&#34;utf-8&#34;)}), 200
@@ -232,24 +290,9 @@ el.replaceWith(d);
             uid = data.get(&#34;uid&#34;)
             user_jwt = data.get(&#34;jwt&#34;)
 
-            # Validate user
-            user = self.users_collection.find_one({&#34;uid&#34;: uid})
-            if not user:
-                logger.error(f&#34;User {uid} not found.&#34;)
-                return jsonify({&#34;message&#34;: &#34;User not found&#34;}), 404
-            
-            # Make sure that the user has been recently authenticated
-            usr_record = self.users_collection.find_one({&#34;uid&#34;: uid, &#34;auth_tokens.token&#34;: user_jwt})
-            if not usr_record:
-                logger.error(f&#34;User {uid} not authenticated.&#34;)
-                return jsonify({&#34;message&#34;: &#34;User not authenticated&#34;}), 401
-            
-            # Check that the authentication token is valid and not expired
-            now = datetime.now(timezone.utc)
-            exp = usr_record[&#34;auth_tokens&#34;][0][&#34;exp&#34;].replace(tzinfo=timezone.utc)
-            if now &gt; exp:
-                logger.error(f&#34;User {uid} token expired.&#34;)
-                return jsonify({&#34;message&#34;: &#34;Token expired.&#34;}), 401
+            user, auth_error = self._get_authenticated_user(uid, user_jwt)
+            if auth_error is not None:
+                return auth_error
 
             # ========================================================================
             # Start the agent registration processing. At this point, the provider 
@@ -358,12 +401,7 @@ el.replaceWith(d);
             otk_sigs_bytes = [base64.b64decode(sig) for sig in otk_sigs]
             # Verify the signatures of the one-time keys using the user&#39;s public signing key:
             for i, otk in enumerate(otks_bytes):
-                try:
-                    pk_u.verify(
-                        otk_sigs_bytes[i],
-                        otk
-                    )
-                except:
+                if not sc.verify_otk_signature(pk_u, aid, otk, otk_sigs_bytes[i]):
                     logger.error(f&#34;Invalid one-time key signature.&#34;)
                     return jsonify({&#34;message&#34;: &#34;Invalid one-time key signature&#34;}), 401
             
@@ -375,7 +413,12 @@ el.replaceWith(d);
                 logger.error(f&#34;Access control key already in use.&#34;)
                 return jsonify({&#34;message&#34;: &#34;Access control key already in use&#34;}), 401
             for otk in otks_bytes:
-                if self.agents_collection.find_one({&#34;one_time_keys&#34;: {&#34;$elemMatch&#34;: {&#34;$eq&#34;: otk}}}):
+                if self.agents_collection.find_one({
+                    &#34;$or&#34;: [
+                        {&#34;one_time_keys&#34;: {&#34;$elemMatch&#34;: {&#34;$eq&#34;: otk}}},
+                        {&#34;used_one_time_keys&#34;: {&#34;$elemMatch&#34;: {&#34;$eq&#34;: otk}}}
+                    ]
+                }):
                     logger.error(f&#34;One-time key already in use.&#34;)
                     return jsonify({&#34;message&#34;: &#34;One-time key already in use&#34;}), 401
 
@@ -408,27 +451,176 @@ el.replaceWith(d);
             stamp_bytes = base64.b64encode(stamp).decode(&#34;utf-8&#34;)
 
             self.agents_collection.insert_one({
+                &#34;uid&#34;: uid,
                 &#34;aid&#34;: aid,
                 &#34;device&#34;: device,
                 &#34;IP&#34;: ip,
                 &#34;port&#34;: port,
+                &#34;active&#34;: True,
+                &#34;deactivated_at&#34;: None,
                 &#34;agent_cert&#34;: agent_cert_bytes,
                 &#34;pac&#34;: pac_bytes,
                 &#34;one_time_keys&#34;: otks_bytes,
+                &#34;used_one_time_keys&#34;: [],
                 # Contact rulebook:
                 &#34;contact_rulebook&#34;: contact_rulebook,
                 # Signatures:
                 &#34;agent_sig&#34;: agent_sig_bytes,
                 &#34;one_time_key_sigs&#34;: otk_sigs_bytes,
+                &#34;used_one_time_key_sigs&#34;: [],
                 # Budget Counter:
                 &#34;counter&#34;: []
             })
             # Pop the JWT from the user&#39;s record so that it cannot be reused for other purposes.
-            self.users_collection.update_one({&#34;uid&#34;: uid}, {&#34;$pull&#34;: {&#34;auth_tokens&#34;: {&#34;token&#34;: user_jwt}}})
+            self._consume_auth_token(uid, user_jwt)
             logger.log(&#34;PROVIDER&#34;, f&#34;Agent {aid} registered successfully.&#34;)
             self.monitor.stop(&#34;provider:agent_register&#34;)
             logger.log(&#34;OVERHEAD&#34;, f&#34;provider:agent_register: {self.monitor.elapsed(&#39;provider:agent_register&#39;)}&#34;)
             return jsonify({&#34;message&#34;: &#34;Agent registered successfully&#34;, &#34;stamp&#34;: stamp_bytes}), 201
+
+        @self.app.route(&#39;/update_policy&#39;, methods=[&#39;POST&#39;])
+        def update_policy():
+            &#34;&#34;&#34;Update an agent&#39;s contact policy and reset cached access budgets.&#34;&#34;&#34;
+            self.monitor.start(&#34;provider:policy_update&#34;)
+            data = request.json
+            uid = data.get(&#34;uid&#34;)
+            user_jwt = data.get(&#34;jwt&#34;)
+            aid = data.get(&#34;aid&#34;)
+            contact_rulebook = data.get(&#34;contact_rulebook&#34;)
+
+            if not aid or not check_aid(aid):
+                logger.error(f&#34;Invalid agent aid format.&#34;)
+                return jsonify({&#34;message&#34;: &#34;Invalid agent aid format&#34;}), 400
+            if not check_rulebook(contact_rulebook):
+                return jsonify({&#34;message&#34;: &#34;Invalid contact rulebook format&#34;}), 400
+
+            _, auth_error = self._get_authenticated_user(uid, user_jwt)
+            if auth_error is not None:
+                return auth_error
+
+            agent, agent_error = self._get_owned_agent(uid, aid)
+            if agent_error is not None:
+                return agent_error
+            if not self._is_agent_active(agent):
+                return jsonify({&#34;message&#34;: &#34;Agent is deactivated.&#34;}), 409
+
+            self.agents_collection.update_one(
+                {&#34;aid&#34;: aid},
+                {
+                    &#34;$set&#34;: {
+                        &#34;contact_rulebook&#34;: contact_rulebook,
+                        &#34;counter&#34;: [],
+                        &#34;updated_at&#34;: datetime.now(timezone.utc)
+                    }
+                }
+            )
+            self._consume_auth_token(uid, user_jwt)
+            self.monitor.stop(&#34;provider:policy_update&#34;)
+            logger.log(&#34;OVERHEAD&#34;, f&#34;provider:policy_update: {self.monitor.elapsed(&#39;provider:policy_update&#39;)}&#34;)
+            return jsonify({&#34;message&#34;: &#34;Agent contact policy updated successfully.&#34;}), 200
+
+        @self.app.route(&#39;/deactivate_agent&#39;, methods=[&#39;POST&#39;])
+        def deactivate_agent():
+            &#34;&#34;&#34;Deactivate an agent so it can no longer initiate or receive new sessions.&#34;&#34;&#34;
+            self.monitor.start(&#34;provider:agent_deactivate&#34;)
+            data = request.json
+            uid = data.get(&#34;uid&#34;)
+            user_jwt = data.get(&#34;jwt&#34;)
+            aid = data.get(&#34;aid&#34;)
+
+            if not aid or not check_aid(aid):
+                logger.error(f&#34;Invalid agent aid format.&#34;)
+                return jsonify({&#34;message&#34;: &#34;Invalid agent aid format&#34;}), 400
+
+            _, auth_error = self._get_authenticated_user(uid, user_jwt)
+            if auth_error is not None:
+                return auth_error
+
+            agent, agent_error = self._get_owned_agent(uid, aid)
+            if agent_error is not None:
+                return agent_error
+            if not self._is_agent_active(agent):
+                return jsonify({&#34;message&#34;: &#34;Agent is already deactivated.&#34;}), 409
+
+            now = datetime.now(timezone.utc)
+            self.agents_collection.update_one(
+                {&#34;aid&#34;: aid},
+                {
+                    &#34;$set&#34;: {
+                        &#34;active&#34;: False,
+                        &#34;deactivated_at&#34;: now,
+                        &#34;updated_at&#34;: now
+                    }
+                }
+            )
+            self._consume_auth_token(uid, user_jwt)
+            self.monitor.stop(&#34;provider:agent_deactivate&#34;)
+            logger.log(&#34;OVERHEAD&#34;, f&#34;provider:agent_deactivate: {self.monitor.elapsed(&#39;provider:agent_deactivate&#39;)}&#34;)
+            return jsonify({&#34;message&#34;: &#34;Agent deactivated successfully.&#34;}), 200
+
+        @self.app.route(&#39;/refresh_otks&#39;, methods=[&#39;POST&#39;])
+        def refresh_otks():
+            &#34;&#34;&#34;Append a fresh batch of one-time keys for an existing agent.&#34;&#34;&#34;
+            self.monitor.start(&#34;provider:otk_refresh&#34;)
+            data = request.json
+            uid = data.get(&#34;uid&#34;)
+            user_jwt = data.get(&#34;jwt&#34;)
+            application = data.get(&#34;application&#34;, {})
+            aid = application.get(&#34;aid&#34;)
+
+            if not aid or not check_aid(aid):
+                logger.error(f&#34;Invalid agent aid format.&#34;)
+                return jsonify({&#34;message&#34;: &#34;Invalid agent aid format&#34;}), 400
+
+            user, auth_error = self._get_authenticated_user(uid, user_jwt)
+            if auth_error is not None:
+                return auth_error
+
+            agent, agent_error = self._get_owned_agent(uid, aid)
+            if agent_error is not None:
+                return agent_error
+            if not self._is_agent_active(agent):
+                return jsonify({&#34;message&#34;: &#34;Agent is deactivated.&#34;}), 409
+
+            otks = application.get(&#34;otks&#34;, [])
+            otk_sigs = application.get(&#34;otk_sigs&#34;, [])
+            if len(otks) == 0 or len(otks) != len(otk_sigs):
+                return jsonify({&#34;message&#34;: &#34;Invalid one-time key batch.&#34;}), 400
+
+            otks_bytes = [base64.b64decode(otk) for otk in otks]
+            otk_sigs_bytes = [base64.b64decode(sig) for sig in otk_sigs]
+
+            crt_u = sc.bytesToX509Certificate(user[&#34;crt_u&#34;])
+            pk_u = crt_u.public_key()
+            for i, otk in enumerate(otks_bytes):
+                if not sc.verify_otk_signature(pk_u, aid, otk, otk_sigs_bytes[i]):
+                    logger.error(f&#34;Invalid one-time key signature.&#34;)
+                    return jsonify({&#34;message&#34;: &#34;Invalid one-time key signature&#34;}), 401
+
+            for otk in otks_bytes:
+                if self.agents_collection.find_one({
+                    &#34;$or&#34;: [
+                        {&#34;one_time_keys&#34;: {&#34;$elemMatch&#34;: {&#34;$eq&#34;: otk}}},
+                        {&#34;used_one_time_keys&#34;: {&#34;$elemMatch&#34;: {&#34;$eq&#34;: otk}}}
+                    ]
+                }):
+                    logger.error(f&#34;One-time key already in use.&#34;)
+                    return jsonify({&#34;message&#34;: &#34;One-time key already in use&#34;}), 401
+
+            self.agents_collection.update_one(
+                {&#34;aid&#34;: aid},
+                {
+                    &#34;$push&#34;: {
+                        &#34;one_time_keys&#34;: {&#34;$each&#34;: otks_bytes},
+                        &#34;one_time_key_sigs&#34;: {&#34;$each&#34;: otk_sigs_bytes}
+                    },
+                    &#34;$set&#34;: {&#34;updated_at&#34;: datetime.now(timezone.utc)}
+                }
+            )
+            self._consume_auth_token(uid, user_jwt)
+            self.monitor.stop(&#34;provider:otk_refresh&#34;)
+            logger.log(&#34;OVERHEAD&#34;, f&#34;provider:otk_refresh: {self.monitor.elapsed(&#39;provider:otk_refresh&#39;)}&#34;)
+            return jsonify({&#34;message&#34;: &#34;Agent one-time keys refreshed successfully.&#34;}), 200
 
         @self.app.route(&#39;/access&#39;, methods=[&#39;POST&#39;])
         def access():
@@ -451,10 +643,10 @@ el.replaceWith(d);
             data = request.json
             i_aid = data.get(&#34;i_aid&#34;, None) # the initiating agent
             t_aid = data.get(&#34;t_aid&#34;, None) # the receiving agent
-            if not check_aid(t_aid):
+            if not t_aid or not check_aid(t_aid):
                 logger.error(f&#34;Invalid agent ID format.&#34;)
                 return jsonify({&#34;message&#34;:f&#34;Invalid agent ID: {t_aid} format.&#34;}), 400
-            if not check_aid(i_aid):
+            if not i_aid or not check_aid(i_aid):
                 logger.error(f&#34;Invalid agent ID format.&#34;)
                 return jsonify({&#34;message&#34;:f&#34;Invalid agent ID: {i_aid} format.&#34;}), 400
             uid = t_aid.split(&#34;:&#34;)[0]
@@ -464,6 +656,9 @@ el.replaceWith(d);
             if i_agent_metadata is None:
                 logger.error(f&#34;ACCESS DENIED. IMPERSONATION.&#34;)
                 return jsonify({&#34;message&#34;:&#34;Agent not found.&#34;}), 403
+            if not self._is_agent_active(i_agent_metadata):
+                logger.error(f&#34;ACCESS DENIED. Initiating agent {i_aid} is deactivated.&#34;)
+                return jsonify({&#34;message&#34;:&#34;Initiating agent is deactivated.&#34;}), 403
 
             user_metadata = self.users_collection.find_one({&#34;uid&#34; : uid})
             if user_metadata is None:
@@ -477,6 +672,9 @@ el.replaceWith(d);
             if agent_metadata_before is None:
                 logger.error(f&#34;Agent {t_aid} not found.&#34;)
                 return jsonify({&#34;message&#34;:&#34;Agent not found.&#34;}), 404
+            if not self._is_agent_active(agent_metadata_before):
+                logger.error(f&#34;Agent {t_aid} is deactivated.&#34;)
+                return jsonify({&#34;message&#34;:&#34;Agent is deactivated.&#34;}), 403
             # Check if the initiating agent is allowed to be contacted by the requesting agent.
             contact_rulebook = agent_metadata_before.get(&#34;contact_rulebook&#34;, [])
             
@@ -497,6 +695,7 @@ el.replaceWith(d);
             t_agent_metadata = self.agents_collection.find_one_and_update(
                 {
                     &#34;aid&#34;: t_aid,
+                    &#34;active&#34;: { &#34;$ne&#34;: False },
                     &#34;one_time_keys&#34;: { &#34;$ne&#34;: [] },
                     &#34;counter&#34;: {
                         &#34;$not&#34;: {
@@ -601,13 +800,29 @@ el.replaceWith(d);
             # Include the user&#39;s identity key in the response
             crt_u_bytes = user_metadata.get(&#34;crt_u&#34;)
             t_agent_metadata.update({&#34;crt_u&#34;: crt_u_bytes})
+            last_otk = t_agent_metadata[&#34;one_time_keys&#34;][-1]
+            last_otk_sig = t_agent_metadata[&#34;one_time_key_sigs&#34;][-1]
+            self.agents_collection.update_one(
+                {&#34;aid&#34;: t_aid},
+                {
+                    &#34;$push&#34;: {
+                        &#34;used_one_time_keys&#34;: last_otk,
+                        &#34;used_one_time_key_sigs&#34;: last_otk_sig
+                    }
+                }
+            )
             # Remove the one time keys from the response except the last one:
-            t_agent_metadata[&#39;one_time_keys&#39;] = [t_agent_metadata[&#39;one_time_keys&#39;][-1]]
-            t_agent_metadata[&#39;one_time_key_sigs&#39;] = [t_agent_metadata[&#39;one_time_key_sigs&#39;][-1]]
+            t_agent_metadata[&#39;one_time_keys&#39;] = [last_otk]
+            t_agent_metadata[&#39;one_time_key_sigs&#39;] = [last_otk_sig]
             # Remove the contact rulebook from the response
             t_agent_metadata.pop(&#34;contact_rulebook&#34;, None)
             t_agent_metadata.pop(&#34;_id&#34;, None)
+            t_agent_metadata.pop(&#34;uid&#34;, None)
+            t_agent_metadata.pop(&#34;active&#34;, None)
+            t_agent_metadata.pop(&#34;deactivated_at&#34;, None)
             t_agent_metadata.pop(&#34;counter&#34;, None)
+            t_agent_metadata.pop(&#34;used_one_time_keys&#34;, None)
+            t_agent_metadata.pop(&#34;used_one_time_key_sigs&#34;, None)
 
             # Stop stopwatch:
             self.monitor.stop(&#34;provider:access&#34;)

@@ -350,8 +350,8 @@ el.replaceWith(d);
         .issuer_name(ca_subject)  # Self-signed
         .public_key(ca_public_key)
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.now(tz=datetime.timezone.utc))
-        .not_valid_after(datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(days=10 * 365))  # Valid for 10 years
+        .not_valid_before(utc_now())
+        .not_valid_after(utc_now() + datetime.timedelta(days=10 * 365))  # Valid for 10 years
         .add_extension(
             x509.BasicConstraints(ca=True, path_length=1), critical=True
         ).add_extension(
@@ -428,9 +428,9 @@ el.replaceWith(d);
     ).serial_number(
         x509.random_serial_number()
     ).not_valid_before(
-        datetime.datetime.now()
+        utc_now()
     ).not_valid_after(
-        datetime.datetime.now() + datetime.timedelta(days=365)
+        utc_now() + datetime.timedelta(days=365)
     ).add_extension(
         san, critical=False # Add SAN extension
     ).sign(
@@ -496,8 +496,8 @@ el.replaceWith(d);
         .issuer_name(ca_certificate.subject)  # CA is the issuer
         .public_key(public_key)
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.now())
-        .not_valid_after(datetime.datetime.now() + datetime.timedelta(days=365))
+        .not_valid_before(utc_now())
+        .not_valid_after(utc_now() + datetime.timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)  # Not a CA certificate
         .add_extension(
             x509.SubjectAlternativeName([
@@ -607,6 +607,30 @@ el.replaceWith(d);
     return certificate</code></pre>
 </details>
 <div class="desc"><p>Load an X.509 certificate from a file.</p></div>
+</dd>
+<dt id="saga.common.crypto.otk_signature_payload"><code class="name flex">
+<span>def <span class="ident">otk_signature_payload</span></span>(<span>aid: str, otk: bytes) ‑> bytes</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def otk_signature_payload(aid: str, otk: bytes) -&gt; bytes:
+    &#34;&#34;&#34;构造绑定 agent 身份的一次性公钥签名载荷。&#34;&#34;&#34;
+    payload = {
+        &#34;domain&#34;: &#34;saga:otk-signature:v1&#34;,
+        &#34;aid&#34;: aid,
+        &#34;otk&#34;: base64.b64encode(otk).decode(&#34;ascii&#34;),
+    }
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(&#34;,&#34;, &#34;:&#34;),
+        ensure_ascii=True,
+    ).encode(&#34;utf-8&#34;)</code></pre>
+</details>
+<div class="desc"><p>构造绑定 agent 身份的一次性公钥签名载荷。</p></div>
 </dd>
 <dt id="saga.common.crypto.pem_to_bytes"><code class="name flex">
 <span>def <span class="ident">pem_to_bytes</span></span>(<span>pem_string)</span>
@@ -848,6 +872,57 @@ el.replaceWith(d);
 <dd>The message to sign.</dd>
 </dl></div>
 </dd>
+<dt id="saga.common.crypto.sign_otk"><code class="name flex">
+<span>def <span class="ident">sign_otk</span></span>(<span>ed25519_private_key: cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey,<br>aid: str,<br>otk: bytes) ‑> bytes</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def sign_otk(ed25519_private_key: ed25519.Ed25519PrivateKey, aid: str, otk: bytes) -&gt; bytes:
+    &#34;&#34;&#34;用用户签名密钥签署绑定 agent 身份的一次性公钥。&#34;&#34;&#34;
+    return ed25519_private_key.sign(otk_signature_payload(aid, otk))</code></pre>
+</details>
+<div class="desc"><p>用用户签名密钥签署绑定 agent 身份的一次性公钥。</p></div>
+</dd>
+<dt id="saga.common.crypto.utc_now"><code class="name flex">
+<span>def <span class="ident">utc_now</span></span>(<span>) ‑> datetime.datetime</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def utc_now() -&gt; datetime.datetime:
+    &#34;&#34;&#34;Return the current UTC timestamp as a timezone-aware datetime.&#34;&#34;&#34;
+    return datetime.datetime.now(tz=datetime.timezone.utc)</code></pre>
+</details>
+<div class="desc"><p>Return the current UTC timestamp as a timezone-aware datetime.</p></div>
+</dd>
+<dt id="saga.common.crypto.verify_otk_signature"><code class="name flex">
+<span>def <span class="ident">verify_otk_signature</span></span>(<span>ed25519_public_key: cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PublicKey,<br>aid: str,<br>otk: bytes,<br>signature: bytes) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def verify_otk_signature(
+    ed25519_public_key: ed25519.Ed25519PublicKey,
+    aid: str,
+    otk: bytes,
+    signature: bytes,
+) -&gt; bool:
+    &#34;&#34;&#34;验证一次性公钥签名是否绑定到指定 agent 身份。&#34;&#34;&#34;
+    try:
+        ed25519_public_key.verify(signature, otk_signature_payload(aid, otk))
+        return True
+    except Exception:
+        return False</code></pre>
+</details>
+<div class="desc"><p>验证一次性公钥签名是否绑定到指定 agent 身份。</p></div>
+</dd>
 <dt id="saga.common.crypto.verify_signature"><code class="name flex">
 <span>def <span class="ident">verify_signature</span></span>(<span>ed25519_public_key, message, signature)</span>
 </code></dt>
@@ -959,12 +1034,16 @@ el.replaceWith(d);
 <li><code><a title="saga.common.crypto.load_ca" href="#saga.common.crypto.load_ca">load_ca</a></code></li>
 <li><code><a title="saga.common.crypto.load_ed25519_keys" href="#saga.common.crypto.load_ed25519_keys">load_ed25519_keys</a></code></li>
 <li><code><a title="saga.common.crypto.load_x509_certificate" href="#saga.common.crypto.load_x509_certificate">load_x509_certificate</a></code></li>
+<li><code><a title="saga.common.crypto.otk_signature_payload" href="#saga.common.crypto.otk_signature_payload">otk_signature_payload</a></code></li>
 <li><code><a title="saga.common.crypto.pem_to_bytes" href="#saga.common.crypto.pem_to_bytes">pem_to_bytes</a></code></li>
 <li><code><a title="saga.common.crypto.save_ca" href="#saga.common.crypto.save_ca">save_ca</a></code></li>
 <li><code><a title="saga.common.crypto.save_ed25519_keys" href="#saga.common.crypto.save_ed25519_keys">save_ed25519_keys</a></code></li>
 <li><code><a title="saga.common.crypto.save_x25519_keys" href="#saga.common.crypto.save_x25519_keys">save_x25519_keys</a></code></li>
 <li><code><a title="saga.common.crypto.save_x509_certificate" href="#saga.common.crypto.save_x509_certificate">save_x509_certificate</a></code></li>
 <li><code><a title="saga.common.crypto.sign_message" href="#saga.common.crypto.sign_message">sign_message</a></code></li>
+<li><code><a title="saga.common.crypto.sign_otk" href="#saga.common.crypto.sign_otk">sign_otk</a></code></li>
+<li><code><a title="saga.common.crypto.utc_now" href="#saga.common.crypto.utc_now">utc_now</a></code></li>
+<li><code><a title="saga.common.crypto.verify_otk_signature" href="#saga.common.crypto.verify_otk_signature">verify_otk_signature</a></code></li>
 <li><code><a title="saga.common.crypto.verify_signature" href="#saga.common.crypto.verify_signature">verify_signature</a></code></li>
 <li><code><a title="saga.common.crypto.verify_x509_certificate" href="#saga.common.crypto.verify_x509_certificate">verify_x509_certificate</a></code></li>
 </ul>

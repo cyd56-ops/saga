@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1">
+<meta name="generator" content="pdoc3 0.11.6">
+<title>saga.messages API documentation</title>
+<meta name="description" content="Canonical request-envelope helpers for SAGA-PQ-CAN.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/sanitize.min.css" integrity="sha512-y1dtMcuvtTMJc1yPgEqF0ZjQbhnc/bFhyvIyVNb9Zk5mIGtqVaAB1Ttl28su8AvFMOY0EwRbAe+HCLqj6W7/KA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/13.0.0/typography.min.css" integrity="sha512-Y1DYSb995BAfxobCkKepB1BqJJTPrOp3zPL74AWFugHHmmdcvO+C48WLrUOlhGMc0QG7AE3f7gmvvcrmX2fDoA==" crossorigin>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:1.5em;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:2em 0 .50em 0}h3{font-size:1.4em;margin:1.6em 0 .7em 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .2s ease-in-out}a:visited{color:#503}a:hover{color:#b62}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900;font-weight:bold}pre code{font-size:.8em;line-height:1.4em;padding:1em;display:block}code{background:#f3f3f3;font-family:"DejaVu Sans Mono",monospace;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source > summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible;min-width:max-content}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em 1em;margin:1em 0}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul ul{padding-left:1em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha512-D9gUyxqja7hBtkWpPWGt9wfbfaMGVt9gnyCvYa+jojwwPHLCzUm5i8rpk7vD7wNee9bA35eYIjobYPaQuKS1MQ==" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => {
+hljs.configure({languages: ['bash', 'css', 'diff', 'graphql', 'ini', 'javascript', 'json', 'plaintext', 'python', 'python-repl', 'rust', 'shell', 'sql', 'typescript', 'xml', 'yaml']});
+hljs.highlightAll();
+/* Collapse source docstrings */
+setTimeout(() => {
+[...document.querySelectorAll('.hljs.language-python > .hljs-string')]
+.filter(el => el.innerHTML.length > 200 && ['"""', "'''"].includes(el.innerHTML.substring(0, 3)))
+.forEach(el => {
+let d = document.createElement('details');
+d.classList.add('hljs-string');
+d.innerHTML = '<summary>"""</summary>' + el.innerHTML.substring(3);
+el.replaceWith(d);
+});
+}, 100);
+})</script>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>saga.messages</code></h1>
+</header>
+<section id="section-intro">
+<p>Canonical request-envelope helpers for SAGA-PQ-CAN.</p>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-functions">Functions</h2>
+<dl>
+<dt id="saga.messages.action_scope_allows"><code class="name flex">
+<span>def <span class="ident">action_scope_allows</span></span>(<span>granted_scope: str, requested_scope: str) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def action_scope_allows(granted_scope: str, requested_scope: str) -&gt; bool:
+    &#34;&#34;&#34;Return ``True`` when ``granted_scope`` authorizes ``requested_scope``.
+
+    An unqualified scope such as ``tool_call`` authorizes any request with the
+    same base scope, including qualified forms like ``tool_call:send_email``.
+    A qualified scope authorizes only an exact match.
+
+    该函数只比较同一动作族，避免 ``llm_prompt`` 被解释为工具或内存权限。
+    &#34;&#34;&#34;
+    granted_base, granted_detail = parse_action_scope(granted_scope)
+    requested_base, requested_detail = parse_action_scope(requested_scope)
+    if granted_base != requested_base:
+        return False
+    if granted_detail is None:
+        return True
+    return granted_detail == requested_detail</code></pre>
+</details>
+<div class="desc"><p>Return <code>True</code> when <code>granted_scope</code> authorizes <code>requested_scope</code>.</p>
+<p>An unqualified scope such as <code>tool_call</code> authorizes any request with the
+same base scope, including qualified forms like <code>tool_call:send_email</code>.
+A qualified scope authorizes only an exact match.</p>
+<p>该函数只比较同一动作族，避免 <code>llm_prompt</code> 被解释为工具或内存权限。</p></div>
+</dd>
+<dt id="saga.messages.action_scopes_allow"><code class="name flex">
+<span>def <span class="ident">action_scopes_allow</span></span>(<span>granted_scopes: Iterable[str], requested_scope: str) ‑> bool</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def action_scopes_allow(granted_scopes: Iterable[str], requested_scope: str) -&gt; bool:
+    &#34;&#34;&#34;Return ``True`` when any signed scope authorizes ``requested_scope``.
+
+    下游工具、内存和委托检查只根据显式签名的 scope 列表授权。
+    &#34;&#34;&#34;
+    return any(action_scope_allows(granted_scope, requested_scope) for granted_scope in granted_scopes)</code></pre>
+</details>
+<div class="desc"><p>Return <code>True</code> when any signed scope authorizes <code>requested_scope</code>.</p>
+<p>下游工具、内存和委托检查只根据显式签名的 scope 列表授权。</p></div>
+</dd>
+<dt id="saga.messages.build_request_envelope"><code class="name flex">
+<span>def <span class="ident">build_request_envelope</span></span>(<span>*,<br>sender_aid: str,<br>receiver_aid: str,<br>token: str | bytes,<br>session_id: str,<br>turn_id: str,<br>issued_at: datetime | str,<br>expires_at: datetime | str,<br>action_scope: str,<br>authorized_scopes: Iterable[str] | None = None,<br>message: str | bytes,<br>domain: str = 'SAGA-PQ-CAN-v1',<br>content_type: str = 'text',<br>provider_id: str = '',<br>timestamp: datetime | str | None = None) ‑> <a title="saga.messages.RequestEnvelope" href="#saga.messages.RequestEnvelope">RequestEnvelope</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def build_request_envelope(
+    *,
+    sender_aid: str,
+    receiver_aid: str,
+    token: str | bytes,
+    session_id: str,
+    turn_id: str,
+    issued_at: datetime | str,
+    expires_at: datetime | str,
+    action_scope: str,
+    authorized_scopes: Iterable[str] | None = None,
+    message: str | bytes,
+    domain: str = DEFAULT_ENVELOPE_DOMAIN,
+    content_type: str = &#34;text&#34;,
+    provider_id: str = &#34;&#34;,
+    timestamp: datetime | str | None = None,
+) -&gt; RequestEnvelope:
+    &#34;&#34;&#34;Build a request envelope by hashing the token and message payload.
+
+    调用方可传入额外 ``authorized_scopes``，它们会和入口动作一起进入签名信封。
+    &#34;&#34;&#34;
+    token_bytes = token.encode(&#34;utf-8&#34;) if isinstance(token, str) else token
+    message_bytes = message.encode(&#34;utf-8&#34;) if isinstance(message, str) else message
+
+    return RequestEnvelope(
+        sender_aid=sender_aid,
+        receiver_aid=receiver_aid,
+        token_digest=sha256_hex(token_bytes),
+        session_id=session_id,
+        turn_id=turn_id,
+        issued_at=issued_at,
+        expires_at=expires_at,
+        action_scope=action_scope,
+        authorized_scopes=tuple(authorized_scopes) if authorized_scopes is not None else None,
+        message_digest=sha256_hex(message_bytes),
+        domain=domain,
+        content_type=content_type,
+        provider_id=provider_id,
+        timestamp=timestamp,
+    )</code></pre>
+</details>
+<div class="desc"><p>Build a request envelope by hashing the token and message payload.</p>
+<p>调用方可传入额外 <code>authorized_scopes</code>，它们会和入口动作一起进入签名信封。</p></div>
+</dd>
+<dt id="saga.messages.normalize_authorized_scopes"><code class="name flex">
+<span>def <span class="ident">normalize_authorized_scopes</span></span>(<span>action_scope: str, authorized_scopes: Iterable[str] | None) ‑> tuple[str, ...]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def normalize_authorized_scopes(
+    action_scope: str,
+    authorized_scopes: Iterable[str] | None,
+) -&gt; tuple[str, ...]:
+    &#34;&#34;&#34;Normalize the signed authorization scopes carried by an envelope.
+
+    信封总是包含入口 ``action_scope``，额外能力以规范化 scope 集合形式签名绑定。
+    &#34;&#34;&#34;
+    parse_action_scope(action_scope)
+    scopes = {action_scope}
+    if authorized_scopes is not None:
+        for scope in authorized_scopes:
+            if not isinstance(scope, str):
+                raise TypeError(&#34;authorized_scopes entries must be strings&#34;)
+            parse_action_scope(scope)
+            scopes.add(scope)
+    return tuple(sorted(scopes))</code></pre>
+</details>
+<div class="desc"><p>Normalize the signed authorization scopes carried by an envelope.</p>
+<p>信封总是包含入口 <code>action_scope</code>，额外能力以规范化 scope 集合形式签名绑定。</p></div>
+</dd>
+<dt id="saga.messages.parse_action_scope"><code class="name flex">
+<span>def <span class="ident">parse_action_scope</span></span>(<span>action_scope: str) ‑> tuple[str, str | None]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def parse_action_scope(action_scope: str) -&gt; tuple[str, str | None]:
+    &#34;&#34;&#34;Parse and validate an action scope.
+
+    Supported forms:
+    - ``llm_prompt``
+    - ``memory_read``
+    - ``memory_write``
+    - ``tool_call``
+    - ``delegation``
+    - ``tool_call:&lt;tool_name&gt;`` for tool-specific authorization
+    &#34;&#34;&#34;
+    match = ACTION_SCOPE_RE.fullmatch(action_scope)
+    if match is None:
+        raise ValueError(f&#34;unsupported action_scope: {action_scope}&#34;)
+    return match.group(&#34;base&#34;), match.group(&#34;detail&#34;)</code></pre>
+</details>
+<div class="desc"><p>Parse and validate an action scope.</p>
+<p>Supported forms:
+- <code>llm_prompt</code>
+- <code>memory_read</code>
+- <code>memory_write</code>
+- <code>tool_call</code>
+- <code>delegation</code>
+- <code>tool_call:&lt;tool_name&gt;</code> for tool-specific authorization</p></div>
+</dd>
+<dt id="saga.messages.parse_request_envelope"><code class="name flex">
+<span>def <span class="ident">parse_request_envelope</span></span>(<span>value: <a title="saga.messages.RequestEnvelope" href="#saga.messages.RequestEnvelope">RequestEnvelope</a> | Mapping[str, Any] | str | bytes) ‑> <a title="saga.messages.RequestEnvelope" href="#saga.messages.RequestEnvelope">RequestEnvelope</a></span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def parse_request_envelope(value: RequestEnvelope | Mapping[str, Any] | str | bytes) -&gt; RequestEnvelope:
+    &#34;&#34;&#34;Parse a serialized request envelope into a validated ``RequestEnvelope``.&#34;&#34;&#34;
+    if isinstance(value, RequestEnvelope):
+        return value
+
+    decoded: Mapping[str, Any]
+    if isinstance(value, bytes):
+        decoded = json.loads(value.decode(&#34;utf-8&#34;))
+    elif isinstance(value, str):
+        decoded = json.loads(value)
+    elif isinstance(value, Mapping):
+        decoded = value
+    else:
+        raise TypeError(&#34;request envelope must be a RequestEnvelope, mapping, JSON string, or bytes&#34;)
+
+    return RequestEnvelope(**dict(decoded))</code></pre>
+</details>
+<div class="desc"><p>Parse a serialized request envelope into a validated <code><a title="saga.messages.RequestEnvelope" href="#saga.messages.RequestEnvelope">RequestEnvelope</a></code>.</p></div>
+</dd>
+<dt id="saga.messages.sha256_hex"><code class="name flex">
+<span>def <span class="ident">sha256_hex</span></span>(<span>payload: bytes) ‑> str</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def sha256_hex(payload: bytes) -&gt; str:
+    &#34;&#34;&#34;Return the lowercase SHA-256 hex digest for ``payload``.&#34;&#34;&#34;
+    return hashlib.sha256(payload).hexdigest()</code></pre>
+</details>
+<div class="desc"><p>Return the lowercase SHA-256 hex digest for <code>payload</code>.</p></div>
+</dd>
+</dl>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="saga.messages.RequestEnvelope"><code class="flex name class">
+<span>class <span class="ident">RequestEnvelope</span></span>
+<span>(</span><span>sender_aid: str,<br>receiver_aid: str,<br>token_digest: str,<br>session_id: str,<br>turn_id: str,<br>issued_at: datetime | str,<br>expires_at: datetime | str,<br>action_scope: str,<br>message_digest: str,<br>authorized_scopes: tuple[str, ...] | list[str] | None = None,<br>domain: str = 'SAGA-PQ-CAN-v1',<br>content_type: str = 'text',<br>provider_id: str = '',<br>timestamp: datetime | str | None = None)</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass(frozen=True)
+class RequestEnvelope:
+    &#34;&#34;&#34;Canonical execution-authentication envelope for SAGA-PQ-CAN.
+
+    信封绑定入口动作、额外授权 scope、消息摘要和 token 摘要，供 PQ-CAN 验签。
+    &#34;&#34;&#34;
+
+    sender_aid: str
+    receiver_aid: str
+    token_digest: str
+    session_id: str
+    turn_id: str
+    issued_at: datetime | str
+    expires_at: datetime | str
+    action_scope: str
+    message_digest: str
+    authorized_scopes: tuple[str, ...] | list[str] | None = None
+    domain: str = DEFAULT_ENVELOPE_DOMAIN
+    content_type: str = &#34;text&#34;
+    provider_id: str = &#34;&#34;
+    timestamp: datetime | str | None = None
+
+    def __post_init__(self) -&gt; None:
+        &#34;&#34;&#34;Validate and normalize the envelope into a deterministic form.
+
+        所有 scope 和时间戳在签名前规范化，确保不同节点得到相同摘要。
+        &#34;&#34;&#34;
+        if not check_aid(self.sender_aid):
+            raise ValueError(&#34;sender_aid must be a valid AID&#34;)
+        if not check_aid(self.receiver_aid):
+            raise ValueError(&#34;receiver_aid must be a valid AID&#34;)
+        authorized_scopes = normalize_authorized_scopes(self.action_scope, self.authorized_scopes)
+        if not self.domain:
+            raise ValueError(&#34;domain must be non-empty&#34;)
+        if not self.session_id:
+            raise ValueError(&#34;session_id must be non-empty&#34;)
+        if not self.turn_id:
+            raise ValueError(&#34;turn_id must be non-empty&#34;)
+        if not self.token_digest:
+            raise ValueError(&#34;token_digest must be non-empty&#34;)
+        if not self.message_digest:
+            raise ValueError(&#34;message_digest must be non-empty&#34;)
+        if not self.content_type:
+            raise ValueError(&#34;content_type must be non-empty&#34;)
+
+        issued_at = _normalize_timestamp(self.issued_at, &#34;issued_at&#34;)
+        expires_at = _normalize_timestamp(self.expires_at, &#34;expires_at&#34;)
+        timestamp = issued_at if self.timestamp is None else _normalize_timestamp(
+            self.timestamp, &#34;timestamp&#34;
+        )
+
+        object.__setattr__(self, &#34;issued_at&#34;, issued_at)
+        object.__setattr__(self, &#34;expires_at&#34;, expires_at)
+        object.__setattr__(self, &#34;timestamp&#34;, timestamp)
+        object.__setattr__(self, &#34;token_digest&#34;, self.token_digest.lower())
+        object.__setattr__(self, &#34;message_digest&#34;, self.message_digest.lower())
+        object.__setattr__(self, &#34;authorized_scopes&#34;, authorized_scopes)
+
+    def as_dict(self) -&gt; dict[str, Any]:
+        &#34;&#34;&#34;Return the canonical dictionary representation of the envelope.
+
+        字典字段是签名覆盖面，新增授权能力必须显式出现在这里。
+        &#34;&#34;&#34;
+        return {
+            &#34;action_scope&#34;: self.action_scope,
+            &#34;authorized_scopes&#34;: list(self.authorized_scopes),
+            &#34;content_type&#34;: self.content_type,
+            &#34;domain&#34;: self.domain,
+            &#34;expires_at&#34;: self.expires_at,
+            &#34;issued_at&#34;: self.issued_at,
+            &#34;message_digest&#34;: self.message_digest,
+            &#34;provider_id&#34;: self.provider_id,
+            &#34;receiver_aid&#34;: self.receiver_aid,
+            &#34;sender_aid&#34;: self.sender_aid,
+            &#34;session_id&#34;: self.session_id,
+            &#34;timestamp&#34;: self.timestamp,
+            &#34;token_digest&#34;: self.token_digest,
+            &#34;turn_id&#34;: self.turn_id,
+        }
+
+    def canonical_bytes(self) -&gt; bytes:
+        &#34;&#34;&#34;Serialize the envelope using canonical JSON rules.&#34;&#34;&#34;
+        return json.dumps(
+            self.as_dict(),
+            sort_keys=True,
+            separators=(&#34;,&#34;, &#34;:&#34;),
+            ensure_ascii=True,
+        ).encode(&#34;utf-8&#34;)
+
+    def canonical_json(self) -&gt; str:
+        &#34;&#34;&#34;Return the canonical JSON string representation of the envelope.&#34;&#34;&#34;
+        return self.canonical_bytes().decode(&#34;utf-8&#34;)
+
+    def digest(self) -&gt; bytes:
+        &#34;&#34;&#34;Return the SHA-256 digest of the canonical envelope bytes.&#34;&#34;&#34;
+        return hashlib.sha256(self.canonical_bytes()).digest()
+
+    def hex_digest(self) -&gt; str:
+        &#34;&#34;&#34;Return the lowercase SHA-256 hex digest of the canonical envelope.&#34;&#34;&#34;
+        return self.digest().hex()</code></pre>
+</details>
+<div class="desc"><p>Canonical execution-authentication envelope for SAGA-PQ-CAN.</p>
+<p>信封绑定入口动作、额外授权 scope、消息摘要和 token 摘要，供 PQ-CAN 验签。</p></div>
+<h3>Instance variables</h3>
+<dl>
+<dt id="saga.messages.RequestEnvelope.action_scope"><code class="name">var <span class="ident">action_scope</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.authorized_scopes"><code class="name">var <span class="ident">authorized_scopes</span> : tuple[str, ...] | list[str] | None</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.content_type"><code class="name">var <span class="ident">content_type</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.domain"><code class="name">var <span class="ident">domain</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.expires_at"><code class="name">var <span class="ident">expires_at</span> : datetime.datetime | str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.issued_at"><code class="name">var <span class="ident">issued_at</span> : datetime.datetime | str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.message_digest"><code class="name">var <span class="ident">message_digest</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.provider_id"><code class="name">var <span class="ident">provider_id</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.receiver_aid"><code class="name">var <span class="ident">receiver_aid</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.sender_aid"><code class="name">var <span class="ident">sender_aid</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.session_id"><code class="name">var <span class="ident">session_id</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.timestamp"><code class="name">var <span class="ident">timestamp</span> : datetime.datetime | str | None</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.token_digest"><code class="name">var <span class="ident">token_digest</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.turn_id"><code class="name">var <span class="ident">turn_id</span> : str</code></dt>
+<dd>
+<div class="desc"></div>
+</dd>
+</dl>
+<h3>Methods</h3>
+<dl>
+<dt id="saga.messages.RequestEnvelope.as_dict"><code class="name flex">
+<span>def <span class="ident">as_dict</span></span>(<span>self) ‑> dict[str, typing.Any]</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def as_dict(self) -&gt; dict[str, Any]:
+    &#34;&#34;&#34;Return the canonical dictionary representation of the envelope.
+
+    字典字段是签名覆盖面，新增授权能力必须显式出现在这里。
+    &#34;&#34;&#34;
+    return {
+        &#34;action_scope&#34;: self.action_scope,
+        &#34;authorized_scopes&#34;: list(self.authorized_scopes),
+        &#34;content_type&#34;: self.content_type,
+        &#34;domain&#34;: self.domain,
+        &#34;expires_at&#34;: self.expires_at,
+        &#34;issued_at&#34;: self.issued_at,
+        &#34;message_digest&#34;: self.message_digest,
+        &#34;provider_id&#34;: self.provider_id,
+        &#34;receiver_aid&#34;: self.receiver_aid,
+        &#34;sender_aid&#34;: self.sender_aid,
+        &#34;session_id&#34;: self.session_id,
+        &#34;timestamp&#34;: self.timestamp,
+        &#34;token_digest&#34;: self.token_digest,
+        &#34;turn_id&#34;: self.turn_id,
+    }</code></pre>
+</details>
+<div class="desc"><p>Return the canonical dictionary representation of the envelope.</p>
+<p>字典字段是签名覆盖面，新增授权能力必须显式出现在这里。</p></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.canonical_bytes"><code class="name flex">
+<span>def <span class="ident">canonical_bytes</span></span>(<span>self) ‑> bytes</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def canonical_bytes(self) -&gt; bytes:
+    &#34;&#34;&#34;Serialize the envelope using canonical JSON rules.&#34;&#34;&#34;
+    return json.dumps(
+        self.as_dict(),
+        sort_keys=True,
+        separators=(&#34;,&#34;, &#34;:&#34;),
+        ensure_ascii=True,
+    ).encode(&#34;utf-8&#34;)</code></pre>
+</details>
+<div class="desc"><p>Serialize the envelope using canonical JSON rules.</p></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.canonical_json"><code class="name flex">
+<span>def <span class="ident">canonical_json</span></span>(<span>self) ‑> str</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def canonical_json(self) -&gt; str:
+    &#34;&#34;&#34;Return the canonical JSON string representation of the envelope.&#34;&#34;&#34;
+    return self.canonical_bytes().decode(&#34;utf-8&#34;)</code></pre>
+</details>
+<div class="desc"><p>Return the canonical JSON string representation of the envelope.</p></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.digest"><code class="name flex">
+<span>def <span class="ident">digest</span></span>(<span>self) ‑> bytes</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def digest(self) -&gt; bytes:
+    &#34;&#34;&#34;Return the SHA-256 digest of the canonical envelope bytes.&#34;&#34;&#34;
+    return hashlib.sha256(self.canonical_bytes()).digest()</code></pre>
+</details>
+<div class="desc"><p>Return the SHA-256 digest of the canonical envelope bytes.</p></div>
+</dd>
+<dt id="saga.messages.RequestEnvelope.hex_digest"><code class="name flex">
+<span>def <span class="ident">hex_digest</span></span>(<span>self) ‑> str</span>
+</code></dt>
+<dd>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def hex_digest(self) -&gt; str:
+    &#34;&#34;&#34;Return the lowercase SHA-256 hex digest of the canonical envelope.&#34;&#34;&#34;
+    return self.digest().hex()</code></pre>
+</details>
+<div class="desc"><p>Return the lowercase SHA-256 hex digest of the canonical envelope.</p></div>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<header>
+<a class="homelink" rel="home" title="SAGA Home" href="https://gsiros.github.io/saga/">
+<img src="https://raw.githubusercontent.com/gsiros/saga/94f3562b8f9821717bff825aa4111b2ee5cecec5/assets/logo.png" alt="SAGA" width="256">
+</a>
+</header>
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="saga" href="index.html">saga</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-functions">Functions</a></h3>
+<ul class="">
+<li><code><a title="saga.messages.action_scope_allows" href="#saga.messages.action_scope_allows">action_scope_allows</a></code></li>
+<li><code><a title="saga.messages.action_scopes_allow" href="#saga.messages.action_scopes_allow">action_scopes_allow</a></code></li>
+<li><code><a title="saga.messages.build_request_envelope" href="#saga.messages.build_request_envelope">build_request_envelope</a></code></li>
+<li><code><a title="saga.messages.normalize_authorized_scopes" href="#saga.messages.normalize_authorized_scopes">normalize_authorized_scopes</a></code></li>
+<li><code><a title="saga.messages.parse_action_scope" href="#saga.messages.parse_action_scope">parse_action_scope</a></code></li>
+<li><code><a title="saga.messages.parse_request_envelope" href="#saga.messages.parse_request_envelope">parse_request_envelope</a></code></li>
+<li><code><a title="saga.messages.sha256_hex" href="#saga.messages.sha256_hex">sha256_hex</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="saga.messages.RequestEnvelope" href="#saga.messages.RequestEnvelope">RequestEnvelope</a></code></h4>
+<ul class="two-column">
+<li><code><a title="saga.messages.RequestEnvelope.action_scope" href="#saga.messages.RequestEnvelope.action_scope">action_scope</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.as_dict" href="#saga.messages.RequestEnvelope.as_dict">as_dict</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.authorized_scopes" href="#saga.messages.RequestEnvelope.authorized_scopes">authorized_scopes</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.canonical_bytes" href="#saga.messages.RequestEnvelope.canonical_bytes">canonical_bytes</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.canonical_json" href="#saga.messages.RequestEnvelope.canonical_json">canonical_json</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.content_type" href="#saga.messages.RequestEnvelope.content_type">content_type</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.digest" href="#saga.messages.RequestEnvelope.digest">digest</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.domain" href="#saga.messages.RequestEnvelope.domain">domain</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.expires_at" href="#saga.messages.RequestEnvelope.expires_at">expires_at</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.hex_digest" href="#saga.messages.RequestEnvelope.hex_digest">hex_digest</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.issued_at" href="#saga.messages.RequestEnvelope.issued_at">issued_at</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.message_digest" href="#saga.messages.RequestEnvelope.message_digest">message_digest</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.provider_id" href="#saga.messages.RequestEnvelope.provider_id">provider_id</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.receiver_aid" href="#saga.messages.RequestEnvelope.receiver_aid">receiver_aid</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.sender_aid" href="#saga.messages.RequestEnvelope.sender_aid">sender_aid</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.session_id" href="#saga.messages.RequestEnvelope.session_id">session_id</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.timestamp" href="#saga.messages.RequestEnvelope.timestamp">timestamp</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.token_digest" href="#saga.messages.RequestEnvelope.token_digest">token_digest</a></code></li>
+<li><code><a title="saga.messages.RequestEnvelope.turn_id" href="#saga.messages.RequestEnvelope.turn_id">turn_id</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc" title="pdoc: Python API documentation generator"><cite>pdoc</cite> 0.11.6</a>.</p>
+</footer>
+</body>
+</html>
