@@ -6,6 +6,8 @@ from agent_backend.tools.base import BaseTool
 
 
 class LocalEmailClientTool(BaseTool):
+    """封装本地邮件工具的收件箱、发件箱和搜索写入能力。"""
+
     def __init__(self, user_name: str, user_email: str):
         super().__init__("email")
         self.client = MongoClient(self.mongo_uri)
@@ -13,6 +15,7 @@ class LocalEmailClientTool(BaseTool):
         self.user_name = user_name
     
     def seed_data(self, data: List[dict]):
+        """把测试邮件按发件人/收件人分发到本地 MongoDB 集合。"""
         db = self.client.get_database(self.tool_name)
         collection_self = db.get_collection(self.user_email + "_sent")
 

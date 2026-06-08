@@ -3,6 +3,7 @@ from saga.common.crypto import generate_ca, save_ca
 
 
 def main(config, file_path):
+    """根据配置生成 CA/provider 凭据并写入指定目录。"""
     # Generate credentials
     pri_key, pub_key, cert = generate_ca(config)
     # Save these credentials to files

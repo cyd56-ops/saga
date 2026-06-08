@@ -84,6 +84,7 @@ def check_rulebook(rulebook):
 
 
 def pattern_specificity_component(component, weight=1):
+    """计算单个 AID 模式片段的匹配特异度分数。"""
     score = 0
     i = 0
     while i < len(component):
@@ -124,6 +125,7 @@ def aid_specificity(aid_pattern):
 
 
 def compare_aid_patterns(p1, p2):
+    """比较两个 AID 模式的特异度，供调试策略优先级使用。"""
     s1 = aid_specificity(p1)
     s2 = aid_specificity(p2)
     if s1 > s2:
@@ -139,6 +141,7 @@ def match(contact_rulebook, t_aid):
     Returns the budget for a given AID.
     The budget is calculated by the specificity of the AID pattern.
     The budget that corresponds to the most specific pattern is returned.
+    If multiple patterns have the same specificity, the first match wins.
     """
     # Check that the t_aid is valid (correct format)
     if not check_aid(t_aid):
@@ -146,11 +149,15 @@ def match(contact_rulebook, t_aid):
     
     # Init the vars to be returned
     best_pattern = None
+    best_specificity = -1
     budget = 0
     # Check for matching pattern:
     for rule in contact_rulebook:
         if fnmatch.fnmatch(t_aid, rule['pattern']):
-            if aid_specificity(rule['pattern']) > aid_specificity(best_pattern):
+            rule_specificity = aid_specificity(rule['pattern'])
+            if rule_specificity > best_specificity:
+                best_pattern = rule['pattern']
+                best_specificity = rule_specificity
                 budget = rule['budget']
     return budget
 

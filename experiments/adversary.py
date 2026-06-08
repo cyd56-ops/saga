@@ -34,6 +34,7 @@ BENIGN = {
 }
 
 def main(mode, config_path, other_user_config_path=None, adv_id=None, other_other_user_config_path=None):
+    """运行防御回归场景，验证异常凭据或 token 会被协议拒绝。"""
     config = UserConfig.load(config_path, drop_extra_fields=True)
 
     # Find the index of the "email_agent" out of all config.agents

@@ -65,6 +65,7 @@ class DummyAgent(LocalAgent):
         self.task_finished_token = "<TASK_FINISHED>"
 
     def run(self, query, initiating_agent=None, agent_instance=None):
+        """返回一个随机测试响应，用于无真实 LLM 后端的网络联调。"""
         time.sleep(1)
         if query == self.task_finished_token:
             return self.task_finished_token

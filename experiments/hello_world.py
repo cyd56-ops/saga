@@ -7,6 +7,7 @@ from saga.agent import Agent, get_agent_material
 from saga.config import ROOT_DIR, UserConfig, get_index_of_agent
 
 def main(mode, config_path, other_user_config_path=None):
+    """运行不依赖 LLM 后端的双 agent Hello World 通信示例。"""
     config = UserConfig.load(config_path, drop_extra_fields=True)
 
     # Find the index of the "email_agent" out of all config.agents

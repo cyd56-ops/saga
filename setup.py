@@ -16,6 +16,7 @@ setup(
         "flask_bcrypt",
         "flask_jwt_extended",
         "authlib",
+        "openai",
         "smolagents"
     ],
     classifiers=[

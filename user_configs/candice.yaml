@@ -18,4 +18,4 @@ agents:
         - email
         - calendar
       model_type: null
-      api_base: null
+      api_base: "https://code.fastn.top/v1"

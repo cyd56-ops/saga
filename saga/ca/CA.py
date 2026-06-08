@@ -6,6 +6,7 @@ from saga.common.logger import Logger as logger
 
 
 def download_file(url, save_path):
+    """从 CA 端点下载证书材料文件并写入本地路径。"""
     response = requests.get(url, stream=True)
     if response.status_code == 200:
         with open(save_path, 'wb') as file:

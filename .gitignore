@@ -178,3 +178,16 @@ cython_debug/
 
 .vscode/*
 saga/user/*/*.json
+.codex
+.codex/
+.mongodb/
+.mongodata/
+experiments/results/
+experiments/runs/
+saga/user/*/diagnostics/
+saga/user/*/audit/
+saga/user/*/agent.crt.stale-*
+*.selfsigned
+*.bad-*
+.tmp_reregister_*/
+.tmp_rerun_*/

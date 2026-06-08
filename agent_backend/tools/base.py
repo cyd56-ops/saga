@@ -4,6 +4,8 @@ from saga.config import MONGO_URI_FOR_TOOLS
 
 
 class BaseTool:
+    """为本地工具提供共享的 MongoDB 存储和地址字段解析逻辑。"""
+
     def __init__(self, tool_name):
         self.tool_name = tool_name
         self.mongo_uri = MONGO_URI_FOR_TOOLS

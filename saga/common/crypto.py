@@ -15,6 +15,45 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 
 
+def otk_signature_payload(aid: str, otk: bytes) -> bytes:
+    """构造绑定 agent 身份的一次性公钥签名载荷。"""
+    payload = {
+        "domain": "saga:otk-signature:v1",
+        "aid": aid,
+        "otk": base64.b64encode(otk).decode("ascii"),
+    }
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+
+
+def sign_otk(ed25519_private_key: ed25519.Ed25519PrivateKey, aid: str, otk: bytes) -> bytes:
+    """用用户签名密钥签署绑定 agent 身份的一次性公钥。"""
+    return ed25519_private_key.sign(otk_signature_payload(aid, otk))
+
+
+def verify_otk_signature(
+    ed25519_public_key: ed25519.Ed25519PublicKey,
+    aid: str,
+    otk: bytes,
+    signature: bytes,
+) -> bool:
+    """验证一次性公钥签名是否绑定到指定 agent 身份。"""
+    try:
+        ed25519_public_key.verify(signature, otk_signature_payload(aid, otk))
+        return True
+    except Exception:
+        return False
+
+
+def utc_now() -> datetime.datetime:
+    """Return the current UTC timestamp as a timezone-aware datetime."""
+    return datetime.datetime.now(tz=datetime.timezone.utc)
+
+
 def cure(path):
     """Ensure the path ends with a slash."""
     return path if path[-1]=='/' else path+"/"
@@ -224,8 +263,8 @@ def generate_x509_certificate(config, public_key, ca_private_key, ca_certificate
         .issuer_name(ca_certificate.subject)  # CA is the issuer
         .public_key(public_key)
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.now())
-        .not_valid_after(datetime.datetime.now() + datetime.timedelta(days=365))
+        .not_valid_before(utc_now())
+        .not_valid_after(utc_now() + datetime.timedelta(days=365))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)  # Not a CA certificate
         .add_extension(
             x509.SubjectAlternativeName([
@@ -283,9 +322,9 @@ def generate_self_signed_x509_certificate(config, private_key, public_key):
     ).serial_number(
         x509.random_serial_number()
     ).not_valid_before(
-        datetime.datetime.now()
+        utc_now()
     ).not_valid_after(
-        datetime.datetime.now() + datetime.timedelta(days=365)
+        utc_now() + datetime.timedelta(days=365)
     ).add_extension(
         san, critical=False # Add SAN extension
     ).sign(
@@ -375,8 +414,8 @@ def generate_ca(config):
         .issuer_name(ca_subject)  # Self-signed
         .public_key(ca_public_key)
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.now(tz=datetime.timezone.utc))
-        .not_valid_after(datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(days=10 * 365))  # Valid for 10 years
+        .not_valid_before(utc_now())
+        .not_valid_after(utc_now() + datetime.timedelta(days=10 * 365))  # Valid for 10 years
         .add_extension(
             x509.BasicConstraints(ca=True, path_length=1), critical=True
         ).add_extension(

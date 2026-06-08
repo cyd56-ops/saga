@@ -2,6 +2,8 @@ import hashlib
 import time
 
 class Logger:
+    """提供带标签和颜色的轻量控制台日志输出。"""
+
     COLORS = [
         "\033[91m",  # Red
         "\033[92m",  # Green
@@ -33,12 +35,14 @@ class Logger:
     
     @staticmethod
     def warn(message):
+        """输出固定 WARNING 标签的告警日志。"""
         timestamp = time.strftime("%H:%M:%S")
         color = Logger.COLORS[2]
         print(f"{timestamp} {color}[WARNING] {message} {Logger.RESET}")
 
     @staticmethod
     def error(message):
+        """输出固定 ERROR 标签的错误日志。"""
         timestamp = time.strftime("%H:%M:%S")
         color = Logger.COLORS[0]
         print(f"{timestamp} {color}[ERROR] {message} {Logger.RESET}")

@@ -1,12 +1,20 @@
-from smolagents import CodeAgent, HfApiModel, TransformersModel, OpenAIServerModel, MultiStepAgent
-from agent_backend.config import LocalAgentConfig
+from smolagents import CodeAgent, TransformersModel, OpenAIServerModel, MultiStepAgent
+try:
+    from smolagents import HfApiModel
+except ImportError:  # pragma: no cover - depends on installed smolagents version
+    HfApiModel = None
+from smolagents import InferenceClientModel
+from agent_backend.config import LocalAgentConfig, api_base_requires_openai_api_key
 import yaml
-from typing import List, Tuple
+from typing import Any, Callable, List, Tuple
+from functools import wraps
+import inspect
 from smolagents import tool
 from smolagents.memory import TaskStep
 import os
 
 from saga.config import ROOT_DIR, UserConfig
+from saga.execution_gate import ExecutionAuthorizationError
 from saga.local_agent import LocalAgent
 
 from agent_backend.tools.email import LocalEmailClientTool
@@ -42,6 +50,8 @@ class AgentWrapper(LocalAgent):
 
         # Read YAML file
         self._set_custom_prompt(self.prompt_filename)
+        self._execution_context = None
+        self._delegation_handler: Callable[..., Any] | None = None
 
     def _set_custom_prompt(self, prompt_filename: str):
         DIR_ABOVE_ROOT_DIR = os.path.dirname(ROOT_DIR)
@@ -56,28 +66,42 @@ class AgentWrapper(LocalAgent):
                 device_map="auto"
             )
         elif self.config.model_type == "HfApiModel":
-            model = HfApiModel(
-                model_name=self.config.model,
-                hf_api_key="",
-                hf_api_url="https://api-inference.huggingface.co/models/"
-            )
+            if HfApiModel is not None:
+                model = HfApiModel(
+                    model_name=self.config.model,
+                    hf_api_key="",
+                    hf_api_url="https://api-inference.huggingface.co/models/"
+                )
+            else:
+                model = InferenceClientModel(
+                    model_id=self.config.model,
+                    token=os.getenv("HF_TOKEN", None),
+                    base_url="https://api-inference.huggingface.co/models/",
+                )
         elif self.config.model_type == "OpenAIServerModel":
-            API_KEY = os.getenv("OPENAI_API_KEY", None) if "https://api.openai.com" in self.config.api_base else ""
+            API_KEY = (
+                os.getenv("OPENAI_API_KEY", None)
+                if api_base_requires_openai_api_key(self.config.api_base)
+                else ""
+            )
             if API_KEY is None:
                 raise ValueError("OPENAI_API_KEY environment variable must be set for OpenAIServerModel.")
 
+            client_kwargs = {"timeout": 60.0}
             if "o3-mini" in self.config.model:
                 # Reasoning models currently do not support temperature control
                 model = OpenAIServerModel(
                     model_id=self.config.model,
                     api_base=self.config.api_base,
                     api_key=API_KEY,
+                    client_kwargs=client_kwargs,
             )
             else:
                 model = OpenAIServerModel(
                     model_id=self.config.model,
                     api_base=self.config.api_base,
                     api_key=API_KEY,
+                    client_kwargs=client_kwargs,
                     temperature=0.0,
                 )
         else:
@@ -96,9 +120,67 @@ class AgentWrapper(LocalAgent):
             tool_func = getattr(self, f"_{tool_name}_tools", None)
             if not tool_func:
                 raise ValueError(f"Tool {tool_name} not found.")
-            self.tool_collections.extend(tool_func())
+            wrapped_tools = [self._wrap_tool_with_execution_gate(tool_obj) for tool_obj in tool_func()]
+            self.tool_collections.extend(wrapped_tools)
         
         # TODO: logic to make sure not duplicates are created in process of collecting all functions
+
+    def _wrap_tool_with_execution_gate(self, tool_obj):
+        """Wrap a smolagents tool so tool execution obeys the local execution context."""
+        original_forward = tool_obj.forward
+        tool_name = tool_obj.name
+
+        @wraps(original_forward)
+        def gated_forward(*args, **kwargs):
+            """在真正调用工具前执行当前请求的动作范围检查。"""
+            try:
+                self._require_execution_action(f"tool_call:{tool_name}")
+            except PermissionError as exc:
+                raise ExecutionAuthorizationError(
+                    "tool_not_authorized",
+                    f"tool_call:{tool_name}",
+                ) from exc
+            return original_forward(*args, **kwargs)
+
+        gated_forward.__signature__ = getattr(
+            original_forward,
+            "__signature__",
+            inspect.signature(original_forward),
+        )
+        tool_obj.forward = gated_forward
+        return tool_obj
+
+    def _require_execution_action(self, action_scope: str) -> None:
+        """Raise ``PermissionError`` unless the current execution context allows ``action_scope``."""
+        execution_context = getattr(self, "_execution_context", None)
+        if execution_context is None:
+            return
+        execution_context.require_action(action_scope)
+
+    def _read_agent_memory_steps(self, agent_instance: MultiStepAgent) -> tuple[TaskStep, ...]:
+        """Return an immutable snapshot of agent memory after ``memory_read`` authorization."""
+        self._require_execution_action("memory_read")
+        return tuple(agent_instance.memory.steps)
+
+    def _append_agent_memory_step(self, agent_instance: MultiStepAgent, step: TaskStep) -> None:
+        """Append a memory step only when ``memory_write`` is authorized."""
+        self._require_execution_action("memory_write")
+        agent_instance.memory.steps.append(step)
+
+    def _require_delegation_permission(self) -> None:
+        """Raise ``PermissionError`` unless delegation is authorized in the current context."""
+        self._require_execution_action("delegation")
+
+    def set_delegation_handler(self, handler: Callable[..., Any]) -> None:
+        """Install the concrete runtime callback used for delegation."""
+        self._delegation_handler = handler
+
+    def delegate_to_agent(self, target_aid: str, message: str, **kwargs) -> Any:
+        """Delegate a task to another agent after execution-gate authorization."""
+        self._require_delegation_permission()
+        if self._delegation_handler is None:
+            raise NotImplementedError("delegation handler is not configured")
+        return self._delegation_handler(target_aid, message, **kwargs)
 
     def _reimbursement_tools(self):
         # Tools relevant to submitting an expense report to HR
@@ -358,7 +440,10 @@ class AgentWrapper(LocalAgent):
 
         if initiating_agent:
             # Override this agent to simulate history of the agent having started the conversation
-            agent.memory.steps.append(TaskStep(task=self.custom_prompt["initiating_agent"]))
+            self._append_agent_memory_step(
+                agent,
+                TaskStep(task=self.custom_prompt["initiating_agent"]),
+            )
 
         return agent
 
@@ -366,21 +451,26 @@ class AgentWrapper(LocalAgent):
             initiating_agent: bool,
             agent_instance: MultiStepAgent = None,
             **kwargs) -> Tuple[MultiStepAgent, str]:
+        """运行一次本地 agent 对话轮次，并在需要时绑定执行上下文。"""
         # We create a new instance for every fresh task, as every agent object shared memory 
         # and we only want to share them for a given conversation, not all conversations of an agent.
         # Also helps in isolation, as the objects are now separate.
         # Overhead for new agent creation is low enough that it is not a problem.
-
-        if agent_instance is None:
-            task_str = query if initiating_agent else None
-            agent_instance = self._initialize_agent(initiating_agent, task=task_str)
 
         # Make sure kwargs do not specify reset (should be False)
         if "reset" in kwargs:
             print ("WARNING: 'reset'' should not be specified in kwargs to agent, as it is always False.")
             kwargs.pop("reset")
 
-        response = agent_instance.run(str(query), reset=False, **kwargs)
+        previous_execution_context = self._execution_context
+        self._execution_context = kwargs.pop("execution_context", None)
+        try:
+            if agent_instance is None:
+                task_str = query if initiating_agent else None
+                agent_instance = self._initialize_agent(initiating_agent, task=task_str)
+            response = agent_instance.run(str(query), reset=False, **kwargs)
+        finally:
+            self._execution_context = previous_execution_context
 
         # Replace "The task is completed." with self.task_finished_token
         if response == "The task is completed.":
@@ -401,6 +491,7 @@ class CodeAgentWrapper(AgentWrapper):
                          prompt_filename="CodeAgent.yaml")
     
     def _create_local_agent_object(self, **kwargs) -> CodeAgent:
+        """创建只包含显式配置工具的 CodeAgent，避免自动工具绕过执行 gate。"""
 
         # Start with the default template
         starting_prompt_template = yaml.safe_load(
@@ -412,7 +503,7 @@ class CodeAgentWrapper(AgentWrapper):
         agent = CodeAgent(
             tools = self.tool_collections,
             model = self.model,
-            add_base_tools = True,
+            add_base_tools = False,
             additional_authorized_imports=self.config.additional_authorized_imports,
             verbosity_level=VERBOSITY_LEVEL,
             prompt_templates=starting_prompt_template

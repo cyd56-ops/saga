@@ -5,6 +5,7 @@ from saga.config import UserConfig
 
 
 def main(config_path):
+    """手动调用本地工具和 Gradio UI，用于开发期联调。"""
     AGENT_FOCUS = 0
     config = UserConfig.load(config_path, drop_extra_fields=True)
 

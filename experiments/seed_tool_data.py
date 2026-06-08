@@ -13,6 +13,7 @@ from saga.config import ROOT_DIR, MONGO_URI_FOR_TOOLS, UserConfig
 
 
 def read_jsonl_data(path):
+    """读取 JSONL 种子数据文件并返回逐行解析后的字典列表。"""
     data = []
     with open(path, 'r') as f:
         for line in f:
@@ -21,6 +22,7 @@ def read_jsonl_data(path):
 
 
 def main(user_configs_path):
+    """清空本地工具数据库并按用户配置重新写入实验种子数据。"""
     # Start with clearing out all tool-related data under
     mongo_client = MongoClient(MONGO_URI_FOR_TOOLS)
     # Drop all databases

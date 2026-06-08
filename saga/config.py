@@ -5,7 +5,7 @@ import saga
 import os
 import yaml
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Literal, List, Optional
 from simple_parsing.helpers import Serializable
 
 from agent_backend.config import LocalAgentConfig
@@ -92,6 +92,61 @@ class EndPointConfig(Serializable):
 
 
 @dataclass
+class ToyRuntimeAuthConfig(Serializable):
+    """研究用 toy LWE 执行层认证配置。"""
+
+    enabled: bool = False
+    """Whether to enable the toy LWE runtime-auth path for this agent."""
+    mode: Literal["toy_compiled_research", "toy_wrapper", "mldsa_external"] | None = None
+    """Runtime-auth mode; omitted legacy configs are inferred from ``verifier_flavor``."""
+    strict_execution_gate: bool = True
+    """Whether runtime-auth mode rejects missing gate/context state."""
+    seed: int = 0
+    """Deterministic seed used to derive the toy LWE key pair."""
+    verifier_flavor: str = "compiled"
+    """Legacy toy verifier flavor; use ``mode`` for new configs."""
+    message_bytes: int = 32
+    """Envelope digest length expected by the verifier helper."""
+    replay_state_dir: str | None = None
+    """Optional shared replay marker directory for multi-workdir experiments."""
+    trusted_public_keys: dict[str, str] = field(default_factory=dict)
+    """Mapping from trusted peer AIDs to base64-encoded toy public keys."""
+
+    def __post_init__(self) -> None:
+        """Validate the minimal research-only runtime-auth settings."""
+        valid_modes = {"toy_compiled_research", "toy_wrapper", "mldsa_external"}
+        if self.mode is not None and self.mode not in valid_modes:
+            raise ValueError(
+                "mode must be one of: toy_compiled_research, toy_wrapper, mldsa_external"
+            )
+        if self.verifier_flavor not in {"compiled", "wrapper"}:
+            raise ValueError("verifier_flavor must be 'compiled' or 'wrapper'")
+        if self.mode == "toy_compiled_research" and self.verifier_flavor != "compiled":
+            raise ValueError("toy_compiled_research mode requires verifier_flavor='compiled'")
+        if self.mode == "toy_wrapper" and self.verifier_flavor != "wrapper":
+            raise ValueError("toy_wrapper mode requires verifier_flavor='wrapper'")
+        if self.message_bytes <= 0:
+            raise ValueError("message_bytes must be positive")
+
+    def resolved_mode(self) -> Literal["toy_compiled_research", "toy_wrapper", "mldsa_external"]:
+        """返回规范化 runtime-auth mode，兼容旧的 verifier_flavor 配置。"""
+        if self.mode is not None:
+            return self.mode
+        if self.verifier_flavor == "compiled":
+            return "toy_compiled_research"
+        return "toy_wrapper"
+
+    def toy_verifier_flavor(self) -> Literal["compiled", "wrapper"]:
+        """返回 toy mode 对应的 verifier flavor，ML-DSA mode 不允许调用。"""
+        resolved_mode = self.resolved_mode()
+        if resolved_mode == "toy_compiled_research":
+            return "compiled"
+        if resolved_mode == "toy_wrapper":
+            return "wrapper"
+        raise ValueError("mldsa_external mode does not use a toy verifier flavor")
+
+
+@dataclass
 class AgentConfig(Serializable):
     """
     Configuration for an agent.
@@ -109,6 +164,8 @@ class AgentConfig(Serializable):
     """Contact rule-book for this particular agent (who can contact it, etc.)"""
     num_one_time_keys: Optional[int] = 100
     """Number of one-time-keys to generate for this agent. Defaults to 100"""
+    toy_runtime_auth: Optional[ToyRuntimeAuthConfig] = None
+    """Optional research-only toy LWE runtime-auth config."""
 
 
 @dataclass

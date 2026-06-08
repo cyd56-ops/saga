@@ -6,6 +6,18 @@ from typing import Optional, List
 from simple_parsing.helpers import Serializable
 
 
+DEFAULT_OPENAI_API_BASE = "https://code.fastn.top/v1"
+
+
+def api_base_requires_openai_api_key(api_base: str | None) -> bool:
+    """Return whether an OpenAI-compatible endpoint should receive ``OPENAI_API_KEY``."""
+    normalized_api_base = (api_base or "").rstrip("/")
+    return normalized_api_base in {
+        "https://api.openai.com/v1",
+        DEFAULT_OPENAI_API_BASE.rstrip("/"),
+    }
+
+
 @dataclass
 class LocalAgentConfig(Serializable):
     """
@@ -21,7 +33,7 @@ class LocalAgentConfig(Serializable):
     """Specific prompt instructions for the agent"""
     additional_authorized_imports: List[str] = field(default_factory=list)
     """List of additional authorized imports for the agent."""
-    api_base: Optional[str] = None
+    api_base: Optional[str] = DEFAULT_OPENAI_API_BASE
     """API base URL for the agent, if using an API model."""
     model_type: Optional[str] =  "TransformersModel"
     """Type of backbone model for the agent. One of: TransformersModel, HfApiModel (for now; will add support later)"""

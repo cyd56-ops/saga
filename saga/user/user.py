@@ -23,7 +23,6 @@ def get_provider_cert(email):
     ))
     cert_bytes = base64.b64decode(response.json().get('certificate'))
     cert = sc.bytesToX509Certificate(cert_bytes)
-    
     return cert
 
 # Instanciate the CA object:
@@ -38,6 +37,42 @@ state['keys'] = {}
 state['agents'] = {}
 
 monitor = Monitor()
+
+
+def _get_user_signing_secret():
+    signing_state = state.get("keys", {}).get("signing", {})
+    return signing_state.get("secret") or signing_state.get("private")
+
+
+def _consume_local_provider_token():
+    if provider_tokens:
+        provider_tokens.pop()
+
+
+def _agent_manifest_path(aid: str) -> str:
+    return f"./{aid}/agent.json"
+
+
+def _update_agent_manifest(aid: str, updater):
+    manifest_path = _agent_manifest_path(aid)
+    if not os.path.exists(manifest_path):
+        logger.warn(f"Local agent manifest not found at {manifest_path}. Skipping local sync.")
+        return
+
+    with open(manifest_path, "r") as f:
+        material = json.load(f)
+
+    updater(material)
+
+    with open(manifest_path, "w") as f:
+        json.dump(material, f, indent=4)
+
+
+def _require_provider_token():
+    if not provider_tokens:
+        logger.error("No provider JWT found. Please login first.")
+        return None
+    return provider_tokens[-1]
 
 def register(email: str=None, password: str=None):
     """
@@ -61,7 +96,7 @@ def register(email: str=None, password: str=None):
     custom_user_config = saga.config.USER_DEFAULT_CONFIG.copy()
     custom_user_config["COMMON_NAME"] = email
     user_cert = CA.sign(
-        public_key=pk_u, # PK_U 
+        public_key=pk_u, # PK_U
         config=custom_user_config
     )
 
@@ -76,7 +111,7 @@ def register(email: str=None, password: str=None):
     logger.log("OVERHEAD", f"user:user_register: {monitor.elapsed('user:user_register')}")
     response = requests.post(f"{saga.config.PROVIDER_CONFIG.get('endpoint')}/register", json={
         'uid': email, # uid
-        'password': password, # pwd 
+        'password': password, # pwd
         # CRYPTOGRAPHIC MATERIAL TO SUBMIT TO THE PROVIDER:
         # - USER CERTIFICATE
         'crt_u': base64.b64encode(
@@ -85,7 +120,6 @@ def register(email: str=None, password: str=None):
     }, verify=saga.config.CA_CERT_PATH, cert=(
         saga.config.USER_WORKDIR+"/keys/"+email+".crt", saga.config.USER_WORKDIR+"/keys/"+email+".key"
     ))
-    
     if response.status_code == 201:
         logger.log("PROVIDER", f"User {email} registered successfully.")
         # Store the uid:
@@ -93,6 +127,7 @@ def register(email: str=None, password: str=None):
         # Store the key pair:
         state['keys']['signing'] = {
             'public': pk_u,
+            'secret': sk_u,
             'private': sk_u
         }
 
@@ -107,7 +142,7 @@ def register(email: str=None, password: str=None):
         logger.log("CRYPTO", f"Removing user keys from {saga.config.USER_WORKDIR}/keys/{email}")
         os.remove(saga.config.USER_WORKDIR+"/keys/"+email+".key")
         os.remove(saga.config.USER_WORKDIR+"/keys/"+email+".crt")
-        os.remove(saga.config.USER_WORKDIR+"/keys/"+email+".pub")        
+        os.remove(saga.config.USER_WORKDIR+"/keys/"+email+".pub")
 
 
 def login(email: str=None, password: str=None):
@@ -125,17 +160,18 @@ def login(email: str=None, password: str=None):
 
     response = requests.post(f"{saga.config.PROVIDER_CONFIG.get('endpoint')}/login", json={'uid': email, 'password': password}, verify=saga.config.CA_CERT_PATH, cert=(
         saga.config.USER_WORKDIR+"/keys/"+email+".crt", saga.config.USER_WORKDIR+"/keys/"+email+".key"
-    )) 
+    ))
     if response.status_code == 200:
         token = response.json().get("access_token")
         logger.log("PROVIDER", f"User {email} logged in successfully.")
         provider_tokens.append(token)
         state["uid"] = email
         # Load the keys from disk:
-        sk_u, pk_u = sc.load_ed25519_keys("./keys/"+email)
+        sk_u, pk_u = sc.load_ed25519_keys(saga.config.USER_WORKDIR+"/keys/"+email)
         state['keys']['signing'] = {
             'public': pk_u,
-            'secret': sk_u
+            'secret': sk_u,
+            'private': sk_u
         }
 
         # Get the provider's certificate:
@@ -176,7 +212,7 @@ def register_agent(name=None, device=None,
     num_one_time_keys = int(input("Enter number of one-time access keys: ")) if num_one_time_keys is None else num_one_time_keys
     if contact_rulebook is None:
         contact_rulebook = input("Enter contact rulebook: ")
-        contact_rulebook = json.loads(contact_rulebook) 
+        contact_rulebook = json.loads(contact_rulebook)
     else:
         contact_rulebook = contact_rulebook
 
@@ -187,9 +223,9 @@ def register_agent(name=None, device=None,
 
     # Generate the device info:
     dev_network_info = {
-        "aid":aid, 
-        "device":device, 
-        "IP":IP, 
+        "aid":aid,
+        "device":device,
+        "IP":IP,
         "port":port
     }
 
@@ -242,24 +278,27 @@ def register_agent(name=None, device=None,
     block = {}
     block.update(dev_network_info)
     block.update(crypto_info)
-    agent_sig = state['keys']['signing']['secret'].sign(str(block).encode("utf-8"))
+    signing_secret = _get_user_signing_secret()
+    if signing_secret is None:
+        logger.error("User signing key not loaded. Please login first.")
+        return
+    agent_sig = signing_secret.sign(str(block).encode("utf-8"))
 
     # Generate the signature of every OTK with the user's secret signing key:
     otk_sigs_2_b64 = []
     for key in public_one_time_keys:
-        sig = state['keys']['signing']['secret'].sign(
-            key.public_bytes(
-                encoding=sc.serialization.Encoding.Raw,
-                format=sc.serialization.PublicFormat.Raw
-            )
+        otk_bytes = key.public_bytes(
+            encoding=sc.serialization.Encoding.Raw,
+            format=sc.serialization.PublicFormat.Raw
         )
+        sig = sc.sign_otk(signing_secret, aid, otk_bytes)
         otk_sigs_2_b64.append(base64.b64encode(sig).decode("utf-8"))
 
 
     # Collect all the required material for the agent registration application:
     application = {
         # The agent's AID
-        'aid': aid, 
+        'aid': aid,
         # The agent's device name
         'device': device,
         # The host device IP address
@@ -281,25 +320,28 @@ def register_agent(name=None, device=None,
         # SIGNATURES:
         'agent_sig': base64.b64encode(agent_sig).decode("utf-8"), # Agent signature
         # and their corresponding signatures
-        'otk_sigs': otk_sigs_2_b64, 
+        'otk_sigs': otk_sigs_2_b64,
     }
 
     monitor.stop("user:agent_register")
+    provider_token = _require_provider_token()
+    if provider_token is None:
+        return
 
     response = requests.post(f"{saga.config.PROVIDER_CONFIG.get('endpoint')}/register_agent", json={
         'uid': state['uid'], # The user's uid
-        'jwt': provider_tokens[-1], # Provider's JWT
+        'jwt': provider_token, # Provider's JWT
         'application': application
     }, verify=saga.config.CA_CERT_PATH, cert=(
         saga.config.USER_WORKDIR+"/keys/"+state['uid']+".crt", saga.config.USER_WORKDIR+"/keys/"+state['uid']+".key"
     ))
-    
+
     monitor.start("user:agent_register")
     # Based on the provider's response, store the agent's cryptographic material
-    if response.status_code == 201:  
+    if response.status_code == 201:
         # Save the agent's cryptographic material
         stamp = response.json().get('stamp')
-        logger.log("PROVIDER", f"Agent {name} registered successfully with stamp {stamp}.")  
+        logger.log("PROVIDER", f"Agent {name} registered successfully with stamp {stamp}.")
         state['agents'][name]= {
             'signing_key': {
                 'public': pk_a,
@@ -312,10 +354,11 @@ def register_agent(name=None, device=None,
             'one_time_keys': [list(zip(private_one_time_keys, public_one_time_keys))],
         }
         # Spawn Agent with the given material:
-        
+
         crt_u = sc.load_x509_certificate(saga.config.USER_WORKDIR+"/keys/"+state['uid']+".crt")
 
         application.update({
+            "active": True,
             "stamp": stamp,
             "crt_u": base64.b64encode(
                 crt_u.public_bytes(sc.serialization.Encoding.PEM)
@@ -333,6 +376,7 @@ def register_agent(name=None, device=None,
             "sotks": private_one_time_keys_2_b64
         })
         spawn_agent(application)
+        _consume_local_provider_token()
     else:
         logger.log("PROVIDER", f"Agent registration failed: {response.json()}")
     monitor.stop("user:agent_register")
@@ -352,6 +396,131 @@ def spawn_agent(application):
         json.dump(application, f, indent=4)
 
 
+def update_policy(name=None, contact_rulebook=None):
+    """
+    Update an existing agent's contact rulebook on the provider and locally.
+    """
+    name = input("Enter agent name: ") if name is None else name
+    if contact_rulebook is None:
+        contact_rulebook = json.loads(input("Enter contact rulebook: "))
+
+    aid = state['uid'] + ":" + name
+    provider_token = _require_provider_token()
+    if provider_token is None:
+        return
+    response = requests.post(f"{saga.config.PROVIDER_CONFIG.get('endpoint')}/update_policy", json={
+        "uid": state["uid"],
+        "jwt": provider_token,
+        "aid": aid,
+        "contact_rulebook": contact_rulebook
+    }, verify=saga.config.CA_CERT_PATH, cert=(
+        saga.config.USER_WORKDIR+"/keys/"+state['uid']+".crt",
+        saga.config.USER_WORKDIR+"/keys/"+state['uid']+".key"
+    ))
+
+    if response.status_code == 200:
+        logger.log("PROVIDER", f"Agent {aid} policy updated successfully.")
+        _update_agent_manifest(aid, lambda material: material.update({"contact_rulebook": contact_rulebook}))
+        _consume_local_provider_token()
+    else:
+        logger.log("PROVIDER", f"Agent policy update failed: {response.json()}")
+
+
+def deactivate_agent(name=None):
+    """
+    Deactivate an existing agent on the provider and locally.
+    """
+    name = input("Enter agent name: ") if name is None else name
+    aid = state['uid'] + ":" + name
+    provider_token = _require_provider_token()
+    if provider_token is None:
+        return
+
+    response = requests.post(f"{saga.config.PROVIDER_CONFIG.get('endpoint')}/deactivate_agent", json={
+        "uid": state["uid"],
+        "jwt": provider_token,
+        "aid": aid
+    }, verify=saga.config.CA_CERT_PATH, cert=(
+        saga.config.USER_WORKDIR+"/keys/"+state['uid']+".crt",
+        saga.config.USER_WORKDIR+"/keys/"+state['uid']+".key"
+    ))
+
+    if response.status_code == 200:
+        logger.log("PROVIDER", f"Agent {aid} deactivated successfully.")
+        _update_agent_manifest(aid, lambda material: material.update({"active": False}))
+        _consume_local_provider_token()
+    else:
+        logger.log("PROVIDER", f"Agent deactivation failed: {response.json()}")
+
+
+def refresh_otks(name=None, num_one_time_keys=None):
+    """
+    Refresh an existing agent's one-time key inventory on the provider and locally.
+    """
+    name = input("Enter agent name: ") if name is None else name
+    num_one_time_keys = int(input("Enter number of one-time access keys: ")) if num_one_time_keys is None else num_one_time_keys
+    aid = state['uid'] + ":" + name
+
+    signing_secret = _get_user_signing_secret()
+    if signing_secret is None:
+        logger.error("User signing key not loaded. Please login first.")
+        return
+    provider_token = _require_provider_token()
+    if provider_token is None:
+        return
+    private_one_time_keys = []
+    public_one_time_keys = []
+    for _ in range(num_one_time_keys):
+        private_one_time_key, public_one_time_key = sc.generate_x25519_keypair()
+        private_one_time_keys.append(private_one_time_key)
+        public_one_time_keys.append(public_one_time_key)
+
+    public_one_time_keys_2_b64 = [base64.b64encode(key.public_bytes(
+        encoding=sc.serialization.Encoding.Raw,
+        format=sc.serialization.PublicFormat.Raw)).decode("utf-8") for key in public_one_time_keys]
+
+    private_one_time_keys_2_b64 = [base64.b64encode(key.private_bytes(
+        encoding=sc.serialization.Encoding.Raw,
+        format=sc.serialization.PrivateFormat.Raw,
+        encryption_algorithm=sc.serialization.NoEncryption())).decode("utf-8") for key in private_one_time_keys]
+
+    otk_sigs_2_b64 = []
+    for key in public_one_time_keys:
+        otk_bytes = key.public_bytes(
+            encoding=sc.serialization.Encoding.Raw,
+            format=sc.serialization.PublicFormat.Raw
+        )
+        sig = sc.sign_otk(signing_secret, aid, otk_bytes)
+        otk_sigs_2_b64.append(base64.b64encode(sig).decode("utf-8"))
+
+    response = requests.post(f"{saga.config.PROVIDER_CONFIG.get('endpoint')}/refresh_otks", json={
+        "uid": state["uid"],
+        "jwt": provider_token,
+        "application": {
+            "aid": aid,
+            "otks": public_one_time_keys_2_b64,
+            "otk_sigs": otk_sigs_2_b64
+        }
+    }, verify=saga.config.CA_CERT_PATH, cert=(
+        saga.config.USER_WORKDIR+"/keys/"+state['uid']+".crt",
+        saga.config.USER_WORKDIR+"/keys/"+state['uid']+".key"
+    ))
+
+    if response.status_code == 200:
+        logger.log("PROVIDER", f"Agent {aid} one-time keys refreshed successfully.")
+
+        def _append_otks(material):
+            material.setdefault("otks", [])
+            material.setdefault("sotks", [])
+            material["otks"].extend(public_one_time_keys_2_b64)
+            material["sotks"].extend(private_one_time_keys_2_b64)
+
+        _update_agent_manifest(aid, _append_otks)
+        _consume_local_provider_token()
+    else:
+        logger.log("PROVIDER", f"Agent OTK refresh failed: {response.json()}")
+
+
 if __name__ == "__main__":
 
     # Parse the arguments:
@@ -364,6 +533,9 @@ if __name__ == "__main__":
     parser.add_argument('--register', action='store_true', help='Register a new user', default=False)
     parser.add_argument('--login', action='store_true', help='Login with existing user', default=False)
     parser.add_argument('--register-agents', action='store_true', help='Register agents for the user', default=False)
+    parser.add_argument('--update-policies', action='store_true', help='Update policies for agents in the user config', default=False)
+    parser.add_argument('--refresh-otks', action='store_true', help='Refresh one-time keys for agents in the user config', default=False)
+    parser.add_argument('--deactivate-agents', action='store_true', help='Deactivate agents in the user config', default=False)
 
 
     args = parser.parse_args()
@@ -374,7 +546,10 @@ if __name__ == "__main__":
             print("\033[1;34m1. Register\033[0m")
             print("\033[1;32m2. Login\033[0m")
             print("\033[1;33m3. Register Agent\033[0m")
-            print("\033[1;31m4. Exit\033[0m")
+            print("\033[1;35m4. Update Policy\033[0m")
+            print("\033[1;36m5. Refresh OTKs\033[0m")
+            print("\033[1;37m6. Deactivate Agent\033[0m")
+            print("\033[1;31m7. Exit\033[0m")
             choice = input("Choose an option: ")
 
             if choice == '1':
@@ -384,6 +559,12 @@ if __name__ == "__main__":
             elif choice == '3':
                 register_agent()
             elif choice == '4':
+                update_policy()
+            elif choice == '5':
+                refresh_otks()
+            elif choice == '6':
+                deactivate_agent()
+            elif choice == '7':
                 print("Exiting...")
                 exit(0)
     else:
@@ -398,7 +579,7 @@ if __name__ == "__main__":
             with open(args.uconfig, 'r') as file:
                 user_config = yaml.safe_load(file)
         else:
-            raise ValueError("User configuration file not provided.")        
+            raise ValueError("User configuration file not provided.")
 
 
         if args.register:
@@ -407,25 +588,21 @@ if __name__ == "__main__":
                 email=user_config.get('email'),
                 password=user_config.get('passwd')
             )
-        
+
         if args.login:
             logger.log("CLI", "Logging in user...")
             login(
                 email=user_config.get('email'),
                 password=user_config.get('passwd')
             )
-        
+
         if args.register_agents:
-            # For agent in user_config.get('agents'):
             for agent in user_config.get('agents'):
-                # First authenticate the user:
                 logger.log("CLI", "Authenticating user...")
-                # Authenticate the user:
                 login(
                     email=user_config.get('email'),
                     password=user_config.get('passwd')
                 )
-                # Then register the agent:
                 logger.log("CLI", "Registering agent...")
                 register_agent(
                     name=agent.get('name'),
@@ -435,5 +612,42 @@ if __name__ == "__main__":
                     num_one_time_keys=agent.get('num_one_time_keys'),
                     contact_rulebook=agent.get('contact_rulebook')
                 )
-    
+
+        if args.update_policies:
+            for agent in user_config.get('agents'):
+                logger.log("CLI", "Authenticating user...")
+                login(
+                    email=user_config.get('email'),
+                    password=user_config.get('passwd')
+                )
+                logger.log("CLI", "Updating agent policy...")
+                update_policy(
+                    name=agent.get('name'),
+                    contact_rulebook=agent.get('contact_rulebook')
+                )
+
+        if args.refresh_otks:
+            for agent in user_config.get('agents'):
+                logger.log("CLI", "Authenticating user...")
+                login(
+                    email=user_config.get('email'),
+                    password=user_config.get('passwd')
+                )
+                logger.log("CLI", "Refreshing agent one-time keys...")
+                refresh_otks(
+                    name=agent.get('name'),
+                    num_one_time_keys=agent.get('num_one_time_keys')
+                )
+
+        if args.deactivate_agents:
+            for agent in user_config.get('agents'):
+                logger.log("CLI", "Authenticating user...")
+                login(
+                    email=user_config.get('email'),
+                    password=user_config.get('passwd')
+                )
+                logger.log("CLI", "Deactivating agent...")
+                deactivate_agent(
+                    name=agent.get('name')
+                )
 

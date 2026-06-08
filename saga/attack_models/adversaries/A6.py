@@ -79,6 +79,7 @@ class DummyAgent:
         self.task_finished_token = "<TASK_FINISHED>"
 
     def run(self, query, initiating_agent=None, agent_instance=None):
+        """返回固定或随机测试响应，用于安全回归通信场景。"""
         time.sleep(1)
         if query == self.task_finished_token:
             return self.task_finished_token
@@ -86,6 +87,7 @@ class DummyAgent:
 
 
 class A6:
+    """防御回归场景：验证联系策略未授权的发起方会被拒绝。"""
     # =======================================================================
     # ADVERSARIAL AGENT 6: M attempts to contact A despite not being 
     # authorized under A’s contact policy.
@@ -276,20 +278,13 @@ class A6:
         return cert
 
     def lookup(self, t_aid):
-        response = requests.post(f"{saga.config.PROVIDER_CONFIG.get('endpoint')}/lookup", json={'t_aid': t_aid}, verify=saga.config.CA_CERT_PATH, cert=(
-            self.workdir+"agent.crt", self.workdir+"agent.key"
-        )) 
-        if response.status_code == 200:
-            data = response.json()
-            # Convert extended-json dict to python dict:
-            data = bson.json_util.loads(json.dumps(data))
-            return data
-        elif response.status_code == 403:
-            logger.log("ACCESS", f"Access denied to {t_aid}.")
-            print(response.json())
-            return None        
+        """兼容旧 provider lookup 入口；当前协议应使用 access。"""
+        raise NotImplementedError(
+            "Provider /lookup is not implemented in this codebase. Use access() instead."
+        )
         
     def access(self, t_aid):
+        """向 provider 请求目标 agent 的访问材料并解析响应。"""
         response = requests.post(f"{saga.config.PROVIDER_CONFIG.get('endpoint')}/access", json={'i_aid':self.aid, 't_aid': t_aid}, verify=saga.config.CA_CERT_PATH, cert=(
             self.workdir+"agent.crt", self.workdir+"agent.key"
         )) 
@@ -392,6 +387,20 @@ class A6:
 
             return True
 
+    def _received_token_is_valid_unlocked(self, token_dict: dict) -> bool:
+        expiration_date = token_dict.get("expiration_timestamp")
+        expiration_timestamp = datetime.fromisoformat(expiration_date)
+        if datetime.now(tz=timezone.utc) > expiration_timestamp:
+            logger.log("ACCESS", "Token expired.")
+            return False
+
+        remaining_quota = token_dict.get("communication_quota")
+        if remaining_quota == 0:
+            logger.log("ACCESS", "Token's max quota has been exceeded.")
+            return False
+
+        return True
+
     def received_token_is_valid(self, token: str) -> bool:
         """
         Makes sure that the token that was received from the receiving agent is valid.
@@ -406,23 +415,8 @@ class A6:
                 logger.log("ACCESS", "Token provided by receiving agent not found in given tokens.")
                 return False
             
-            # Check if the token is still valid:
             token_dict = self.received_tokens[token]
-            
-            # Check the expiration date
-            expiration_date = token_dict.get("expiration_timestamp")
-            expiration_timestamp = datetime.fromisoformat(expiration_date)        
-            if datetime.now(tz=timezone.utc) > expiration_timestamp:
-                logger.log("ACCESS", "Token expired.")
-                return False
-            
-            # Check the communication quota:
-            remaining_quota = token_dict.get("communication_quota")
-            if remaining_quota == 0:
-                logger.log("ACCESS", "Token's max quota has been exceeded.")
-                return False
-
-            return True
+            return self._received_token_is_valid_unlocked(token_dict)
 
     def store_received_token(self, r_aid, token_str, token_dict):
         """
@@ -443,18 +437,22 @@ class A6:
         This function checks if the token is valid and if it is, returns it.
         If the token is not valid, it removes it from the received tokens and the aid_to_token dict.
         """
-        with self.received_tokens_lock: # THIS CREATES A DEADLOCK
+        with self.received_tokens_lock:
             token = self.aid_to_token.get(r_aid, None)
-        if token is None:
-            return None
-        if not self.received_token_is_valid(token):
-            with self.received_tokens_lock:
-                # remove the token from the received tokens:
-                del self.received_tokens[token]
-                # remove the token from the aid_to_token dict:
+            if token is None:
+                return None
+
+            token_dict = self.received_tokens.get(token)
+            if token_dict is None:
                 del self.aid_to_token[r_aid]
-            return None
-        return token
+                return None
+
+            if not self._received_token_is_valid_unlocked(token_dict):
+                del self.received_tokens[token]
+                del self.aid_to_token[r_aid]
+                return None
+
+            return token
 
     def send(self, conn, payload):
         """

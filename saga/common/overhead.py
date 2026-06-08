@@ -43,6 +43,12 @@ class Monitor:
             raise ValueError(f"No timing data for run ID: {run_id}")
         return run["elapsed"]
 
+    def has_run(self, run_id):
+        """
+        Return whether the monitor has recorded a given run ID.
+        """
+        return run_id in self._runs
+
     def elapsed_all(self):
         """
         Returns a dictionary of all elapsed times.

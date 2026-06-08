@@ -6,12 +6,15 @@ from agent_backend.tools.base import BaseTool
 
 
 class LocalDocumentsTool(BaseTool):
+    """封装本地文档工具的测试数据写入、搜索和创建操作。"""
+
     def __init__(self, user_email: str):
         super().__init__("documents")
         self.client = MongoClient(self.mongo_uri)
         self.user_email = user_email
     
     def seed_data(self, data: List[dict]):
+        """将文档测试数据写入当前用户的文档集合。"""
         db = self.client.get_database(self.tool_name)
         collection_self = db.get_collection(self.user_email)
 

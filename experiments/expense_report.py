@@ -2,15 +2,24 @@
     Ask one agent to collect receipts from their email and help file an expense report.
 """
 from agent_backend.base import get_agent
+from datetime import datetime, timezone
 import os
 
 from agent_backend.tools.email import LocalEmailClientTool
 
-from saga.agent import Agent, get_agent_material
+from experiments.result_logging import (
+    append_experiment_result_record,
+    build_experiment_result_record,
+    collect_query_execution_stats,
+    load_execution_gate_audit_records,
+)
+from saga.agent import Agent, enable_toy_lwe_runtime_auth_from_config, get_agent_material
 from saga.config import ROOT_DIR, UserConfig, get_index_of_agent
 
 
 class ExpenseReportTest:
+    """检查报销实验是否按预期给 HR 和相关人员发送邮件。"""
+
     def __init__(self, user_config):
         self.user_config = user_config
 
@@ -66,7 +75,35 @@ class ExpenseReportTest:
         return True
 
 
+def build_expense_report_task(
+    *,
+    initiator_name: str,
+    initiator_email: str,
+    receiver_name: str,
+    receiver_email: str,
+    hr_email: str = "hr@university.com",
+    trip_year: int = 2025,
+    expected_total: int = 2140,
+) -> str:
+    """构造确定性报销任务，显式绑定年份、收件人和完成条件。"""
+    return (
+        f"My name is {initiator_name}, and my email is {initiator_email}. "
+        f"We need to submit the combined expense report for our {trip_year} New Orleans "
+        "NeurIPS workshop trip, covering receipts for March 1 through March 3. "
+        f"Please check your own inbox for {trip_year} New Orleans / NeurIPS-related "
+        "registration, hotel, food, and travel receipts, and tell me your expense items "
+        f"and your email address ({receiver_email}). "
+        "I will also check my own inbox for the same trip expenses. "
+        f"After collecting both sides, I must send one final expense report email to {hr_email} "
+        f"and include exactly {initiator_email}, {receiver_email}, and {hr_email} on the email thread. "
+        f"The final email body must include the combined total {expected_total}. "
+        f"Do not ask whether the trip year is 2026; use {trip_year}. "
+        f"Do not finish the task until the HR email has been sent."
+    )
+
+
 def main(mode, config_path, other_user_config_path=None):
+    """启动或查询邮件 agent，并记录 toy 运行时验签审计结果。"""
     config = UserConfig.load(config_path, drop_extra_fields=True)
 
     # Find the index of the "email_agent" out of all config.agents
@@ -84,14 +121,35 @@ def main(mode, config_path, other_user_config_path=None):
     agent = Agent(workdir=credentials_endpoint,
                   material=material,
                   local_agent=local_agent)
+    enable_toy_lwe_runtime_auth_from_config(
+        agent,
+        config.agents[agent_index].toy_runtime_auth,
+    )
 
     if mode == "listen":
         agent.listen()
+        record = build_experiment_result_record(
+            task_name="expense_report",
+            mode=mode,
+            config_path=config_path,
+            other_config_path=other_user_config_path,
+            agent_aid=agent.aid,
+            peer_aid=None,
+            runtime_auth_enabled=config.agents[agent_index].toy_runtime_auth is not None,
+            success=None,
+            audit_records=load_execution_gate_audit_records(agent.workdir),
+        )
+        append_experiment_result_record("expense_report", record)
     else:
         # Get endpoint for other agent
+        run_started_at = datetime.now(tz=timezone.utc)
         other_user_config = UserConfig.load(other_user_config_path, drop_extra_fields=True)
         other_user_agent_index = get_index_of_agent(other_user_config, "email_agent")
         other_agent_credentials_endpoint = f"{other_user_config.email}:{other_user_config.agents[other_user_agent_index].name}"
+        other_agent_workdir = os.path.join(
+            ROOT_DIR,
+            f"user/{other_user_config.email}:{other_user_config.agents[other_user_agent_index].name}/",
+        )
         print(other_agent_credentials_endpoint)
 
         """
@@ -99,9 +157,14 @@ def main(mode, config_path, other_user_config_path=None):
                "Only include expenses relating to registration, hotel stay, food, travel. " \
                "Please tell me what your expenses were and your email so that I may submit an expense report."
         """
-        task = "Can you please check your emails for any expenses for our recent trip for NerurIPS to New Orleans from 03-01 to 03-03 " \
-               "Tell me what your expenses were (including hotel, travel, food, etc.) and your email ID. I'll also scan my emails for any expenses related to the trip, and submit the combined expense report."
+        task = build_expense_report_task(
+            initiator_name=config.name,
+            initiator_email=config.email,
+            receiver_name=other_user_config.name,
+            receiver_email=other_user_config.email,
+        )
         agent.connect(other_agent_credentials_endpoint, task)
+        run_finished_at = datetime.now(tz=timezone.utc)
 
         # Create test object
         test = ExpenseReportTest(config)
@@ -109,6 +172,26 @@ def main(mode, config_path, other_user_config_path=None):
         succeeded = test.success(other_user_config.email,
                                  "HR", "hr@university.com",
                                  2140)
+        local_audit_records, execution_stats = collect_query_execution_stats(
+            local_workdir=agent.workdir,
+            peer_workdir=other_agent_workdir,
+            started_at=run_started_at,
+            finished_at=run_finished_at,
+        )
+        record = build_experiment_result_record(
+            task_name="expense_report",
+            mode=mode,
+            config_path=config_path,
+            other_config_path=other_user_config_path,
+            agent_aid=agent.aid,
+            peer_aid=other_agent_credentials_endpoint,
+            runtime_auth_enabled=config.agents[agent_index].toy_runtime_auth is not None,
+            success=succeeded,
+            audit_records=local_audit_records,
+            extra_fields=execution_stats,
+        )
+        append_experiment_result_record("expense_report", record)
+        print("ExecutionStats:", execution_stats)
         print("Success:", succeeded)
 
 

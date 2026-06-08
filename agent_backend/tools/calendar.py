@@ -6,6 +6,8 @@ from agent_backend.tools.base import BaseTool
 
 
 class LocalCalendarTool(BaseTool):
+    """封装本地日历工具的存储、查询和写入能力。"""
+
     def __init__(self, user_name: str, user_email: str):
         super().__init__("calendar")
         self.client = MongoClient(self.mongo_uri)
@@ -20,6 +22,7 @@ class LocalCalendarTool(BaseTool):
         }
     
     def get_preference(self):
+        """返回当前硬编码日历策略对应的可读会议偏好。"""
         return "Any time between {} and {} between {} and {} in the week".format(
             self.policy["start_time"],
             self.policy["end_time"],
@@ -28,6 +31,7 @@ class LocalCalendarTool(BaseTool):
         )
 
     def seed_data(self, data: List[dict]):
+        """将测试日历数据写入本人和参会人的日历集合。"""
         db = self.client.get_database(self.tool_name)
         collection_self = db.get_collection(self.user_email)
 
@@ -90,6 +94,7 @@ class LocalCalendarTool(BaseTool):
 
         # Normalize start and end of policy hours for a given date
         def policy_bounds(dt):
+            """计算某一天允许安排会议的策略时间边界。"""
             date_only = dt.date()
             start = datetime.combine(date_only, time.fromisoformat(self.policy["start_time"]))
             end = datetime.combine(date_only, time.fromisoformat(self.policy["end_time"]))
@@ -97,6 +102,7 @@ class LocalCalendarTool(BaseTool):
 
         # Helper to clip an interval [start_dt, end_dt) to policy hours, splitting across days if needed.
         def clip_to_policy(start_dt, end_dt):
+            """把候选空闲区间裁剪到策略允许的每日工作时间内。"""
             blocks = []
             current = start_dt
             # Process day-by-day.
@@ -152,7 +158,8 @@ class LocalCalendarTool(BaseTool):
                            time_to: str,
                            event: str,
                            participants: List[str],
-                           details: str):
+                           details: str) -> bool:
+        """向所有参会人的本地日历集合写入同一个会议事件。"""
         db = self.client.get_database(self.tool_name)
 
         # Make sure time_from and time_to are ISO format
@@ -167,24 +174,29 @@ class LocalCalendarTool(BaseTool):
         except ValueError:
             print("Invalid date format for time_to")
         
-        # Make sure user is in participants
-        if f"{self.user_name} <{self.user_email}>" not in participants:
-            participants.append(f"{self.user_name} <{self.user_email}>")
-        
-        participants = list(set(participants))  # Remove duplicates
+        participants_by_email: dict[str, str] = {}
+        for participant in participants:
+            participant_email = self._get_email_from_field(participant)
+            # 同一邮箱可能以纯邮箱或 "Name <email>" 出现，必须按邮箱语义去重。
+            if participant_email:
+                participants_by_email.setdefault(participant_email, participant.strip())
+
+        if self.user_email not in participants_by_email:
+            participants_by_email[self.user_email] = f"{self.user_name} <{self.user_email}>"
+
+        normalized_participants = list(participants_by_email.values())
 
         event = {
             "time_from": time_from,
             "time_to": time_to,
             "event": event,
-            "participants": participants,
+            "participants": normalized_participants,
             "details": details,
         }
 
         # Now add it to the calendar of all participants
-        for participant in participants:
-            participant_email = self._get_email_from_field(participant)
+        for participant_email in participants_by_email:
             collection = db.get_collection(participant_email)
-            collection.insert_one(event)
+            collection.insert_one(dict(event))
 
         return True

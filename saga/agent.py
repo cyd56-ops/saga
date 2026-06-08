@@ -5,14 +5,17 @@ import threading
 import time
 import json
 import os
+import hashlib
 import bson.json_util
 import socket
 import ssl
 import base64
+import binascii
 import requests
 from datetime import datetime, timedelta, timezone
 import traceback
 from pathlib import Path
+from collections.abc import Callable
 from cryptography.x509 import Certificate
 
 import saga.config
@@ -21,11 +24,29 @@ from saga.common.overhead import Monitor
 from saga.common.contact_policy import check_rulebook, match
 from saga.ca.CA import get_SAGA_CA
 import saga.common.crypto as sc
+from saga.execution_gate import (
+    append_execution_gate_audit_record,
+    build_execution_gate_audit_record,
+    ExecutionAuthorizationError,
+    ExecutionGateDecision,
+    ExecutionGate,
+    ExecutionGateRequest,
+    LocalExecutionContext,
+    build_toy_lwe_execution_gate,
+)
+from saga.messages import build_request_envelope
+from saga.intent import AgentIntent, IntentCompiler, PolicyDecision
 from saga.local_agent import LocalAgent, DummyAgent
+from saga.runtime_diagnostics import (
+    append_local_run_diagnostic_record,
+    build_local_run_diagnostic_record,
+)
 
 DEBUG = False
 NONCE_SIZE_BYTES = 12  # Size of the nonce in bytes
 MAX_QUERIES = 100
+# 真实 LLM 工具调用可能超过两分钟；该超时只限制 socket 等待，不改变 token/信封有效期。
+CONVERSATION_SOCKET_TIMEOUT_SECONDS = 300.0
 # TODO: Handle max_queries
 
 
@@ -90,13 +111,107 @@ def deserialize(obj):
         return obj
 
 
+def _default_replay_state_dir(agent: "Agent") -> Path | None:
+    """返回 agent 默认的 replay 状态目录；缺少 workdir 时保持内存态。"""
+    workdir = getattr(agent, "workdir", None)
+    if not workdir:
+        return None
+    return Path(workdir) / "audit" / "replay"
+
+
+def enable_toy_lwe_runtime_auth(
+    agent: "Agent",
+    *,
+    scheme: "ToyLWESignatureScheme",
+    key_pair: "KeyPair",
+    trusted_public_keys: dict[str, bytes],
+    verifier_flavor: str = "compiled",
+    message_bytes: int = 32,
+    now_fn: Callable[[], datetime] | None = None,
+    replay_state_dir: str | Path | None = None,
+) -> ExecutionGate:
+    """Attach research-only toy LWE signing and execution-gate wiring to an agent.
+
+    This helper centralizes the current prototype runtime setup so experiments
+    and future real-agent entry points can enable the full toy LWE path with one
+    call instead of manually configuring both outbound signing and inbound gate
+    verification.
+
+    启用 toy LWE runtime auth 时默认打开严格执行层 gate，缺失 gate/context 会拒绝。
+    """
+    gate = build_toy_lwe_execution_gate(
+        scheme,
+        trusted_public_keys,
+        verifier_flavor=verifier_flavor,
+        message_bytes=message_bytes,
+        now_fn=now_fn,
+        replay_state_dir=replay_state_dir or _default_replay_state_dir(agent),
+    )
+    agent.pq_signature_scheme = scheme
+    agent.pq_public_key = key_pair.public_key
+    agent.pq_secret_key = key_pair.secret_key
+    agent.execution_gate = gate
+    agent.strict_execution_gate = True
+    return gate
+
+
+def enable_toy_lwe_runtime_auth_from_config(
+    agent: "Agent",
+    runtime_auth_config: saga.config.ToyRuntimeAuthConfig | None,
+    *,
+    now_fn: Callable[[], datetime] | None = None,
+) -> ExecutionGate | None:
+    """从配置块启用 runtime auth，并按 mode 保持 toy/ML-DSA 边界。"""
+    if runtime_auth_config is None or not runtime_auth_config.enabled:
+        return None
+
+    mode = runtime_auth_config.resolved_mode()
+    if mode == "mldsa_external":
+        raise RuntimeError(
+            "mldsa_external runtime auth requires explicit vetted backend wiring; "
+            "the config-driven path fails closed by default."
+        )
+
+    trusted_public_keys: dict[str, bytes] = {}
+    for aid, public_key_b64 in runtime_auth_config.trusted_public_keys.items():
+        try:
+            trusted_public_keys[aid] = base64.b64decode(public_key_b64, validate=True)
+        except (TypeError, ValueError, binascii.Error) as exc:
+            raise ValueError(f"invalid base64 trusted public key for {aid}") from exc
+
+    # toy LWE 只在显式启用 research runtime auth 时加载，避免 SAGA 核心路径强依赖 PQ-CAN。
+    from pq.toy_lwe import ToyLWESignatureScheme
+
+    scheme = ToyLWESignatureScheme(seed=runtime_auth_config.seed)
+    key_pair = scheme.keygen()
+    gate = enable_toy_lwe_runtime_auth(
+        agent,
+        scheme=scheme,
+        key_pair=key_pair,
+        trusted_public_keys=trusted_public_keys,
+        verifier_flavor=runtime_auth_config.toy_verifier_flavor(),
+        message_bytes=runtime_auth_config.message_bytes,
+        now_fn=now_fn,
+        replay_state_dir=runtime_auth_config.replay_state_dir or _default_replay_state_dir(agent),
+    )
+    agent.strict_execution_gate = runtime_auth_config.strict_execution_gate
+    return gate
+
+
 class Agent:
     """
         Main agent wrapper class for the SAGA system.
         This class is responsible for managing the agent's lifecycle, handling communication with other agents,
         and managing the agent's access control and security features.
     """
-    def __init__(self, workdir: str, material: dict, local_agent: LocalAgent = None):
+    def __init__(
+        self,
+        workdir: str,
+        material: dict,
+        local_agent: LocalAgent = None,
+        execution_gate: ExecutionGate | None = None,
+        strict_execution_gate: bool = False,
+    ):
         """
         Initializes the Agent object with the given work directory and material.
 
@@ -104,6 +219,10 @@ class Agent:
             workdir (str): The working directory for the agent.
             material (dict): The material for the agent, which contains the agent's credentials and other information.
             local_agent (LocalAgent): An optional local agent object that will be used to run tasks. If not provided, a DummyAgent will be used.
+            execution_gate (ExecutionGate | None): Optional execution-layer gate.
+            strict_execution_gate (bool): Reject execution when gate/context state is missing.
+
+        严格执行层 gate 模式用于 PQ-CAN 安全路径，缺少 gate 或上下文时默认拒绝。
         """
 
         self.workdir = workdir
@@ -120,12 +239,20 @@ class Agent:
         if not isinstance(self.local_agent, LocalAgent):
             raise Exception("Please provide a valid LocalAgent instance or a child of it.")
 
+        self._bind_local_agent_runtime_hooks()
         self.task_finished_token = self.local_agent.task_finished_token
+        self.execution_gate = execution_gate
+        self.strict_execution_gate = strict_execution_gate
+        self.pq_signature_scheme = None
+        self.pq_public_key = None
+        self.pq_secret_key = None
+        self.provider_id = saga.config.PROVIDER_CONFIG.get("endpoint", "")
 
         self.aid = material.get("aid")
         self.device = material.get("device")
         self.IP = material.get("IP")
         self.port = material.get("port")
+        self.active = material.get("active", True)
 
         # TLS signing keys for the Agent:
         self.sk_a = sc.bytesToPrivateEd25519Key(
@@ -236,6 +363,171 @@ class Agent:
         self.monitor = Monitor()
         self.llm_monitor = Monitor(time.time)
 
+    def _bind_local_agent_runtime_hooks(self) -> None:
+        """Install optional runtime callbacks into the local agent wrapper."""
+        if hasattr(self.local_agent, "set_delegation_handler"):
+            self.local_agent.set_delegation_handler(self._delegate_to_agent)
+
+    @staticmethod
+    def _local_agent_memory_step_count(agent_instance: object | None) -> int:
+        """Return the current memory step count for a local agent instance."""
+        if agent_instance is None:
+            return 0
+
+        memory = getattr(agent_instance, "memory", None)
+        steps = getattr(memory, "steps", None)
+        if steps is None:
+            return 0
+        try:
+            return len(steps)
+        except TypeError:
+            return 0
+
+    def _record_local_run_diagnostic(
+        self,
+        *,
+        peer_aid: str | None,
+        conversation_side: str,
+        turn_index: int,
+        query: str,
+        response: object,
+        llm_elapsed_seconds: float | None,
+        agent_instance: object | None,
+        step_start_index: int,
+        run_status: str = "completed",
+        error: str | None = None,
+    ) -> None:
+        """Persist one structured local runtime diagnostic record."""
+        record = build_local_run_diagnostic_record(
+            agent_aid=self.aid,
+            peer_aid=peer_aid,
+            conversation_side=conversation_side,
+            turn_index=turn_index,
+            query=query,
+            response=response,
+            llm_elapsed_seconds=llm_elapsed_seconds,
+            agent_instance=agent_instance,
+            step_start_index=step_start_index,
+        )
+        record["run_status"] = run_status
+        if error is not None:
+            record["error"] = error
+        append_local_run_diagnostic_record(getattr(self, "workdir", None), record)
+        logger.log(
+            "DIAG",
+            json.dumps(
+                {
+                    "run_status": run_status,
+                    "side": conversation_side,
+                    "turn": turn_index,
+                    "peer_aid": peer_aid,
+                    "tool_call_count": record["tool_call_count"],
+                    "tool_call_names": record["tool_call_names"],
+                    "error_step_count": record["error_step_count"],
+                    "response_is_task_finished": record["response_is_task_finished"],
+                    "error": error,
+                },
+                sort_keys=True,
+            ),
+        )
+
+    def _llm_elapsed_seconds(self, run_id: str) -> float | None:
+        """Return elapsed LLM timing data when the configured monitor exposes it."""
+        if not hasattr(self.llm_monitor, "elapsed"):
+            return None
+        if hasattr(self.llm_monitor, "has_run") and not self.llm_monitor.has_run(run_id):
+            return None
+        return self.llm_monitor.elapsed(run_id)
+
+    def _run_local_agent_with_diagnostics(
+        self,
+        *,
+        query: str,
+        initiating_agent: bool,
+        agent_instance: object | None,
+        peer_aid: str | None,
+        conversation_side: str,
+        turn_index: int,
+        run_id: str,
+        local_agent_kwargs: dict | None = None,
+    ):
+        """Run the local agent and persist start/completion/failure diagnostics."""
+        local_agent_kwargs = local_agent_kwargs or {}
+        step_start_index = self._local_agent_memory_step_count(agent_instance)
+        self._record_local_run_diagnostic(
+            peer_aid=peer_aid,
+            conversation_side=conversation_side,
+            turn_index=turn_index,
+            query=query,
+            response="",
+            llm_elapsed_seconds=None,
+            agent_instance=agent_instance,
+            step_start_index=step_start_index,
+            run_status="started",
+        )
+        self.llm_monitor.start(run_id)
+        try:
+            next_agent_instance, response = self.local_agent.run(
+                query,
+                initiating_agent=initiating_agent,
+                agent_instance=agent_instance,
+                **local_agent_kwargs,
+            )
+            response = self._normalize_local_agent_response(response)
+        except Exception as exc:
+            self.llm_monitor.stop(run_id)
+            error = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+            self._record_local_run_diagnostic(
+                peer_aid=peer_aid,
+                conversation_side=conversation_side,
+                turn_index=turn_index,
+                query=query,
+                response="",
+                llm_elapsed_seconds=self._llm_elapsed_seconds(run_id),
+                agent_instance=agent_instance,
+                step_start_index=step_start_index,
+                run_status="failed",
+                error=error,
+            )
+            raise
+        self.llm_monitor.stop(run_id)
+        self._record_local_run_diagnostic(
+            peer_aid=peer_aid,
+            conversation_side=conversation_side,
+            turn_index=turn_index,
+            query=query,
+            response=response,
+            llm_elapsed_seconds=self._llm_elapsed_seconds(run_id),
+            agent_instance=next_agent_instance,
+            step_start_index=step_start_index,
+            run_status="completed",
+        )
+        return next_agent_instance, response
+
+    def _normalize_local_agent_response(self, response) -> str:
+        """Normalize local-agent output into transport-safe text.
+
+        模型可能返回 dict/list 等结构化 final_answer；签名信封和 socket 传输统一使用字符串。
+        """
+        if isinstance(response, str):
+            return response
+        if isinstance(response, bytes):
+            return response.decode("utf-8", errors="replace")
+        return json.dumps(serialize(response), sort_keys=True, ensure_ascii=True)
+
+    def _delegate_to_agent(self, target_aid: str, message: str, **kwargs) -> None:
+        """Delegate a task to another SAGA agent through the outer runtime."""
+        self.connect(target_aid, message)
+
+    def _consume_local_otk(self, otk_bytes: bytes):
+        """原子消费本地一次性私钥，防止并发握手重复使用同一个 OTK。"""
+        with self.otks_lock:
+            sotk = self.otks_dict.get(otk_bytes)
+            if sotk is None:
+                return None
+            del self.otks_dict[otk_bytes]
+            return sotk
+
     def get_provider_cert(self) -> Certificate:
         """
         This is a 'smarter' way to get the provider's certificate. This function uses the requests library
@@ -255,30 +547,15 @@ class Agent:
 
     def lookup(self, t_aid: str) -> dict:
         """
-        Looks up the target agent by its AID.
-        This function sends a request to the provider to look up the target agent's AID.
-
-        Args:
-            t_aid (str): The AID of the target agent.
-        Returns:
-            data (dict): The data returned by the provider, which contains the target agent's information.
-            If the access is denied, it returns None.
+        Compatibility shim for a provider endpoint that is not implemented.
+        Use access() for the active protocol flow.
         """
-        response = requests.post(f"{saga.config.PROVIDER_CONFIG['endpoint']}/lookup", json={'t_aid': t_aid}, verify=saga.config.CA_CERT_PATH, cert=(
-            self.workdir+"agent.crt", self.workdir+"agent.key"
-        )) 
-        if response.status_code == 200:
-            data = response.json()
-            # Convert extended-json dict to python dict:
-            data = bson.json_util.loads(json.dumps(data))
-            return data
-        elif response.status_code == 403:
-            logger.log("ACCESS", f"Access denied to {t_aid}.")
-            print(response.json())
-            return None        
+        raise NotImplementedError(
+            "Provider /lookup is not implemented in this codebase. Use access() instead."
+        )
         
     def access(self, t_aid):
-        # TODO: How is this different from lookup()?
+        """向 provider 请求目标 agent 的访问材料并解析扩展 JSON 响应。"""
         response = requests.post(f"{saga.config.PROVIDER_CONFIG['endpoint']}/access", json={'i_aid':self.aid, 't_aid': t_aid}, verify=saga.config.CA_CERT_PATH, cert=(
             self.workdir+"agent.crt", self.workdir+"agent.key"
         )) 
@@ -351,34 +628,141 @@ class Agent:
                 return False
             # Check if the token is still valid:
             token_dict = self.active_tokens[token]
-        
-            # Check the expiration date
-            expiration_date = token_dict.get("expiration_timestamp")
-            expiration_timestamp = datetime.fromisoformat(expiration_date)        
-            if datetime.now(tz=timezone.utc) > expiration_timestamp:
-                logger.error("Token expired.")
-                return False
-            
-            # Check the communication quota:
-            remaining_quota = token_dict.get("communication_quota")
-            if remaining_quota == 0:
-                logger.error("Token's max quota has been exceeded.")
-                return False
+            return self._active_token_is_valid_unlocked(token_dict, recipient_pac)
 
-            # Check if the recipient access control key is the same as the one that was used to initiate the convo.
-            token_recipient_pac = token_dict.get("recipient_pac")
+    def _parse_token_expiration(self, expiration_date: object) -> datetime:
+        """解析 token 过期时间，并把 naive timestamp 视为 UTC。"""
+        if isinstance(expiration_date, datetime):
+            expiration_timestamp = expiration_date
+        elif isinstance(expiration_date, str):
+            expiration_timestamp = datetime.fromisoformat(expiration_date)
+        else:
+            raise ValueError("token expiration timestamp is missing or invalid")
+        if expiration_timestamp.tzinfo is None:
+            expiration_timestamp = expiration_timestamp.replace(tzinfo=timezone.utc)
+        return expiration_timestamp
+
+    def _active_token_is_valid_unlocked(self, token_dict: dict, recipient_pac) -> bool:
+        """在持有 active token 锁时检查 token 是否仍可被发起方消费。"""
+        try:
+            expiration_timestamp = self._parse_token_expiration(
+                token_dict.get("expiration_timestamp")
+            )
+        except ValueError:
+            logger.error("Token expiration timestamp is invalid.")
+            return False
+        if datetime.now(tz=timezone.utc) > expiration_timestamp:
+            logger.error("Token expired.")
+            return False
+
+        remaining_quota = int(token_dict.get("communication_quota", 0) or 0)
+        if remaining_quota <= 0:
+            logger.error("Token's max quota has been exceeded.")
+            return False
+
+        token_recipient_pac = token_dict.get("recipient_pac")
+        try:
             recipient_pac_to_bytes = base64.b64encode(
                 recipient_pac.public_bytes(
                     encoding=sc.serialization.Encoding.Raw,
                     format=sc.serialization.PublicFormat.Raw
                 )
             ).decode('utf-8')
+        except AttributeError:
+            logger.error("Recipient PAC cannot be serialized for token validation.")
+            return False
 
-            if token_recipient_pac != recipient_pac_to_bytes:
-                logger.error("Token's recipient PAC does not match the one that the token was originally issued to.")
-                return False
+        if token_recipient_pac != recipient_pac_to_bytes:
+            logger.error("Token's recipient PAC does not match the one that the token was originally issued to.")
+            return False
 
-            return True
+        return True
+
+    def _decrement_token_quota_unlocked(self, token_dict: dict) -> None:
+        """在调用方持锁时原子扣减 token quota，避免并发重复消费。"""
+        remaining_quota = int(token_dict.get("communication_quota", 0) or 0)
+        token_dict["communication_quota"] = max(0, remaining_quota - 1)
+        logger.log('ACCESS', f'Remaining token quota: {token_dict["communication_quota"]}')
+
+    def _consume_active_token(self, token: str | None, recipient_pac) -> dict | None:
+        """锁内完成 active token 校验和 quota 扣减，成功时返回消费前快照。"""
+        with self.active_tokens_lock:
+            if token not in self.active_tokens.keys():
+                logger.error("Token provided by initiating not found in given tokens.")
+                return None
+            token_dict = self.active_tokens[token]
+            # 兼容直接单元测试中的实例级 monkeypatch；正常运行走锁内 helper。
+            token_validator = self.__dict__.get("token_is_valid")
+            if token_validator is not None:
+                valid = bool(token_validator(token, recipient_pac))
+            else:
+                valid = self._active_token_is_valid_unlocked(token_dict, recipient_pac)
+            if not valid:
+                return None
+            token_snapshot = dict(token_dict)
+            self._decrement_token_quota_unlocked(token_dict)
+            return token_snapshot
+
+    def _received_token_is_valid_unlocked(self, token_dict: dict) -> bool:
+        """
+        Validates a received token while the caller manages locking.
+        """
+        try:
+            expiration_timestamp = self._parse_token_expiration(
+                token_dict.get("expiration_timestamp")
+            )
+        except ValueError:
+            logger.log("ACCESS", "Token expiration timestamp is invalid.")
+            return False
+        if datetime.now(tz=timezone.utc) > expiration_timestamp:
+            logger.log("ACCESS", "Token expired.")
+            return False
+
+        remaining_quota = int(token_dict.get("communication_quota", 0) or 0)
+        if remaining_quota <= 0:
+            logger.log("ACCESS", "Token's max quota has been exceeded.")
+            return False
+
+        return True
+
+    def _consume_received_token(self, token: str) -> dict | None:
+        """锁内完成 received token 校验和 quota 扣减，成功时返回消费前快照。"""
+        with self.received_tokens_lock:
+            if token not in self.received_tokens.keys():
+                logger.log("ACCESS", "Token provided by receiving agent not found in given tokens.")
+                return None
+            token_dict = self.received_tokens[token]
+            # 兼容直接单元测试中的实例级 monkeypatch；正常运行走锁内 helper。
+            token_validator = self.__dict__.get("received_token_is_valid")
+            if token_validator is not None:
+                valid = bool(token_validator(token))
+            else:
+                valid = self._received_token_is_valid_unlocked(token_dict)
+            if not valid:
+                return None
+            token_snapshot = dict(token_dict)
+            self._decrement_token_quota_unlocked(token_dict)
+            return token_snapshot
+
+    def _active_token_snapshot(self, token: str) -> dict | None:
+        """读取 active token 快照；token 已被并发失效时返回 ``None``。"""
+        with self.active_tokens_lock:
+            token_dict = self.active_tokens.get(token)
+            if token_dict is None:
+                return None
+            return dict(token_dict)
+
+    def _invalidate_active_token(self, token: str) -> None:
+        """幂等失效 active token，避免并发删除触发 KeyError。"""
+        with self.active_tokens_lock:
+            self.active_tokens.pop(token, None)
+
+    def _invalidate_received_token(self, token: str, r_aid: str) -> None:
+        """幂等失效 received token 和对应 AID 映射。"""
+        with self.received_tokens_lock:
+            self.received_tokens.pop(token, None)
+            if self.aid_to_token.get(r_aid) == token:
+                self.aid_to_token.pop(r_aid, None)
 
     def received_token_is_valid(self, token: str) -> bool:
         """
@@ -394,23 +778,8 @@ class Agent:
                 logger.log("ACCESS", "Token provided by receiving agent not found in given tokens.")
                 return False
             
-            # Check if the token is still valid:
             token_dict = self.received_tokens[token]
-            
-            # Check the expiration date
-            expiration_date = token_dict.get("expiration_timestamp")
-            expiration_timestamp = datetime.fromisoformat(expiration_date)        
-            if datetime.now(tz=timezone.utc) > expiration_timestamp:
-                logger.log("ACCESS", "Token expired.")
-                return False
-            
-            # Check the communication quota:
-            remaining_quota = token_dict.get("communication_quota")
-            if remaining_quota == 0:
-                logger.log("ACCESS", "Token's max quota has been exceeded.")
-                return False
-
-            return True
+            return self._received_token_is_valid_unlocked(token_dict)
 
     def store_received_token(self, r_aid, token_str, token_dict):
         """
@@ -431,18 +800,323 @@ class Agent:
         This function checks if the token is valid and if it is, returns it.
         If the token is not valid, it removes it from the received tokens and the aid_to_token dict.
         """
-        with self.received_tokens_lock: # THIS CREATES A DEADLOCK
+        with self.received_tokens_lock:
             token = self.aid_to_token.get(r_aid, None)
-        if token is None:
-            return None
-        if not self.received_token_is_valid(token):
-            with self.received_tokens_lock:
-                # remove the token from the received tokens:
-                del self.received_tokens[token]
-                # remove the token from the aid_to_token dict:
+            if token is None:
+                return None
+
+            token_dict = self.received_tokens.get(token)
+            if token_dict is None:
                 del self.aid_to_token[r_aid]
+                return None
+
+            if not self._received_token_is_valid_unlocked(token_dict):
+                del self.received_tokens[token]
+                del self.aid_to_token[r_aid]
+                return None
+
+            return token
+
+    def _authorize_execution_request(
+        self,
+        *,
+        sender_aid: str | None,
+        token: str,
+        message_dict: dict,
+    ) -> bool:
+        """Authorize a received request before it enters the local execution path."""
+        return self._evaluate_execution_request(
+            sender_aid=sender_aid,
+            token=token,
+            message_dict=message_dict,
+        ).allowed
+
+    def _evaluate_execution_request(
+        self,
+        *,
+        sender_aid: str | None,
+        token: str,
+        message_dict: dict,
+        consume: bool = False,
+        protocol_allow: bool | None = None,
+    ) -> ExecutionGateDecision:
+        """Evaluate or consume a received request and keep a stable audit reason."""
+        execution_gate = getattr(self, "execution_gate", None)
+        if execution_gate is None:
+            if getattr(self, "strict_execution_gate", False):
+                return ExecutionGateDecision(
+                    False,
+                    "missing_execution_gate",
+                    protocol_allow=protocol_allow,
+                )
+            return ExecutionGateDecision(
+                True,
+                "no_execution_gate",
+                protocol_allow=protocol_allow,
+                internal_policy_accept=True,
+            )
+
+        request = self._build_execution_gate_request(
+            sender_aid=sender_aid,
+            token=token,
+            message_dict=message_dict,
+        )
+        if consume and hasattr(execution_gate, "consume_request"):
+            return self._attach_protocol_allow(
+                execution_gate.consume_request(request),
+                protocol_allow=protocol_allow,
+            )
+        if hasattr(execution_gate, "evaluate_request"):
+            return self._attach_protocol_allow(
+                execution_gate.evaluate_request(request),
+                protocol_allow=protocol_allow,
+            )
+        if execution_gate.authorize(request):
+            return ExecutionGateDecision(
+                True,
+                "authorized_by_legacy_gate",
+                protocol_allow=protocol_allow,
+                execution_scope_allowed=True,
+                internal_policy_accept=True,
+            )
+        return ExecutionGateDecision(
+            False,
+            "rejected_by_legacy_gate",
+            protocol_allow=protocol_allow,
+        )
+
+    def _attach_protocol_allow(
+        self,
+        decision: ExecutionGateDecision,
+        *,
+        protocol_allow: bool | None,
+    ) -> ExecutionGateDecision:
+        """把协议层 token 结果合入 gate decision，兼容旧测试 gate 返回对象。"""
+        if hasattr(decision, "with_formula_values"):
+            return decision.with_formula_values(protocol_allow=protocol_allow)
+        return ExecutionGateDecision(
+            bool(getattr(decision, "allowed")),
+            str(getattr(decision, "reason", "legacy_gate_decision")),
+            protocol_allow=protocol_allow,
+        )
+
+    def _build_local_execution_context(
+        self,
+        *,
+        sender_aid: str | None,
+        token: str,
+        message_dict: dict,
+        decision: ExecutionGateDecision | None = None,
+    ) -> LocalExecutionContext | None:
+        """Build a local execution context for downstream tool/memory gating."""
+        execution_gate = getattr(self, "execution_gate", None)
+        if execution_gate is None or not hasattr(execution_gate, "build_local_execution_context"):
             return None
-        return token
+
+        request = self._build_execution_gate_request(
+            sender_aid=sender_aid,
+            token=token,
+            message_dict=message_dict,
+        )
+        if decision is not None and hasattr(execution_gate, "build_local_execution_context_from_decision"):
+            return execution_gate.build_local_execution_context_from_decision(
+                request,
+                decision,
+            )
+        return execution_gate.build_local_execution_context(request)
+
+    def _build_execution_gate_request(
+        self,
+        *,
+        sender_aid: str | None,
+        token: str,
+        message_dict: dict,
+    ) -> ExecutionGateRequest:
+        """构造执行层 gate 使用的规范请求对象。"""
+        return ExecutionGateRequest(
+            sender_aid=sender_aid,
+            receiver_aid=self.aid,
+            token=token,
+            message=str(message_dict.get("msg", self.task_finished_token)),
+            action_scope=str(message_dict.get("action_scope", "llm_prompt")),
+            request_envelope=message_dict.get("request_envelope"),
+            pq_signature=message_dict.get("pq_signature"),
+        )
+
+    def _evaluate_prompt_surface_request(
+        self,
+        execution_context: LocalExecutionContext | None,
+        base_decision: ExecutionGateDecision | None = None,
+    ) -> ExecutionGateDecision:
+        """在进入 local_agent.run() 前检查 prompt surface 是否被签名授权。"""
+        protocol_allow = base_decision.protocol_allow if base_decision is not None else None
+        request_envelope_valid = (
+            base_decision.request_envelope_valid if base_decision is not None else False
+        )
+        pq_signature_valid = (
+            base_decision.pq_signature_valid if base_decision is not None else False
+        )
+        can_accept = base_decision.can_accept if base_decision is not None else False
+        if execution_context is None:
+            if getattr(self, "strict_execution_gate", False):
+                return ExecutionGateDecision(
+                    False,
+                    "missing_local_execution_context",
+                    protocol_allow=protocol_allow,
+                    request_envelope_valid=request_envelope_valid,
+                    pq_signature_valid=pq_signature_valid,
+                    can_accept=can_accept,
+                    execution_scope_allowed=False,
+                    internal_policy_accept=False,
+                )
+            return ExecutionGateDecision(
+                True,
+                "legacy_prompt_without_execution_context",
+                protocol_allow=protocol_allow,
+                request_envelope_valid=request_envelope_valid,
+                pq_signature_valid=pq_signature_valid,
+                can_accept=can_accept,
+                execution_scope_allowed=True,
+                internal_policy_accept=True,
+            )
+        if execution_context.authorize_action("llm_prompt"):
+            return ExecutionGateDecision(
+                True,
+                "prompt_scope_authorized",
+                protocol_allow=protocol_allow,
+                request_envelope_valid=request_envelope_valid,
+                pq_signature_valid=pq_signature_valid,
+                can_accept=can_accept,
+                execution_scope_allowed=True,
+                internal_policy_accept=True,
+                request_envelope=execution_context.request_envelope,
+                pq_signature=execution_context.pq_signature,
+            )
+        return ExecutionGateDecision(
+            False,
+            "prompt_scope_not_authorized",
+            protocol_allow=protocol_allow,
+            request_envelope_valid=request_envelope_valid,
+            pq_signature_valid=pq_signature_valid,
+            can_accept=can_accept,
+            execution_scope_allowed=False,
+            internal_policy_accept=False,
+            request_envelope=execution_context.request_envelope,
+            pq_signature=execution_context.pq_signature,
+        )
+
+    def _record_execution_gate_rejection(
+        self,
+        *,
+        request: ExecutionGateRequest,
+        decision: ExecutionGateDecision,
+        log_message: str,
+    ) -> None:
+        """记录执行层 gate 拒绝审计，并保留稳定本地 reason。"""
+        audit_record = build_execution_gate_audit_record(request, decision)
+        logger.log("AUDIT", json.dumps(audit_record, sort_keys=True))
+        append_execution_gate_audit_record(getattr(self, "workdir", None), audit_record)
+        logger.error(f"{log_message} Reason: {decision.reason}. Ending conversation...")
+
+    def _build_conversation_payload(
+        self,
+        *,
+        receiver_aid: str | None,
+        token: str,
+        message: str,
+        action_scope: str,
+        turn_index: int,
+        token_dict: dict | None,
+        authorized_scopes: list[str] | tuple[str, ...] | None = None,
+    ) -> dict:
+        """Build a transport payload and attach a signed request envelope when configured.
+
+        入口动作和额外授权 scope 一起进入签名信封，供接收端工具 gate 使用。
+        """
+        payload = {
+            "msg": message,
+            "token": token,
+            "action_scope": action_scope,
+        }
+
+        signature_scheme = getattr(self, "pq_signature_scheme", None)
+        secret_key = getattr(self, "pq_secret_key", None)
+        if receiver_aid is None or signature_scheme is None or secret_key is None:
+            return payload
+
+        # 签名覆盖规范化信封摘要，消息和 token 只以哈希形式进入信封。
+        now = datetime.now(tz=timezone.utc)
+        issued_at = now
+        expires_at = now + timedelta(hours=1)
+        if token_dict is not None:
+            issued_at = token_dict.get("issue_timestamp", issued_at)
+            expires_at = token_dict.get("expiration_timestamp", expires_at)
+
+        envelope = build_request_envelope(
+            sender_aid=self.aid,
+            receiver_aid=receiver_aid,
+            token=token,
+            session_id=f"session-{hashlib.sha256(token.encode('utf-8')).hexdigest()[:16]}",
+            turn_id=f"turn-{turn_index}",
+            issued_at=issued_at,
+            expires_at=expires_at,
+            action_scope=action_scope,
+            authorized_scopes=authorized_scopes,
+            message=message,
+            provider_id=getattr(self, "provider_id", ""),
+            timestamp=now,
+        )
+        signature = signature_scheme.sign(secret_key, envelope.digest())
+        payload["request_envelope"] = envelope.canonical_json()
+        payload["pq_signature"] = base64.b64encode(signature).decode("utf-8")
+        return payload
+
+    def _conversation_authorized_scopes(
+        self,
+        action_scope: str,
+        requested_scopes: list[str] | tuple[str, ...] | None = None,
+    ) -> tuple[str, ...]:
+        """Return policy-compiled signed scopes for a conversation turn.
+
+        requested scopes 只作为 proposal；最终签名 scopes 来自本地 policy 交集。
+        """
+        decision = self._conversation_policy_decision(
+            action_scope,
+            requested_scopes=requested_scopes,
+        )
+        if decision.reason == "policy_reject":
+            raise ExecutionAuthorizationError("policy_reject", action_scope)
+        return decision.allowed_scopes
+
+    def _conversation_policy_decision(
+        self,
+        action_scope: str,
+        requested_scopes: list[str] | tuple[str, ...] | None = None,
+    ) -> PolicyDecision:
+        """编译会话 intent 并返回带稳定 reason 的本地 policy 裁定。"""
+        # 本地 CodeAgent 初始化和每轮响应处理会读写 memory，签名 scope 必须显式覆盖这些运行时动作。
+        runtime_required_scopes = {"memory_read", "memory_write"}
+        policy_scopes = set(runtime_required_scopes)
+        local_agent = getattr(self, "local_agent", None)
+        for tool_obj in getattr(local_agent, "tool_collections", ()) or ():
+            tool_name = getattr(tool_obj, "name", None)
+            if tool_name:
+                policy_scopes.add(f"tool_call:{tool_name}")
+        policy_scopes.add("llm_prompt")
+
+        requested_scope_set = set(requested_scopes or ()) | runtime_required_scopes
+        # 非 prompt 入口不默认携带 ``llm_prompt``，否则工具入口可被误解释为 prompt 授权。
+        default_scope_pool = policy_scopes - {action_scope}
+        if action_scope != "llm_prompt":
+            default_scope_pool.discard("llm_prompt")
+        default_requested_scopes = tuple(sorted(default_scope_pool))
+        intent = AgentIntent(
+            action_scope=action_scope,
+            requested_scopes=tuple(sorted(requested_scope_set))
+            if requested_scopes is not None
+            else default_requested_scopes,
+        )
+        return IntentCompiler(policy_scopes).compile(intent)
 
     def send(self, conn, payload: dict):
         """
@@ -497,16 +1171,22 @@ class Agent:
         text = init_msg
         i = 0
         while True:
-            # Prepare message: 
-            msg = {
-                "msg": text,
-                "token": token
-            }
             # Check if the received token that you are using is valid:
-            if not self.received_token_is_valid(msg["token"]):
+            token_dict = self._consume_received_token(token)
+            if token_dict is None:
                 logger.error("Token is invalid. Ending conversation...")
                 self.monitor.stop("agent:communication_conv_init")
                 return True
+
+            msg = self._build_conversation_payload(
+                receiver_aid=r_aid,
+                token=token,
+                message=text,
+                action_scope="llm_prompt",
+                turn_index=i,
+                token_dict=token_dict,
+                authorized_scopes=self._conversation_authorized_scopes("llm_prompt"),
+            )
 
             # Send message:
             self.monitor.stop("agent:communication_conv_init")
@@ -514,20 +1194,11 @@ class Agent:
             self.monitor.start("agent:communication_conv_init")
             logger.log("AGENT", f"Sent: \'{msg['msg']}\'")
 
-            # Reduce the remaining quota for the token:
-            with self.received_tokens_lock:
-                self.received_tokens[token]["communication_quota"] = max(0, self.received_tokens[token]["communication_quota"] - 1)
-                logger.log('ACCESS', f'Remaining token quota: {self.received_tokens[token]["communication_quota"]}')
-
             if msg['msg'] == self.task_finished_token:
                 logger.log("AGENT", "Task deemed complete from initiating side.")
                 # Invalidate the token:
-                with self.received_tokens_lock:
-                    # remove the token from the received tokens:
-                    del self.received_tokens[token]
-                    # remove the token from the aid_to_token dict:
-                    del self.aid_to_token[r_aid]
-                    logger.log("ACCESS", "Token invalidated from the initiating side.")
+                self._invalidate_received_token(token, r_aid)
+                logger.log("ACCESS", "Token invalidated from the initiating side.")
                 self.monitor.stop("agent:communication_conv_init")
                 return True
             # Receive response:
@@ -539,18 +1210,59 @@ class Agent:
                 self.monitor.stop("agent:communication_conv_init")
                 return False
 
+            response_decision = self._evaluate_execution_request(
+                sender_aid=r_aid,
+                token=token,
+                message_dict=response,
+                consume=True,
+                protocol_allow=True,
+            )
+            if not response_decision.allowed:
+                request = self._build_execution_gate_request(
+                    sender_aid=r_aid,
+                    token=token,
+                    message_dict=response,
+                )
+                self._record_execution_gate_rejection(
+                    request=request,
+                    decision=response_decision,
+                    log_message="Execution gate rejected inbound response.",
+                )
+                self.monitor.stop("agent:communication_conv_init")
+                return False
+
+            response_execution_context = self._build_local_execution_context(
+                sender_aid=r_aid,
+                token=token,
+                message_dict=response,
+                decision=response_decision,
+            )
+            response_prompt_decision = self._evaluate_prompt_surface_request(
+                response_execution_context,
+                base_decision=response_decision,
+            )
+            if not response_prompt_decision.allowed:
+                request = self._build_execution_gate_request(
+                    sender_aid=r_aid,
+                    token=token,
+                    message_dict=response,
+                )
+                self._record_execution_gate_rejection(
+                    request=request,
+                    decision=response_prompt_decision,
+                    log_message="Execution gate rejected inbound response prompt surface.",
+                )
+                self.monitor.stop("agent:communication_conv_init")
+                return False
+
             # Process response:
             received_message = str(response.get("msg", self.local_agent.task_finished_token))
             logger.log("AGENT", f"Received: \'{received_message}\'")
             if received_message == self.task_finished_token:
                 logger.log("AGENT", "Task deemed complete from receiving side.")
                 # Invalidate the token:
-                with self.received_tokens_lock:
-                    # remove the token from the received tokens:
-                    del self.received_tokens[token]
-                    # remove the token from the aid_to_token dict:
-                    del self.aid_to_token[r_aid]
-                    logger.log("ACCESS", "Token invalidated from the receiving side.")
+                self._invalidate_received_token(token, r_aid)
+                logger.log("ACCESS", "Token invalidated from the receiving side.")
                 self.monitor.stop("agent:communication_conv_init")
                 return False
             
@@ -560,13 +1272,32 @@ class Agent:
                 self.monitor.stop("agent:communication_conv_init")
                 return True
             self.monitor.stop("agent:communication_conv_init")
-            self.llm_monitor.start("agent:llm_backend_init")
-            agent_instance, text = self.local_agent.run(received_message, initiating_agent=True, agent_instance=agent_instance)
-            self.llm_monitor.stop("agent:llm_backend_init")
+            try:
+                agent_instance, text = self._run_local_agent_with_diagnostics(
+                    query=received_message,
+                    initiating_agent=True,
+                    agent_instance=agent_instance,
+                    peer_aid=r_aid,
+                    conversation_side="initiating",
+                    turn_index=i,
+                    run_id="agent:llm_backend_init",
+                    local_agent_kwargs={"execution_context": response_execution_context},
+                )
+            except Exception as exc:
+                logger.error(f"Local agent run failed on initiating side: {exc}")
+                self.monitor.start("agent:communication_conv_init")
+                self.monitor.stop("agent:communication_conv_init")
+                return False
             self.monitor.start("agent:communication_conv_init")
             i += 1 # increment queries counter
 
-    def receive_conversation(self, conn, token: str, recipient_pac) -> bool:
+    def receive_conversation(
+        self,
+        conn,
+        token: str,
+        recipient_pac,
+        sender_aid: str | None = None,
+    ) -> bool:
         """
         This function receives a conversation from the initiating agent.
         It waits for a message from the initiating agent and processes it.
@@ -595,15 +1326,11 @@ class Agent:
             token = message_dict.get("token", None)
             
             # Check if the token of the message is valid
-            if not self.token_is_valid(token, recipient_pac):
+            token_dict = self._consume_active_token(token, recipient_pac)
+            if token_dict is None:
                 logger.error("Token is invalid. Ending conversation...")
                 self.monitor.stop("agent:communication_conv_recv")
                 return True
-            
-            # Reduce the remaining quota for the token:
-            with self.active_tokens_lock:
-                self.active_tokens[token]["communication_quota"] = max(0, self.active_tokens[token]["communication_quota"] - 1)
-                logger.log('ACCESS', f'Remaining token quota: {self.active_tokens[token]["communication_quota"]}')
             
             # Process message:
             received_message = str(message_dict.get("msg", self.local_agent.task_finished_token))
@@ -612,10 +1339,8 @@ class Agent:
             if received_message == self.task_finished_token:
                 logger.log("AGENT", "Task deemed complete from initiating side.")
                 # Invalidate the token:
-                with self.active_tokens_lock:
-                    # remove the token from the active tokens:
-                    del self.active_tokens[token]
-                    logger.log("ACCESS", "Token invalidated from the initiating side.")
+                self._invalidate_active_token(token)
+                logger.log("ACCESS", "Token invalidated from the initiating side.")
                 self.monitor.stop("agent:communication_conv_recv")
                 return False
 
@@ -625,19 +1350,87 @@ class Agent:
                 self.monitor.stop("agent:communication_conv_recv")
                 return True
 
+            execution_decision = self._evaluate_execution_request(
+                sender_aid=sender_aid,
+                token=token,
+                message_dict=message_dict,
+                consume=True,
+                protocol_allow=True,
+            )
+            if not execution_decision.allowed:
+                request = self._build_execution_gate_request(
+                    sender_aid=sender_aid,
+                    token=token,
+                    message_dict=message_dict,
+                )
+                self._record_execution_gate_rejection(
+                    request=request,
+                    decision=execution_decision,
+                    log_message="Execution gate rejected incoming request.",
+                )
+                self.monitor.stop("agent:communication_conv_recv")
+                return True
+
+            execution_context = self._build_local_execution_context(
+                sender_aid=sender_aid,
+                token=token,
+                message_dict=message_dict,
+                decision=execution_decision,
+            )
+            prompt_decision = self._evaluate_prompt_surface_request(
+                execution_context,
+                base_decision=execution_decision,
+            )
+            if not prompt_decision.allowed:
+                request = self._build_execution_gate_request(
+                    sender_aid=sender_aid,
+                    token=token,
+                    message_dict=message_dict,
+                )
+                self._record_execution_gate_rejection(
+                    request=request,
+                    decision=prompt_decision,
+                    log_message="Execution gate rejected prompt surface request.",
+                )
+                self.monitor.stop("agent:communication_conv_recv")
+                return True
+
             # Get agent response:
             self.monitor.stop("agent:communication_conv_recv")
-            self.llm_monitor.start("agent:llm_backend_recv")
-            agent_instance, response = self.local_agent.run(query=received_message, initiating_agent=False, agent_instance=agent_instance)
-            self.llm_monitor.stop("agent:llm_backend_recv")
+            try:
+                agent_instance, response = self._run_local_agent_with_diagnostics(
+                    query=received_message,
+                    initiating_agent=False,
+                    agent_instance=agent_instance,
+                    peer_aid=sender_aid,
+                    conversation_side="receiving",
+                    turn_index=i,
+                    run_id="agent:llm_backend_recv",
+                    local_agent_kwargs={"execution_context": execution_context},
+                )
+            except Exception as exc:
+                logger.error(f"Local agent run failed on receiving side: {exc}")
+                self.monitor.start("agent:communication_conv_recv")
+                self.monitor.stop("agent:communication_conv_recv")
+                return True
             self.monitor.start("agent:communication_conv_recv")
             i+=1 # increase query counter
             
             # Prepare response:
-            response_dict = {
-                "msg": response,
-                "token": token
-            }
+            response_token_dict = self._active_token_snapshot(token)
+            if response_token_dict is None:
+                logger.error("Token was invalidated before response signing. Ending conversation...")
+                self.monitor.stop("agent:communication_conv_recv")
+                return True
+            response_dict = self._build_conversation_payload(
+                receiver_aid=sender_aid,
+                token=token,
+                message=response,
+                action_scope="llm_prompt",
+                turn_index=i,
+                token_dict=response_token_dict,
+                authorized_scopes=self._conversation_authorized_scopes("llm_prompt"),
+            )
             # Send response:
             self.monitor.stop("agent:communication_conv_recv")
             self.send(conn, response_dict)
@@ -647,10 +1440,8 @@ class Agent:
             if response_dict['msg'] == self.task_finished_token:
                 logger.log("AGENT", "Task deemed complete from receiving side.")
                 # Invalidate the token:
-                with self.active_tokens_lock:
-                    # remove the token from the active tokens:
-                    del self.active_tokens[token]
-                    logger.log("ACCESS", "Token invalidated from the receiving side.")
+                self._invalidate_active_token(token)
+                logger.log("ACCESS", "Token invalidated from the receiving side.")
                 self.monitor.stop("agent:communication_conv_recv")
                 return True
 
@@ -667,7 +1458,9 @@ class Agent:
             r_aid: The AID of the receiving agent.
             message: The initial message to send to the receiving agent.
         """
-
+        if not self.active:
+            logger.error(f"Agent {self.aid} is deactivated and cannot initiate new sessions.")
+            return
         # Start measuring algo overhead:
         self.monitor.start("agent:communication_proto_init")
 
@@ -786,9 +1579,13 @@ class Agent:
 
         try:
             # Create and connect the socket
-            with socket.create_connection((r_ip, r_port)) as sock:
+            with socket.create_connection(
+                (r_ip, r_port),
+                timeout=CONVERSATION_SOCKET_TIMEOUT_SECONDS,
+            ) as sock:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 with context.wrap_socket(sock, server_hostname=r_aid) as conn:
+                    conn.settimeout(CONVERSATION_SOCKET_TIMEOUT_SECONDS)
                     logger.log("NETWORK", f"Connected to {r_ip}:{r_port} with verified certificate.")
 
                     # Start measuring algo overhead:
@@ -814,12 +1611,7 @@ class Agent:
                         r_otk_sig_bytes = r_agent_material.get("one_time_key_sigs", None)[0]
                         
                         # Verify the one-time key:
-                        try:
-                            pk_u.verify(
-                                r_otk_sig_bytes,
-                                r_otk
-                            )
-                        except:
+                        if not sc.verify_otk_signature(pk_u, r_aid, r_otk, r_otk_sig_bytes):
                             logger.error(f"ERROR: {r_aid} ONE TIME KEY VERIFICATION FAILED. UNSAFE CONNECTION.")
                             raise Exception(f"ERROR: {r_aid} ONE TIME KEY VERIFICATION FAILED. UNSAFE CONNECTION.")
 
@@ -881,7 +1673,9 @@ class Agent:
                         # Start the conversation:
                         self.initiate_conversation(conn, new_enc_token_str, r_aid, message)
                         logger.log("OVERHEAD", f"agent:communication_conv_init: {self.monitor.elapsed('agent:communication_conv_init')}")
-                        logger.log("OVERHEAD", f"agent:llm_backend_init: {self.llm_monitor.elapsed('agent:llm_backend_init')}")
+                        llm_elapsed = self._llm_elapsed_seconds("agent:llm_backend_init")
+                        if llm_elapsed is not None:
+                            logger.log("OVERHEAD", f"agent:llm_backend_init: {llm_elapsed}")
                     else:
                         logger.log("ACCESS", f"Valid token found. Will start conversation.")
                         # If a valid token was found, the expected response is a message.
@@ -892,7 +1686,9 @@ class Agent:
                                 logger.log("OVERHEAD", f"agent:communication_proto_init: {self.monitor.elapsed('agent:communication_proto_init')}")
                                 self.initiate_conversation(conn, token, r_aid, message)
                                 logger.log("OVERHEAD", f"agent:communication_conv_init: {self.monitor.elapsed('agent:communication_conv_init')}")
-                                logger.log("OVERHEAD", f"agent:llm_backend_init: {self.llm_monitor.elapsed('agent:llm_backend_init')}")
+                                llm_elapsed = self._llm_elapsed_seconds("agent:llm_backend_init")
+                                if llm_elapsed is not None:
+                                    logger.log("OVERHEAD", f"agent:llm_backend_init: {llm_elapsed}")
                             else:
                                 logger.error("Token rejected from receiving side.")
                                 
@@ -1065,15 +1861,11 @@ class Agent:
                                 logger.error("Acces control failed: no one-time key provided from initiating agent.")
                                 raise Exception("Acces control failed: no one-time key provided from initiating agent.")
                             i_otk_bytes = base64.b64decode(i_otk_json)
-                            
-                            with self.otks_lock:
-                                # Look for the otk-sotk pair in the otks struct:
-                                if i_otk_bytes not in self.otks_dict.keys():
-                                    logger.error("Access control failed: unknown one-time key.")
-                                    raise Exception("Access control failed: unknown one-time key.")
-                                sotk = self.otks_dict[i_otk_bytes]
-                                # Remove the used one-time key to prevent replay attacks.
-                                del self.otks_dict[i_otk_bytes]
+
+                            sotk = self._consume_local_otk(i_otk_bytes)
+                            if sotk is None:
+                                logger.error("Access control failed: unknown one-time key.")
+                                raise Exception("Access control failed: unknown one-time key.")
 
                             # Diffie hellman calculations:
                             DH = sotk.exchange(i_pac)
@@ -1112,9 +1904,11 @@ class Agent:
 
                             # Start the conversation:
                             logger.log("AGENT", f"Starting conversation with {i_aid}.")
-                            self.receive_conversation(conn, enc_token_str, i_pac)
+                            self.receive_conversation(conn, enc_token_str, i_pac, sender_aid=i_aid)
                             logger.log("OVERHEAD", f"agent:communication_conv_recv: {self.monitor.elapsed('agent:communication_conv_recv')}")
-                            logger.log("OVERHEAD", f"agent:llm_backend_recv: {self.llm_monitor.elapsed('agent:llm_backend_recv')}")
+                            llm_elapsed = self._llm_elapsed_seconds("agent:llm_backend_recv")
+                            if llm_elapsed is not None:
+                                logger.log("OVERHEAD", f"agent:llm_backend_recv: {llm_elapsed}")
                         else:
                             # Check the token and see if it is in the active tokens:
                             if self.token_is_valid(i_token, i_pac):
@@ -1125,9 +1919,11 @@ class Agent:
                                 # If the token is valid, start the conversation:
                                 logger.log("ACCESS", f"Valid token found. Will accept conversation.")
                                 self.send(conn, {"token": i_token})
-                                self.receive_conversation(conn, i_token, i_pac)
+                                self.receive_conversation(conn, i_token, i_pac, sender_aid=i_aid)
                                 logger.log("OVERHEAD", f"agent:communication_conv_recv: {self.monitor.elapsed('agent:communication_conv_recv')}")
-                                logger.log("OVERHEAD", f"agent:llm_backend_recv: {self.llm_monitor.elapsed('agent:llm_backend_recv')}")
+                                llm_elapsed = self._llm_elapsed_seconds("agent:llm_backend_recv")
+                                if llm_elapsed is not None:
+                                    logger.log("OVERHEAD", f"agent:llm_backend_recv: {llm_elapsed}")
                             else:
                                 logger.error("Token is invalid. Ending connection.")
 
@@ -1152,6 +1948,10 @@ class Agent:
         Listens for incoming TLS connections, handles Ctrl+C gracefully,
         and ensures proper socket closure on shutdown.
         """
+        if not self.active:
+            logger.error(f"Agent {self.aid} is deactivated and cannot listen for new sessions.")
+            return
+
         # Create SSL context for the server
         context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | ssl.OP_NO_TLSv1_2  # TLS 1.3 only
@@ -1175,6 +1975,7 @@ class Agent:
                     newsocket, fromaddr = bindsocket.accept()
                     # TLS takes over and tries to
                     conn = context.wrap_socket(newsocket, server_side=True)
+                    conn.settimeout(CONVERSATION_SOCKET_TIMEOUT_SECONDS)
                     logger.log("NETWORK", f"Connection from {fromaddr}")
                     # Spawn a new thread to handle the incoming connection:
                     i_agent_thread = threading.Thread(target=self.handle_i_agent_connection, args=(conn, fromaddr))
