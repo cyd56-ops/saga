@@ -10,6 +10,12 @@ import unittest
 from experiments.paper_tables import (
     DEFAULT_BASELINE_SUMMARY_PATH,
     DEFAULT_PQ_CAN_SUMMARY_PATH,
+    LAYER_REFINEMENT_COLUMNS,
+    MODEL_REFINEMENT_COLUMNS,
+    PROOF_ARTIFACT_COLUMNS,
+    PROOF_CLAIM_COLUMNS,
+    PROOF_MUTATION_COLUMNS,
+    PROTECTED_SINK_COLUMNS,
     TASK_LEVEL_COLUMNS,
     RUN_LEVEL_COLUMNS,
     SECURITY_EVIDENCE_COLUMNS,
@@ -22,6 +28,13 @@ from experiments.paper_tables import (
     write_paper_table_archive,
 )
 from experiments.security_evidence import SECURITY_PROPERTY_ORDER
+from saga.security_kernel import (
+    EXECUTE_SURFACE_CLAIM,
+    layer_refinement_mappings,
+    model_refinement_mappings,
+    mutation_evidence as kernel_mutation_evidence,
+    protected_sink_audits,
+)
 
 
 def _summary(
@@ -71,6 +84,32 @@ def _summary(
     }
 
 
+def _proof_summary() -> dict[str, object]:
+    """构造最小 proof-hardening summary fixture。"""
+    return {
+        "passed": True,
+        "finding_count": 0,
+        "mutation_validation": {"passed": True},
+        "proof_tests": {
+            "stdout_tail": (
+                "................................... [100%]\n"
+                "85 passed, 37 subtests passed in 0.80s\n"
+            )
+        },
+    }
+
+
+def _mutation_summary() -> dict[str, object]:
+    """构造最小 mutation evidence summary fixture。"""
+    return {
+        "mutation_count": 8,
+        "detected_count": 8,
+        "all_detected": True,
+        "undetected_count": 0,
+        "recorded_at": "2026-06-09T07:35:29.610329+00:00",
+    }
+
+
 class PaperTablesTests(unittest.TestCase):
     """Verify paper-table rows use stable experiment fields and conservative cost semantics."""
 
@@ -102,6 +141,27 @@ class PaperTablesTests(unittest.TestCase):
         self.assertEqual(
             tables["security_evidence_columns"],
             list(SECURITY_EVIDENCE_COLUMNS),
+        )
+        self.assertEqual(tables["proof_claim_columns"], list(PROOF_CLAIM_COLUMNS))
+        self.assertEqual(
+            tables["protected_sink_columns"],
+            list(PROTECTED_SINK_COLUMNS),
+        )
+        self.assertEqual(
+            tables["proof_mutation_columns"],
+            list(PROOF_MUTATION_COLUMNS),
+        )
+        self.assertEqual(
+            tables["model_refinement_columns"],
+            list(MODEL_REFINEMENT_COLUMNS),
+        )
+        self.assertEqual(
+            tables["layer_refinement_columns"],
+            list(LAYER_REFINEMENT_COLUMNS),
+        )
+        self.assertEqual(
+            tables["proof_artifact_columns"],
+            list(PROOF_ARTIFACT_COLUMNS),
         )
         self.assertEqual(len(tables["run_level_rows"]), 2)
         self.assertEqual(len(tables["task_level_rows"]), 2)
@@ -147,6 +207,78 @@ class PaperTablesTests(unittest.TestCase):
         self.assertIn("tampered_message", evidence_names)
         self.assertIn("missing_request_envelope", evidence_names)
         self.assertIn("shamir_secured_pq_can", evidence_names)
+
+    def test_proof_appendix_tables_expose_security_kernel_rows(self) -> None:
+        """Proof appendix 表必须把 security-kernel 事实源转成论文表格。"""
+        tables = build_paper_tables(
+            {
+                "pq_can": _summary(
+                    runtime_auth_enabled=True,
+                    task_latency=12.0,
+                    model_call_count=3,
+                    llm_elapsed=9.75,
+                )
+            }
+        )
+
+        self.assertEqual(
+            tables["proof_claim_rows"][0]["claim"],
+            EXECUTE_SURFACE_CLAIM,
+        )
+        self.assertEqual(
+            {row["sink_id"] for row in tables["protected_sink_rows"]},
+            {sink.sink_id for sink in protected_sink_audits()},
+        )
+        self.assertEqual(
+            {row["mutation_id"] for row in tables["proof_mutation_rows"]},
+            {evidence.mutation_id for evidence in kernel_mutation_evidence()},
+        )
+        self.assertEqual(
+            {row["mapping_id"] for row in tables["model_refinement_rows"]},
+            {mapping.mapping_id for mapping in model_refinement_mappings()},
+        )
+        self.assertEqual(
+            {row["layer_id"] for row in tables["layer_refinement_rows"]},
+            {mapping.layer_id for mapping in layer_refinement_mappings()},
+        )
+        mutation_rows = {
+            row["mutation_id"]: row
+            for row in tables["proof_mutation_rows"]
+        }
+        self.assertEqual(
+            mutation_rows["bypass_delegation_parent_digest_check"][
+                "protected_property"
+            ],
+            "delegation_ok",
+        )
+
+    def test_optional_proof_artifact_summary_row(self) -> None:
+        """Artifact summary 参数应生成可引用的 GitHub proof-hardening 行。"""
+        tables = build_paper_tables(
+            {
+                "pq_can": _summary(
+                    runtime_auth_enabled=True,
+                    task_latency=12.0,
+                    model_call_count=3,
+                    llm_elapsed=9.75,
+                )
+            },
+            proof_artifact_summary=_proof_summary(),
+            mutation_evidence_summary=_mutation_summary(),
+            proof_artifact_name="proof-hardening-27191142461.zip",
+            proof_artifact_sha256="f659a94e",
+        )
+
+        row = tables["proof_artifact_rows"][0]
+        self.assertEqual(row["artifact_name"], "proof-hardening-27191142461.zip")
+        self.assertEqual(row["artifact_sha256"], "f659a94e")
+        self.assertTrue(row["passed"])
+        self.assertEqual(row["proof_tests_summary"], "85 passed, 37 subtests passed")
+        self.assertTrue(row["mutation_validation_passed"])
+        self.assertEqual(row["mutation_count"], 8)
+        self.assertEqual(row["detected_count"], 8)
+        self.assertTrue(row["all_detected"])
+        self.assertEqual(row["undetected_count"], 0)
 
     def test_audit_counts_track_execution_gate_records_only(self) -> None:
         """Audit fields should preserve execution-gate counts without inventing tool failures."""
@@ -215,6 +347,12 @@ class PaperTablesTests(unittest.TestCase):
         self.assertIn("## Task-Level Summary", markdown)
         self.assertIn("## Security Properties", markdown)
         self.assertIn("## Security Evidence", markdown)
+        self.assertIn("## Proof Claim", markdown)
+        self.assertIn("## Protected Sinks", markdown)
+        self.assertIn("## Proof Mutation Evidence", markdown)
+        self.assertIn("## Model Refinement Mapping", markdown)
+        self.assertIn("## Layer Refinement Mapping", markdown)
+        self.assertIn("## Proof Artifact Summary", markdown)
         self.assertTrue(markdown.endswith("\n"))
 
     def test_write_paper_table_archive_writes_json_and_markdown(self) -> None:
@@ -288,6 +426,70 @@ class PaperTablesTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertTrue((archive_dir / "paper_tables.json").exists())
             self.assertTrue((archive_dir / "paper_tables.md").exists())
+
+    def test_cli_accepts_optional_proof_artifact_summaries(self) -> None:
+        """CLI 应把 proof-hardening artifact summary 写入归档 JSON。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            baseline_path = root / "baseline.json"
+            pq_can_path = root / "pq_can.json"
+            proof_path = root / "proof_hardening_check_summary.json"
+            mutation_path = root / "mutation_evidence_summary.json"
+            archive_dir = root / "archive"
+            baseline_path.write_text(
+                json.dumps(
+                    _summary(
+                        runtime_auth_enabled=False,
+                        task_latency=10.0,
+                        model_call_count=2,
+                        llm_elapsed=8.5,
+                    )
+                ),
+                encoding="utf-8",
+            )
+            pq_can_path.write_text(
+                json.dumps(
+                    _summary(
+                        runtime_auth_enabled=True,
+                        task_latency=12.0,
+                        model_call_count=3,
+                        llm_elapsed=9.75,
+                    )
+                ),
+                encoding="utf-8",
+            )
+            proof_path.write_text(json.dumps(_proof_summary()), encoding="utf-8")
+            mutation_path.write_text(json.dumps(_mutation_summary()), encoding="utf-8")
+
+            exit_code = main(
+                [
+                    "--baseline-summary",
+                    str(baseline_path),
+                    "--pq-can-summary",
+                    str(pq_can_path),
+                    "--format",
+                    "json",
+                    "--output-dir",
+                    str(archive_dir),
+                    "--proof-hardening-summary",
+                    str(proof_path),
+                    "--mutation-evidence-summary",
+                    str(mutation_path),
+                    "--proof-artifact-name",
+                    "proof-hardening-27191142461.zip",
+                    "--proof-artifact-sha256",
+                    "f659a94e",
+                ]
+            )
+
+            archived = json.loads(
+                (archive_dir / "paper_tables.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                archived["proof_artifact_rows"][0]["proof_tests_summary"],
+                "85 passed, 37 subtests passed",
+            )
 
     def test_default_summary_paths_can_build_current_20260527_tables(self) -> None:
         """Checked local run summaries should remain readable when present in the workspace."""

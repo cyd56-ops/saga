@@ -1,0 +1,761 @@
+{
+  "layer_refinement_columns": [
+    "layer_id",
+    "tla_surfaces",
+    "protected_sinks",
+    "guard_terms",
+    "evidence_tests",
+    "residual_risk"
+  ],
+  "layer_refinement_rows": [
+    {
+      "evidence_tests": "tests/integration/test_baseline_agent_flow.py::test_receive_conversation_rejects_tool_only_scope_before_prompt, tests/integration/test_baseline_agent_flow.py::test_receive_conversation_rejects_replayed_signed_envelope, tests/test_negative_injection_runner.py::test_runner_covers_real_agent_runtime_negative_paths",
+      "guard_terms": "N_verify, scope_ok, replay_ok, delegation_ok, policy_ok",
+      "layer_id": "prompt_layer",
+      "protected_sinks": "prompt_local_agent_run",
+      "residual_risk": "Only prompt execution through the active strict Agent wrapper is represented; legacy compatibility local-agent calls remain excluded.",
+      "tla_surfaces": "llm_prompt"
+    },
+    {
+      "evidence_tests": "tests/test_agent_wrapper_gate.py::test_tool_call_is_rejected_when_scope_mismatches, tests/test_agent_wrapper_gate.py::test_direct_tool_backend_proxy_rejects_without_scope, tests/test_security_kernel.py::test_business_tool_backends_remain_gated_resources",
+      "guard_terms": "N_verify, scope_ok, replay_ok, delegation_ok, policy_ok",
+      "layer_id": "tool_layer",
+      "protected_sinks": "smolagents_tool_forward, business_backend_method",
+      "residual_risk": "Tools or backend clients constructed outside AgentWrapper and the gated resource facade are outside the strict-kernel claim.",
+      "tla_surfaces": "tool_call_placeholder, tool_backend_method"
+    },
+    {
+      "evidence_tests": "tests/test_agent_wrapper_gate.py::test_memory_read_helper_rejects_without_scope, tests/test_agent_wrapper_gate.py::test_memory_write_helper_rejects_without_scope, tests/test_security_kernel.py::test_raw_memory_mutation_remains_inside_capability_facade",
+      "guard_terms": "N_verify, scope_ok, replay_ok, delegation_ok, policy_ok",
+      "layer_id": "memory_layer",
+      "protected_sinks": "memory_read_facade, memory_write_facade",
+      "residual_risk": "Raw downstream memory object access outside ExecutionCapabilityFacade is not represented by the layered proof claim.",
+      "tla_surfaces": "memory_read, memory_write"
+    },
+    {
+      "evidence_tests": "tests/test_agent_wrapper_gate.py::test_delegation_helper_rejects_without_scope, tests/test_execution_gate.py::test_authorize_rejects_delegated_child_scope_escalation, tests/test_security_kernel.py::test_direct_delegation_connect_calls_remain_excluded_or_gated",
+      "guard_terms": "N_verify, scope_ok, replay_ok, delegation_ok, policy_ok",
+      "layer_id": "delegation_layer",
+      "protected_sinks": "delegation_handler",
+      "residual_risk": "Ad hoc Agent.connect calls in experiment drivers remain excluded from the protected delegation layer.",
+      "tla_surfaces": "delegation"
+    },
+    {
+      "evidence_tests": "tests/test_execution_gate.py::test_consume_request_rejects_replayed_envelope, tests/test_execution_gate.py::test_consume_request_allows_only_one_concurrent_consumer, tests/test_agent_runtime_auth.py::test_config_default_workdir_replay_store_survives_restart",
+      "guard_terms": "N_verify, scope_ok, replay_ok, delegation_ok, policy_ok",
+      "layer_id": "replay_layer",
+      "protected_sinks": "replay_reserve_consume",
+      "residual_risk": "File-marker replay state is local research evidence; distributed claims still require an injected strongly consistent backend.",
+      "tla_surfaces": "request_envelope_replay"
+    }
+  ],
+  "model_refinement_columns": [
+    "mapping_id",
+    "model_term",
+    "python_symbols",
+    "evidence_tests",
+    "linked_sink_ids",
+    "residual_risk"
+  ],
+  "model_refinement_rows": [
+    {
+      "evidence_tests": "tests/test_execution_gate.py::test_authorize_accepts_valid_signed_request, tests/test_execution_gate.py::test_authorize_rejects_tampered_signature_under_compiled_verifier, tests/test_can.py::test_can_rejects_unsafe_real_valued_signature, tests/test_compiled_lwe_dnn.py::test_can_with_compiled_verifier_has_no_trainable_state, tests/security/test_real_valued_rejection.py",
+      "linked_sink_ids": "prompt_local_agent_run, smolagents_tool_forward, business_backend_method, memory_read_facade, memory_write_facade, delegation_handler, replay_reserve_consume",
+      "mapping_id": "n_verify_to_signed_can_gate",
+      "model_term": "N_verify",
+      "python_symbols": "saga.execution_gate.SignedRequestExecutionGate.evaluate_request, saga.execution_gate.bytes_to_bits, neural.can.CAN.can_accept, neural.compiled_lwe_dnn.CompiledToyLWEVerifier.verify_compound_bits, neural.fixed_circuit.assert_fixed_circuit",
+      "residual_risk": "The refinement proves the fixed verifier wiring and hard gate semantics for the prototype; production unforgeability still depends on a vetted external ML-DSA backend."
+    },
+    {
+      "evidence_tests": "tests/test_execution_gate.py::test_build_local_execution_context_does_not_treat_prompt_as_tool_scope, tests/test_execution_gate.py::test_build_local_execution_context_restricts_to_exact_qualified_tool_scope, tests/integration/test_baseline_agent_flow.py::test_receive_conversation_rejects_tool_only_scope_before_prompt, tests/test_agent_wrapper_gate.py::test_tool_call_is_rejected_when_scope_mismatches, tests/test_agent_wrapper_gate.py::test_memory_write_helper_rejects_without_scope",
+      "linked_sink_ids": "prompt_local_agent_run, smolagents_tool_forward, business_backend_method, memory_read_facade, memory_write_facade, delegation_handler",
+      "mapping_id": "scope_ok_to_authorized_scope_checks",
+      "model_term": "scope_ok",
+      "python_symbols": "saga.messages.action_scopes_allow, saga.execution_gate.SignedRequestExecutionGate.evaluate_request, saga.execution_gate.LocalExecutionContext.require_action, saga.execution_gate.ExecutionCapabilityFacade.require_action, saga.agent.Agent._evaluate_prompt_surface_request",
+      "residual_risk": "Scope refinement is claimed for strict runtime-auth protected sinks and does not cover arbitrary local Python code that bypasses the facade."
+    },
+    {
+      "evidence_tests": "tests/test_execution_gate.py::test_consume_request_rejects_replayed_envelope, tests/test_execution_gate.py::test_consume_request_allows_only_one_concurrent_consumer, tests/test_execution_gate.py::test_sqlite_replay_store_reserves_request_id_atomically, tests/test_execution_gate.py::test_redis_replay_store_uses_set_nx_for_atomic_reservation, tests/test_agent_runtime_auth.py::test_config_default_workdir_replay_store_survives_restart",
+      "linked_sink_ids": "replay_reserve_consume, prompt_local_agent_run",
+      "mapping_id": "replay_ok_to_atomic_reserve",
+      "model_term": "replay_ok",
+      "python_symbols": "saga.execution_gate.SignedRequestExecutionGate.consume_request, saga.execution_gate.ReplayStateStore.reserve_request, saga.execution_gate.FileReplayStateStore.reserve_request, saga.execution_gate.SQLiteReplayStateStore.reserve_request, saga.execution_gate.RedisReplayStateStore.reserve_request",
+      "residual_risk": "File-marker replay state is local/dev evidence; multi-host claims require an externally managed atomic backend."
+    },
+    {
+      "evidence_tests": "tests/test_execution_gate.py::test_authorize_accepts_delegated_child_capability_when_attenuated, tests/test_execution_gate.py::test_authorize_rejects_delegated_child_without_known_parent_digest, tests/test_execution_gate.py::test_authorize_rejects_delegated_child_scope_escalation, tests/test_execution_gate.py::test_authorize_rejects_delegation_depth_exceeded, tests/integration/test_baseline_agent_flow.py::test_conversation_payload_binds_parent_capability_for_delegation_child",
+      "linked_sink_ids": "delegation_handler",
+      "mapping_id": "delegation_ok_to_parent_bound_capabilities",
+      "model_term": "delegation_ok",
+      "python_symbols": "saga.messages.RequestEnvelope, saga.messages.action_scopes_are_attenuated, saga.execution_gate.SignedRequestExecutionGate._evaluate_delegation_capability, saga.execution_gate.ExecutionCapabilityFacade.delegate, saga.agent.Agent._delegate_to_agent",
+      "residual_risk": "The first-stage refinement covers parent digest and attenuation checks; full live multi-hop delegation storage remains future wiring."
+    },
+    {
+      "evidence_tests": "tests/test_intent.py::test_compiler_keeps_only_policy_allowed_scopes, tests/test_intent.py::test_missing_entry_scope_is_policy_reject, tests/integration/test_baseline_agent_flow.py::test_conversation_policy_rejects_entry_scope_outside_local_policy, tests/integration/test_baseline_agent_flow.py::test_requested_scope_escalation_does_not_expand_signed_envelope, tests/integration/test_baseline_agent_flow.py::test_receive_conversation_audit_records_full_authorization_formula_on_signature_reject",
+      "linked_sink_ids": "prompt_local_agent_run, smolagents_tool_forward, business_backend_method, memory_read_facade, memory_write_facade, delegation_handler, replay_reserve_consume",
+      "mapping_id": "policy_ok_to_local_intent_compiler",
+      "model_term": "policy_ok",
+      "python_symbols": "saga.intent.IntentCompiler.compile, saga.agent.Agent._conversation_policy_decision, saga.agent.Agent._conversation_authorized_scopes, saga.execution_gate.ExecutionGateDecision.formula_terms, saga.execution_gate.build_execution_gate_audit_record",
+      "residual_risk": "Policy refinement covers the local prototype policy compiler, not a full organization-wide policy language."
+    },
+    {
+      "evidence_tests": "tests/test_security_kernel.py::test_local_agent_run_call_sites_remain_prompt_gated, tests/test_security_kernel.py::test_raw_memory_mutation_remains_inside_capability_facade, tests/test_security_kernel.py::test_business_tool_backends_remain_gated_resources, tests/test_security_kernel.py::test_direct_delegation_connect_calls_remain_excluded_or_gated, tests/test_security_kernel.py::test_replay_consume_and_reserve_calls_remain_gate_mediated",
+      "linked_sink_ids": "prompt_local_agent_run, smolagents_tool_forward, business_backend_method, memory_read_facade, memory_write_facade, delegation_handler, replay_reserve_consume",
+      "mapping_id": "execute_surface_to_protected_sinks",
+      "model_term": "Execute(surface)",
+      "python_symbols": "saga.agent.Agent._evaluate_execution_request, saga.agent.Agent._evaluate_prompt_surface_request, saga.agent.Agent._run_local_agent_with_diagnostics, agent_backend.base.AgentWrapper._wrap_tool_with_execution_gate, agent_backend.base.AgentWrapper._gated_tool_resource, saga.execution_gate.ExecutionCapabilityFacade",
+      "residual_risk": "This is a sink-centric kernel claim, not a statement that every Python callable in the repository is impossible to invoke directly."
+    }
+  ],
+  "notes": {
+    "api_cost": "API cost is reported only when model diagnostics expose explicit cost fields.",
+    "audit_counts": "Audit counts refer to execution-gate audit records, not model/tool permission text.",
+    "proof_appendix": "Proof appendix rows are generated from saga/security_kernel.py and optional proof-hardening artifact summaries.",
+    "security_evidence": "Security-property rows and evidence rows are generated from experiments/security_evidence.py.",
+    "token_usage": "Token usage is reported only when model diagnostics expose explicit token fields."
+  },
+  "proof_artifact_columns": [
+    "artifact_name",
+    "artifact_sha256",
+    "passed",
+    "finding_count",
+    "proof_tests_summary",
+    "mutation_validation_passed",
+    "mutation_count",
+    "detected_count",
+    "all_detected",
+    "undetected_count",
+    "recorded_at"
+  ],
+  "proof_artifact_rows": [
+    {
+      "all_detected": true,
+      "artifact_name": "proof-hardening-27191142461.zip",
+      "artifact_sha256": "f659a94e977ecf27ef93b1039d2914260ebf9e7b279ca5fbb0aa393505a75864",
+      "detected_count": 8,
+      "finding_count": 0,
+      "mutation_count": 8,
+      "mutation_validation_passed": true,
+      "passed": true,
+      "proof_tests_summary": "85 passed, 37 subtests passed",
+      "recorded_at": "2026-06-09T07:35:29.610329+00:00",
+      "undetected_count": 0
+    }
+  ],
+  "proof_claim_columns": [
+    "claim_id",
+    "claim",
+    "source",
+    "boundary"
+  ],
+  "proof_claim_rows": [
+    {
+      "boundary": "Strict runtime-auth protected sinks only; legacy, experiment, attack model, and raw backend paths are excluded.",
+      "claim": "Execute(surface) => N_verify=1 AND scope_ok AND replay_ok AND delegation_ok AND policy_ok",
+      "claim_id": "strict_runtime_auth_execute_guard",
+      "source": "saga/security_kernel.py"
+    }
+  ],
+  "proof_mutation_columns": [
+    "mutation_id",
+    "protected_property",
+    "sink_ids",
+    "expected_test_failures",
+    "notes"
+  ],
+  "proof_mutation_rows": [
+    {
+      "expected_test_failures": "tests/integration/test_baseline_agent_flow.py::BaselineAgentFlowTests::test_receive_conversation_rejects_tool_only_scope_before_prompt, tests/test_negative_injection_runner.py::NegativeInjectionRunnerTests::test_runner_covers_real_agent_runtime_negative_paths",
+      "mutation_id": "skip_prompt_surface_authorization",
+      "notes": "A tool-only signed envelope would incorrectly reach the prompt sink.",
+      "protected_property": "scope_ok",
+      "sink_ids": "prompt_local_agent_run"
+    },
+    {
+      "expected_test_failures": "tests/test_agent_wrapper_gate.py::AgentWrapperExecutionGateTests::test_tool_call_is_rejected_when_scope_mismatches, tests/test_agent_wrapper_gate.py::AgentWrapperExecutionGateTests::test_direct_tool_backend_proxy_rejects_without_scope, tests/test_agent_wrapper_gate.py::AgentWrapperExecutionGateTests::test_memory_write_helper_rejects_without_scope, tests/test_agent_wrapper_gate.py::AgentWrapperExecutionGateTests::test_direct_delegation_facade_rejects_without_scope, tests/test_execution_gate.py::SignedRequestExecutionGateTests::test_local_execution_context_exposes_memory_and_delegation_helpers",
+      "mutation_id": "disable_local_execution_context_require_action",
+      "notes": "Tool, backend, memory, and delegation sinks would execute without signed scopes.",
+      "protected_property": "scope_ok",
+      "sink_ids": "smolagents_tool_forward, business_backend_method, memory_read_facade, memory_write_facade, delegation_handler"
+    },
+    {
+      "expected_test_failures": "tests/test_execution_gate.py::SignedRequestExecutionGateTests::test_consume_request_rejects_replayed_envelope, tests/test_execution_gate.py::SignedRequestExecutionGateTests::test_consume_request_allows_only_one_concurrent_consumer, tests/test_agent_runtime_auth.py::AgentRuntimeAuthTests::test_config_default_workdir_replay_store_survives_restart",
+      "mutation_id": "skip_replay_reserve",
+      "notes": "Duplicate signed envelopes would be able to reach execution more than once.",
+      "protected_property": "replay_ok",
+      "sink_ids": "replay_reserve_consume, prompt_local_agent_run"
+    },
+    {
+      "expected_test_failures": "tests/test_execution_gate.py::SignedRequestExecutionGateTests::test_build_local_execution_context_does_not_treat_prompt_as_tool_scope, tests/test_execution_gate.py::SignedRequestExecutionGateTests::test_build_local_execution_context_restricts_to_exact_qualified_tool_scope, tests/integration/test_baseline_agent_flow.py::BaselineAgentFlowTests::test_tool_entry_scope_does_not_implicitly_grant_prompt_surface",
+      "mutation_id": "relax_action_scope_matching",
+      "notes": "A broad tool or prompt scope could incorrectly authorize narrower protected sinks.",
+      "protected_property": "scope_ok",
+      "sink_ids": "prompt_local_agent_run, smolagents_tool_forward, business_backend_method, memory_read_facade, memory_write_facade, delegation_handler"
+    },
+    {
+      "expected_test_failures": "tests/test_security_kernel.py::SecurityKernelInventoryTests::test_business_tool_backends_remain_gated_resources, tests/test_agent_wrapper_gate.py::AgentWrapperExecutionGateTests::test_direct_tool_backend_proxy_rejects_without_scope",
+      "mutation_id": "bypass_gated_execution_resource",
+      "notes": "Business backend methods could run without capability facade checks.",
+      "protected_property": "policy_ok",
+      "sink_ids": "business_backend_method"
+    },
+    {
+      "expected_test_failures": "tests/test_can.py::CANTests::test_can_rejects_unsafe_real_valued_signature, tests/test_can.py::CANTests::test_can_rejects_boundary_real_valued_signature, tests/security/test_real_valued_rejection.py",
+      "mutation_id": "bypass_shamir_mask_real_valued_rejection",
+      "notes": "A real-valued neural input could bypass the hard binary interface before the signed intent gate reaches protected sinks.",
+      "protected_property": "N_verify",
+      "sink_ids": "prompt_local_agent_run, smolagents_tool_forward, business_backend_method, memory_read_facade, memory_write_facade, delegation_handler, replay_reserve_consume"
+    },
+    {
+      "expected_test_failures": "tests/test_execution_gate.py::SignedRequestExecutionGateTests::test_authorize_rejects_delegated_child_without_known_parent_digest",
+      "mutation_id": "bypass_delegation_parent_digest_check",
+      "notes": "A forged delegated child capability could self-assert parent scopes instead of binding to a known accepted parent envelope digest.",
+      "protected_property": "delegation_ok",
+      "sink_ids": "delegation_handler"
+    },
+    {
+      "expected_test_failures": "tests/test_intent.py::IntentCompilerTests::test_compiler_keeps_only_policy_allowed_scopes, tests/test_intent.py::IntentCompilerTests::test_missing_entry_scope_is_policy_reject, tests/integration/test_baseline_agent_flow.py::BaselineAgentFlowTests::test_requested_scope_escalation_does_not_expand_signed_envelope, tests/integration/test_baseline_agent_flow.py::BaselineAgentFlowTests::test_conversation_policy_rejects_entry_scope_outside_local_policy",
+      "mutation_id": "bypass_policy_compiler_scope_filter",
+      "notes": "LLM/requested scopes could become signed authorized scopes and entry actions outside local policy could proceed to envelope construction.",
+      "protected_property": "policy_ok",
+      "sink_ids": "prompt_local_agent_run, smolagents_tool_forward, business_backend_method, memory_read_facade, memory_write_facade, delegation_handler, replay_reserve_consume"
+    }
+  ],
+  "protected_sink_columns": [
+    "sink_id",
+    "surface",
+    "side_effect",
+    "required_predicate",
+    "evidence_tests",
+    "residual_risk"
+  ],
+  "protected_sink_rows": [
+    {
+      "evidence_tests": "tests/integration/test_baseline_agent_flow.py, tests/test_agent_runtime_auth.py, tests/test_negative_injection_runner.py, tests/test_real_negative_runner.py",
+      "required_predicate": "N_verify=1, signed authorized_scopes allow llm_prompt, replay reserve succeeds, delegated child envelope is parent-bound when present, and the local agent declares execution-context support in strict mode",
+      "residual_risk": "Only prompt execution through the active Agent wrapper is claimed; legacy attack-model copies and compatibility local-agent calls outside strict runtime auth are excluded.",
+      "side_effect": "local_agent.run() may issue model calls, update agent memory, and drive follow-on tool or delegation behavior",
+      "sink_id": "prompt_local_agent_run",
+      "surface": "llm_prompt"
+    },
+    {
+      "evidence_tests": "tests/test_agent_wrapper_gate.py, tests/test_real_negative_runner.py",
+      "required_predicate": "A gate-accepted LocalExecutionContext exists and its signed authorized_scopes include the concrete tool_call:<tool_name> scope",
+      "residual_risk": "Only configured tools collected by AgentWrapper are covered. Tools created and called outside this wrapper are not in the strict kernel.",
+      "side_effect": "Configured smolagents tool forward(...) executes business logic.",
+      "sink_id": "smolagents_tool_forward",
+      "surface": "tool_call:<tool_name>"
+    },
+    {
+      "evidence_tests": "tests/test_agent_wrapper_gate.py, tests/integration/test_baseline_agent_flow.py",
+      "required_predicate": "The backend object is reachable only through GatedExecutionResource, and each protected method maps to a signed tool capability scope",
+      "residual_risk": "Raw backend clients stored outside AgentWrapper._gated_tool_resource remain outside the current security claim.",
+      "side_effect": "Email, calendar, and document backend methods can send mail, create calendar events, create documents, or read private task data.",
+      "sink_id": "business_backend_method",
+      "surface": "tool_backend_method"
+    },
+    {
+      "evidence_tests": "tests/test_agent_wrapper_gate.py, tests/test_execution_gate.py",
+      "required_predicate": "A gate-accepted LocalExecutionContext exists and its signed scopes authorize memory_read",
+      "residual_risk": "Diagnostic memory summaries are observational evidence, not an authorization grant. Raw downstream memory-object access outside the facade is excluded.",
+      "side_effect": "Local agent memory contents are exposed to the runtime caller.",
+      "sink_id": "memory_read_facade",
+      "surface": "memory_read"
+    },
+    {
+      "evidence_tests": "tests/test_agent_wrapper_gate.py, tests/test_execution_gate.py, tests/test_real_negative_runner.py",
+      "required_predicate": "A gate-accepted LocalExecutionContext exists and its signed scopes authorize memory_write before the append happens",
+      "residual_risk": "Raw memory list mutation outside ExecutionCapabilityFacade remains outside the strict kernel claim.",
+      "side_effect": "Local agent memory is mutated by appending a new step.",
+      "sink_id": "memory_write_facade",
+      "surface": "memory_write"
+    },
+    {
+      "evidence_tests": "tests/test_agent_wrapper_gate.py, tests/test_execution_gate.py, tests/test_real_negative_runner.py",
+      "required_predicate": "A gate-accepted LocalExecutionContext exists, signed scopes authorize delegation, and delegated child envelopes must satisfy parent digest, scope attenuation, and depth checks",
+      "residual_risk": "Ad hoc Agent.connect calls in experiment scripts are reproduction drivers, not protected delegated execution in the strict kernel.",
+      "side_effect": "A task is delegated to another SAGA agent through Agent.connect().",
+      "sink_id": "delegation_handler",
+      "surface": "delegation"
+    },
+    {
+      "evidence_tests": "tests/test_execution_gate.py, tests/test_execution_gate_factory.py, tests/test_agent_runtime_auth.py",
+      "required_predicate": "The envelope is context-bound, N_verify=1, execution scope is allowed, delegation checks pass when applicable, and replay reservation returns reserved",
+      "residual_risk": "File marker replay state is local/dev evidence. Distributed production claims require an injected strongly consistent backend.",
+      "side_effect": "The request envelope digest is consumed in replay state, allowing at most one execution attempt for that signed capability.",
+      "sink_id": "replay_reserve_consume",
+      "surface": "request_envelope_replay"
+    }
+  ],
+  "run_level_columns": [
+    "mode",
+    "runtime_auth_enabled",
+    "task_count",
+    "succeeded_count",
+    "failed_count",
+    "task_latency_seconds_total",
+    "task_latency_seconds_mean",
+    "model_call_count",
+    "llm_elapsed_seconds_total",
+    "audit_record_count",
+    "audit_reject_count",
+    "audit_logging_overhead_record_count",
+    "logging_stats_collection_latency_seconds_total",
+    "api_cost_available",
+    "api_cost_usd_total",
+    "token_usage_available",
+    "total_tokens"
+  ],
+  "run_level_rows": [
+    {
+      "api_cost_available": false,
+      "api_cost_usd_total": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "failed_count": 0,
+      "llm_elapsed_seconds_total": 253.35787,
+      "logging_stats_collection_latency_seconds_total": 0.009614901,
+      "mode": "baseline",
+      "model_call_count": 15,
+      "runtime_auth_enabled": false,
+      "succeeded_count": 3,
+      "task_count": 3,
+      "task_latency_seconds_mean": 61.08607,
+      "task_latency_seconds_total": 183.258211,
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd_total": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "failed_count": 0,
+      "llm_elapsed_seconds_total": 321.030396,
+      "logging_stats_collection_latency_seconds_total": 0.0086726,
+      "mode": "pq_can",
+      "model_call_count": 22,
+      "runtime_auth_enabled": true,
+      "succeeded_count": 3,
+      "task_count": 3,
+      "task_latency_seconds_mean": 74.820229,
+      "task_latency_seconds_total": 224.460688,
+      "token_usage_available": false,
+      "total_tokens": null
+    }
+  ],
+  "security_evidence_columns": [
+    "source",
+    "name",
+    "properties",
+    "expected_reason",
+    "evidence_kind",
+    "side_effect_expectation"
+  ],
+  "security_evidence_rows": [
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "message_digest_mismatch",
+      "name": "tampered_message",
+      "properties": "context_binding, unforgeability",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "action_scope_mismatch",
+      "name": "tampered_action_scope",
+      "properties": "context_binding, scope_non_escalation",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "signature_verification_failed",
+      "name": "tampered_authorized_scope",
+      "properties": "unforgeability, scope_non_escalation",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "envelope_expired",
+      "name": "expired_envelope",
+      "properties": "context_binding",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "deterministic_offline_gate",
+      "expected_reason": "replayed_request_envelope",
+      "name": "replayed_envelope",
+      "properties": "replay_resistance, side_effect_free_rejection",
+      "side_effect_expectation": "first_allowed_second_rejected",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "local_execution_context",
+      "expected_reason": "unauthorized_tool_scope",
+      "name": "unauthorized_tool_scope",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "protected_tool_not_called",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "local_execution_context",
+      "expected_reason": "unauthorized_memory_write",
+      "name": "unauthorized_memory_write",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "memory_not_written",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "local_execution_context",
+      "expected_reason": "unauthorized_delegation",
+      "name": "unauthorized_delegation",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "delegation_not_started",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "shamir_mask_gate",
+      "expected_reason": "real_valued_signature_input",
+      "name": "real_valued_signature_input",
+      "properties": "unforgeability",
+      "side_effect_expectation": "no_accepting_real_valued_gate",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "trusted_key_map",
+      "expected_reason": "untrusted_sender_aid",
+      "name": "untrusted_sender_aid",
+      "properties": "unforgeability, context_binding",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "trusted_key_map",
+      "expected_reason": "signature_verification_failed",
+      "name": "wrong_trusted_sender_key",
+      "properties": "unforgeability",
+      "side_effect_expectation": "no_local_execution",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "agent_runtime_path",
+      "expected_reason": "prompt_scope_not_authorized",
+      "name": "agent_runtime_prompt_surface_tool_only",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "agent_runtime_path",
+      "expected_reason": "replayed_request_envelope",
+      "name": "agent_runtime_replayed_envelope",
+      "properties": "replay_resistance, side_effect_free_rejection",
+      "side_effect_expectation": "second_local_run_not_called",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "agent_runtime_path",
+      "expected_reason": "unauthorized_tool_scope",
+      "name": "agent_runtime_scope_escalation_tool",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "protected_tool_not_called",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "agent_runtime_path",
+      "expected_reason": "local_agent_execution_context_unsupported",
+      "name": "agent_runtime_context_ignoring_local_agent",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "offline_negative_injection"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "missing_request_envelope",
+      "name": "missing_request_envelope",
+      "properties": "unforgeability, context_binding, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "message_digest_mismatch",
+      "name": "tampered_message",
+      "properties": "context_binding, unforgeability, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "prompt_scope_not_authorized",
+      "name": "prompt_surface_tool_only",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "replayed_request_envelope",
+      "name": "replayed_envelope",
+      "properties": "replay_resistance, side_effect_free_rejection",
+      "side_effect_expectation": "second_local_run_not_called",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener",
+      "expected_reason": "signature_verification_failed",
+      "name": "wrong_trusted_sender_key",
+      "properties": "unforgeability, side_effect_free_rejection",
+      "side_effect_expectation": "local_agent_run_count_zero",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener_scope_probe",
+      "expected_reason": "unauthorized_tool_scope",
+      "name": "unauthorized_tool_scope",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "prompt_runs_once_protected_tool_not_called",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener_scope_probe",
+      "expected_reason": "unauthorized_memory_write",
+      "name": "unauthorized_memory_write",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "prompt_runs_once_memory_not_written",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "provider_token_tls_socket_listener_scope_probe",
+      "expected_reason": "unauthorized_delegation",
+      "name": "unauthorized_delegation",
+      "properties": "scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "prompt_runs_once_delegation_not_started",
+      "source": "real_negative_runner"
+    },
+    {
+      "evidence_kind": "offline_ablation_mode",
+      "expected_reason": "negative_rejected_count=0",
+      "name": "saga_only",
+      "properties": "context_binding, scope_non_escalation, replay_resistance",
+      "side_effect_expectation": "baseline_admission_only",
+      "source": "ablation_overhead_runner"
+    },
+    {
+      "evidence_kind": "offline_ablation_mode",
+      "expected_reason": "negative_rejected_count=2",
+      "name": "ordinary_pq_middleware",
+      "properties": "unforgeability, context_binding",
+      "side_effect_expectation": "rejects_signature_and_envelope_cases_only",
+      "source": "ablation_overhead_runner"
+    },
+    {
+      "evidence_kind": "offline_ablation_mode",
+      "expected_reason": "negative_rejected_count=2",
+      "name": "naive_neural_verifier",
+      "properties": "unforgeability, context_binding",
+      "side_effect_expectation": "rejects_signature_and_envelope_cases_only",
+      "source": "ablation_overhead_runner"
+    },
+    {
+      "evidence_kind": "offline_ablation_mode",
+      "expected_reason": "negative_rejected_count=5",
+      "name": "shamir_secured_pq_can",
+      "properties": "unforgeability, context_binding, scope_non_escalation, side_effect_free_rejection",
+      "side_effect_expectation": "rejects_all_current_offline_negative_cases",
+      "source": "ablation_overhead_runner"
+    }
+  ],
+  "security_property_columns": [
+    "property_id",
+    "title",
+    "enforcement_terms",
+    "assumptions",
+    "limitations"
+  ],
+  "security_property_rows": [
+    {
+      "assumptions": "Trusted public keys are provisioned by the SAGA registration path.; The production-facing ML-DSA path must wrap a vetted external backend.; Toy LWE evidence is research wiring evidence, not a production PQ claim.",
+      "enforcement_terms": "request_envelope_valid, pq_signature_valid, can_accept",
+      "limitations": "This property does not claim confidentiality or full post-quantum transport security.; Compatibility paths outside strict runtime auth are excluded.",
+      "property_id": "unforgeability",
+      "title": "Unforgeability of Execution Capabilities"
+    },
+    {
+      "assumptions": "Request envelopes are encoded with deterministic canonical JSON.; The receiver compares transport fields with the signed envelope before execution.",
+      "enforcement_terms": "saga_token_valid, request_envelope_valid, pq_signature_valid, can_accept",
+      "limitations": "The claim covers fields represented in the signed request envelope.",
+      "property_id": "context_binding",
+      "title": "Context Binding"
+    },
+    {
+      "assumptions": "LLM-requested scopes are proposals and are not trusted authorization proofs.; Strict runtime surfaces consume LocalExecutionContext or gated facades.",
+      "enforcement_terms": "request_envelope_valid, execution_scope_allowed, internal_policy_accept",
+      "limitations": "Raw backend use outside the checked strict runtime kernel is outside the claim.",
+      "property_id": "scope_non_escalation",
+      "title": "Scope Non-Escalation"
+    },
+    {
+      "assumptions": "A replay store with atomic reserve semantics is configured for strict runtime auth.; File and SQLite stores are local research backends; deployment needs a consistent shared backend.",
+      "enforcement_terms": "request_envelope_valid, pq_signature_valid, can_accept, internal_policy_accept",
+      "limitations": "The property is scoped to request-envelope digest consumption, not network-level packet replay.",
+      "property_id": "replay_resistance",
+      "title": "Replay Resistance"
+    },
+    {
+      "assumptions": "Protected actions are reached only through the strict execution kernel.; Tests use side-effect counters or protected-action files as the oracle.",
+      "enforcement_terms": "execution_scope_allowed, internal_policy_accept",
+      "limitations": "The property does not cover unrelated application code that bypasses the kernel.",
+      "property_id": "side_effect_free_rejection",
+      "title": "Side-Effect-Free Rejection"
+    }
+  ],
+  "task_level_columns": [
+    "mode",
+    "task_name",
+    "success",
+    "runtime_auth_enabled",
+    "task_latency_seconds",
+    "model_call_count",
+    "local_model_call_count",
+    "peer_model_call_count",
+    "llm_elapsed_seconds_total",
+    "audit_record_count",
+    "audit_reject_count",
+    "peer_audit_reject_count",
+    "audit_logging_overhead_record_count",
+    "api_cost_available",
+    "api_cost_usd",
+    "token_usage_available",
+    "total_tokens",
+    "oracle_reason"
+  ],
+  "task_level_rows": [
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 70.114717,
+      "local_model_call_count": 2,
+      "mode": "baseline",
+      "model_call_count": 6,
+      "oracle_reason": "meeting_scheduled",
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 4,
+      "runtime_auth_enabled": false,
+      "success": true,
+      "task_latency_seconds": 44.419665,
+      "task_name": "schedule_meeting",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 143.647905,
+      "local_model_call_count": 2,
+      "mode": "baseline",
+      "model_call_count": 7,
+      "oracle_reason": null,
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 5,
+      "runtime_auth_enabled": false,
+      "success": true,
+      "task_latency_seconds": 99.166138,
+      "task_name": "expense_report",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 39.595248,
+      "local_model_call_count": 0,
+      "mode": "baseline",
+      "model_call_count": 2,
+      "oracle_reason": null,
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 2,
+      "runtime_auth_enabled": false,
+      "success": true,
+      "task_latency_seconds": 39.672408,
+      "task_name": "create_blogpost",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 74.865621,
+      "local_model_call_count": 2,
+      "mode": "pq_can",
+      "model_call_count": 7,
+      "oracle_reason": "meeting_scheduled",
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 5,
+      "runtime_auth_enabled": true,
+      "success": true,
+      "task_latency_seconds": 48.207244,
+      "task_name": "schedule_meeting",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 202.231406,
+      "local_model_call_count": 5,
+      "mode": "pq_can",
+      "model_call_count": 12,
+      "oracle_reason": null,
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 7,
+      "runtime_auth_enabled": true,
+      "success": true,
+      "task_latency_seconds": 132.220902,
+      "task_name": "expense_report",
+      "token_usage_available": false,
+      "total_tokens": null
+    },
+    {
+      "api_cost_available": false,
+      "api_cost_usd": null,
+      "audit_logging_overhead_record_count": 0,
+      "audit_record_count": 0,
+      "audit_reject_count": 0,
+      "llm_elapsed_seconds_total": 43.933368,
+      "local_model_call_count": 0,
+      "mode": "pq_can",
+      "model_call_count": 3,
+      "oracle_reason": null,
+      "peer_audit_reject_count": 0,
+      "peer_model_call_count": 3,
+      "runtime_auth_enabled": true,
+      "success": true,
+      "task_latency_seconds": 44.032542,
+      "task_name": "create_blogpost",
+      "token_usage_available": false,
+      "total_tokens": null
+    }
+  ]
+}

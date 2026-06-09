@@ -6,9 +6,17 @@ import argparse
 from collections.abc import Mapping, Sequence
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from experiments.security_evidence import evidence_mappings, property_claims
+from saga.security_kernel import (
+    EXECUTE_SURFACE_CLAIM,
+    layer_refinement_mappings,
+    model_refinement_mappings,
+    mutation_evidence as kernel_mutation_evidence,
+    protected_sink_audits,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -81,10 +89,60 @@ SECURITY_EVIDENCE_COLUMNS = (
     "evidence_kind",
     "side_effect_expectation",
 )
+PROOF_CLAIM_COLUMNS = (
+    "claim_id",
+    "claim",
+    "source",
+    "boundary",
+)
+PROTECTED_SINK_COLUMNS = (
+    "sink_id",
+    "surface",
+    "side_effect",
+    "required_predicate",
+    "evidence_tests",
+    "residual_risk",
+)
+PROOF_MUTATION_COLUMNS = (
+    "mutation_id",
+    "protected_property",
+    "sink_ids",
+    "expected_test_failures",
+    "notes",
+)
+MODEL_REFINEMENT_COLUMNS = (
+    "mapping_id",
+    "model_term",
+    "python_symbols",
+    "evidence_tests",
+    "linked_sink_ids",
+    "residual_risk",
+)
+LAYER_REFINEMENT_COLUMNS = (
+    "layer_id",
+    "tla_surfaces",
+    "protected_sinks",
+    "guard_terms",
+    "evidence_tests",
+    "residual_risk",
+)
+PROOF_ARTIFACT_COLUMNS = (
+    "artifact_name",
+    "artifact_sha256",
+    "passed",
+    "finding_count",
+    "proof_tests_summary",
+    "mutation_validation_passed",
+    "mutation_count",
+    "detected_count",
+    "all_detected",
+    "undetected_count",
+    "recorded_at",
+)
 
 
-def load_end_to_end_summary(path: str | Path) -> dict[str, Any]:
-    """读取 batch run 端到端 summary JSON，返回可用于表格生成的字典。"""
+def load_json_object(path: str | Path) -> dict[str, Any]:
+    """读取 JSON object 文件，供实验 summary 和 proof artifact summary 共用。"""
     summary_path = Path(path)
     with summary_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
@@ -93,10 +151,20 @@ def load_end_to_end_summary(path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def load_end_to_end_summary(path: str | Path) -> dict[str, Any]:
+    """读取 batch run 端到端 summary JSON，返回可用于表格生成的字典。"""
+    return load_json_object(path)
+
+
 def build_paper_tables(
     summaries_by_mode: Mapping[str, Mapping[str, Any]],
+    *,
+    proof_artifact_summary: Mapping[str, Any] | None = None,
+    mutation_evidence_summary: Mapping[str, Any] | None = None,
+    proof_artifact_name: str = "",
+    proof_artifact_sha256: str = "",
 ) -> dict[str, object]:
-    """从多个 mode 的 summary 构造稳定论文表格数据。"""
+    """从多个 mode 的 summary 构造稳定论文表格和 proof appendix 数据。"""
     run_level_rows = [
         build_run_level_row(mode, summary)
         for mode, summary in summaries_by_mode.items()
@@ -108,15 +176,37 @@ def build_paper_tables(
     ]
     security_property_rows = build_security_property_rows()
     security_evidence_rows = build_security_evidence_rows()
+    proof_artifact_rows = []
+    if proof_artifact_summary is not None and mutation_evidence_summary is not None:
+        proof_artifact_rows.append(
+            build_proof_artifact_row(
+                proof_artifact_summary,
+                mutation_evidence_summary,
+                artifact_name=proof_artifact_name,
+                artifact_sha256=proof_artifact_sha256,
+            )
+        )
     return {
         "run_level_columns": list(RUN_LEVEL_COLUMNS),
         "task_level_columns": list(TASK_LEVEL_COLUMNS),
         "security_property_columns": list(SECURITY_PROPERTY_COLUMNS),
         "security_evidence_columns": list(SECURITY_EVIDENCE_COLUMNS),
+        "proof_claim_columns": list(PROOF_CLAIM_COLUMNS),
+        "protected_sink_columns": list(PROTECTED_SINK_COLUMNS),
+        "proof_mutation_columns": list(PROOF_MUTATION_COLUMNS),
+        "model_refinement_columns": list(MODEL_REFINEMENT_COLUMNS),
+        "layer_refinement_columns": list(LAYER_REFINEMENT_COLUMNS),
+        "proof_artifact_columns": list(PROOF_ARTIFACT_COLUMNS),
         "run_level_rows": run_level_rows,
         "task_level_rows": task_level_rows,
         "security_property_rows": security_property_rows,
         "security_evidence_rows": security_evidence_rows,
+        "proof_claim_rows": build_proof_claim_rows(),
+        "protected_sink_rows": build_protected_sink_rows(),
+        "proof_mutation_rows": build_proof_mutation_rows(),
+        "model_refinement_rows": build_model_refinement_rows(),
+        "layer_refinement_rows": build_layer_refinement_rows(),
+        "proof_artifact_rows": proof_artifact_rows,
         "notes": {
             "api_cost": (
                 "API cost is reported only when model diagnostics expose explicit cost fields."
@@ -129,6 +219,9 @@ def build_paper_tables(
             ),
             "security_evidence": (
                 "Security-property rows and evidence rows are generated from experiments/security_evidence.py."
+            ),
+            "proof_appendix": (
+                "Proof appendix rows are generated from saga/security_kernel.py and optional proof-hardening artifact summaries."
             ),
         },
     }
@@ -242,6 +335,135 @@ def build_security_evidence_rows() -> list[dict[str, object]]:
     return rows
 
 
+def build_proof_claim_rows() -> list[dict[str, object]]:
+    """构造 strict runtime-auth proof appendix 的核心 claim 行。"""
+    return [
+        _ordered_row(
+            PROOF_CLAIM_COLUMNS,
+            {
+                "claim_id": "strict_runtime_auth_execute_guard",
+                "claim": EXECUTE_SURFACE_CLAIM,
+                "source": "saga/security_kernel.py",
+                "boundary": (
+                    "Strict runtime-auth protected sinks only; legacy, experiment, "
+                    "attack model, and raw backend paths are excluded."
+                ),
+            },
+        )
+    ]
+
+
+def build_protected_sink_rows() -> list[dict[str, object]]:
+    """构造 protected sink coverage 表格行。"""
+    rows = []
+    for sink in protected_sink_audits():
+        rows.append(
+            _ordered_row(
+                PROTECTED_SINK_COLUMNS,
+                {
+                    "sink_id": sink.sink_id,
+                    "surface": sink.surface,
+                    "side_effect": sink.side_effect,
+                    "required_predicate": sink.required_predicate,
+                    "evidence_tests": ", ".join(sink.evidence_tests),
+                    "residual_risk": sink.residual_risk,
+                },
+            )
+        )
+    return rows
+
+
+def build_proof_mutation_rows() -> list[dict[str, object]]:
+    """构造 proof-hardening mutation evidence 表格行。"""
+    rows = []
+    for evidence in kernel_mutation_evidence():
+        rows.append(
+            _ordered_row(
+                PROOF_MUTATION_COLUMNS,
+                {
+                    "mutation_id": evidence.mutation_id,
+                    "protected_property": evidence.protected_property,
+                    "sink_ids": ", ".join(evidence.sink_ids),
+                    "expected_test_failures": ", ".join(evidence.expected_test_failures),
+                    "notes": evidence.notes,
+                },
+            )
+        )
+    return rows
+
+
+def build_model_refinement_rows() -> list[dict[str, object]]:
+    """构造 P6 model-to-Python refinement mapping 表格行。"""
+    rows = []
+    for mapping in model_refinement_mappings():
+        rows.append(
+            _ordered_row(
+                MODEL_REFINEMENT_COLUMNS,
+                {
+                    "mapping_id": mapping.mapping_id,
+                    "model_term": mapping.model_term,
+                    "python_symbols": ", ".join(mapping.python_symbols),
+                    "evidence_tests": ", ".join(mapping.evidence_tests),
+                    "linked_sink_ids": ", ".join(mapping.linked_sink_ids),
+                    "residual_risk": mapping.residual_risk,
+                },
+            )
+        )
+    return rows
+
+
+def build_layer_refinement_rows() -> list[dict[str, object]]:
+    """构造 layered TLA+ 到 Python protected sinks 的 appendix 表格行。"""
+    rows = []
+    for mapping in layer_refinement_mappings():
+        rows.append(
+            _ordered_row(
+                LAYER_REFINEMENT_COLUMNS,
+                {
+                    "layer_id": mapping.layer_id,
+                    "tla_surfaces": ", ".join(mapping.tla_surface_values),
+                    "protected_sinks": ", ".join(mapping.linked_sink_ids),
+                    "guard_terms": ", ".join(mapping.guard_terms),
+                    "evidence_tests": ", ".join(mapping.evidence_tests),
+                    "residual_risk": mapping.residual_risk,
+                },
+            )
+        )
+    return rows
+
+
+def build_proof_artifact_row(
+    proof_summary: Mapping[str, Any],
+    mutation_summary: Mapping[str, Any],
+    *,
+    artifact_name: str = "",
+    artifact_sha256: str = "",
+) -> dict[str, object]:
+    """把 GitHub proof-hardening artifact summary 规范化为论文附录表格行。"""
+    mutation_validation = proof_summary.get("mutation_validation", {})
+    if not isinstance(mutation_validation, Mapping):
+        mutation_validation = {}
+    proof_tests = proof_summary.get("proof_tests", {})
+    if not isinstance(proof_tests, Mapping):
+        proof_tests = {}
+    row = {
+        "artifact_name": artifact_name,
+        "artifact_sha256": artifact_sha256,
+        "passed": bool(proof_summary.get("passed", False)),
+        "finding_count": int(proof_summary.get("finding_count", 0) or 0),
+        "proof_tests_summary": _extract_pytest_summary(
+            str(proof_tests.get("stdout_tail", ""))
+        ),
+        "mutation_validation_passed": bool(mutation_validation.get("passed", False)),
+        "mutation_count": int(mutation_summary.get("mutation_count", 0) or 0),
+        "detected_count": int(mutation_summary.get("detected_count", 0) or 0),
+        "all_detected": bool(mutation_summary.get("all_detected", False)),
+        "undetected_count": int(mutation_summary.get("undetected_count", 0) or 0),
+        "recorded_at": str(mutation_summary.get("recorded_at", "")),
+    }
+    return _ordered_row(PROOF_ARTIFACT_COLUMNS, row)
+
+
 def format_markdown_table(
     rows: Sequence[Mapping[str, object]],
     columns: Sequence[str],
@@ -280,6 +502,36 @@ def format_paper_tables_markdown(tables: Mapping[str, object]) -> str:
             "Security Evidence",
             "security_evidence_rows",
             "security_evidence_columns",
+        ),
+        (
+            "Proof Claim",
+            "proof_claim_rows",
+            "proof_claim_columns",
+        ),
+        (
+            "Protected Sinks",
+            "protected_sink_rows",
+            "protected_sink_columns",
+        ),
+        (
+            "Proof Mutation Evidence",
+            "proof_mutation_rows",
+            "proof_mutation_columns",
+        ),
+        (
+            "Model Refinement Mapping",
+            "model_refinement_rows",
+            "model_refinement_columns",
+        ),
+        (
+            "Layer Refinement Mapping",
+            "layer_refinement_rows",
+            "layer_refinement_columns",
+        ),
+        (
+            "Proof Artifact Summary",
+            "proof_artifact_rows",
+            "proof_artifact_columns",
         ),
     ]
     rendered_sections = []
@@ -358,13 +610,53 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="Optional directory where paper_tables.json and paper_tables.md are archived.",
     )
+    parser.add_argument(
+        "--proof-hardening-summary",
+        type=Path,
+        help="Optional proof_hardening_check_summary.json from a proof-hardening artifact.",
+    )
+    parser.add_argument(
+        "--mutation-evidence-summary",
+        type=Path,
+        help="Optional mutation_evidence_summary.json from the same proof-hardening artifact.",
+    )
+    parser.add_argument(
+        "--proof-artifact-name",
+        default="",
+        help="Optional human-readable proof-hardening artifact filename.",
+    )
+    parser.add_argument(
+        "--proof-artifact-sha256",
+        default="",
+        help="Optional SHA-256 digest for the proof-hardening artifact archive.",
+    )
     args = parser.parse_args(argv)
 
+    if (args.proof_hardening_summary is None) != (
+        args.mutation_evidence_summary is None
+    ):
+        parser.error(
+            "--proof-hardening-summary and --mutation-evidence-summary must be provided together"
+        )
+    proof_summary = (
+        load_json_object(args.proof_hardening_summary)
+        if args.proof_hardening_summary is not None
+        else None
+    )
+    mutation_summary = (
+        load_json_object(args.mutation_evidence_summary)
+        if args.mutation_evidence_summary is not None
+        else None
+    )
     tables = build_paper_tables(
         {
             "baseline": load_end_to_end_summary(args.baseline_summary),
             "pq_can": load_end_to_end_summary(args.pq_can_summary),
-        }
+        },
+        proof_artifact_summary=proof_summary,
+        mutation_evidence_summary=mutation_summary,
+        proof_artifact_name=args.proof_artifact_name,
+        proof_artifact_sha256=args.proof_artifact_sha256,
     )
     if args.output_dir is not None:
         write_paper_table_archive(tables, args.output_dir)
@@ -407,6 +699,14 @@ def _number(value: object) -> float:
 def _round_float(value: object, *, digits: int = 6) -> float:
     """统一表格中浮点数的小数位，避免无意义的 JSON 浮点噪音。"""
     return round(_number(value), digits)
+
+
+def _extract_pytest_summary(stdout_tail: str) -> str:
+    """从 pytest 输出尾部提取稳定的 passed/subtests 摘要。"""
+    match = re.search(r"(\d+ passed(?:, \d+ subtests passed)?)", stdout_tail)
+    if match is None:
+        return ""
+    return match.group(1)
 
 
 def _ordered_row(
