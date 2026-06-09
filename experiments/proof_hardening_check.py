@@ -26,6 +26,7 @@ DEFAULT_PROOF_TESTS = (
     "tests/test_mutation_evidence_runner.py",
     "tests/test_end_to_end_validation.py",
     "tests/test_strict_runtime_auth_model.py",
+    "tests/test_strict_runtime_auth_delegation_replay_model.py",
     "tests/test_strict_runtime_auth_evidence_summary.py",
     "tests/test_tla_strict_runtime_auth.py",
     "tests/test_tlc_strict_runtime_auth_check.py",

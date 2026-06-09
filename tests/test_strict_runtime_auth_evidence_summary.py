@@ -146,6 +146,16 @@ class StrictRuntimeAuthEvidenceSummaryTests(unittest.TestCase):
         self.assertIn("Do not cite the full cfg as a completed TLC run", text)
         self.assertIn("16777216 initial states", text)
 
+    def test_summary_records_delegation_replay_refinement_submodel(self) -> None:
+        """摘要必须列出 delegation/replay 子模型及其细化 claim。"""
+        text = SUMMARY_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("strict_runtime_auth_delegation_replay_model.py", text)
+        self.assertIn("DelegateExecute =>", text)
+        self.assertIn("parent_digest_known", text)
+        self.assertIn("child_scopes_attenuated", text)
+        self.assertIn("replay_reserved_once", text)
+
     def test_summary_records_non_production_crypto_boundary(self) -> None:
         """摘要必须明确 toy LWE 不是生产后量子安全证据。"""
         text = SUMMARY_PATH.read_text(encoding="utf-8")

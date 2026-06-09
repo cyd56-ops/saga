@@ -27,6 +27,10 @@ class ProofHardeningCheckTests(unittest.TestCase):
             "tests/test_strict_runtime_auth_evidence_summary.py",
             proof_hardening_check.DEFAULT_PROOF_TESTS,
         )
+        self.assertIn(
+            "tests/test_strict_runtime_auth_delegation_replay_model.py",
+            proof_hardening_check.DEFAULT_PROOF_TESTS,
+        )
 
     def test_run_check_accepts_proof_tests_and_detected_mutation_artifacts(self) -> None:
         """proof tests 成功且 mutation artifact 验收通过时应返回 passed。"""

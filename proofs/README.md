@@ -22,6 +22,17 @@ the abstract authorization predicates for the protected sinks recorded in
 `saga/security_kernel.py`. The corresponding Python refinement table is exposed
 by `saga.security_kernel.model_refinement_mappings()`.
 
+`strict_runtime_auth_delegation_replay_model.py` is a refinement submodel for
+the delegation and replay protected sinks. It expands `delegation_ok` and
+`replay_ok` into parent digest presence, known parent fact source, parent scope
+matching, child scope attenuation, delegation depth bounds, and replay reserve
+outcomes. It also includes mutation counterexamples for skipping the parent
+fact-source check or skipping replay reserve:
+
+```bash
+python -m pytest -q tests/test_strict_runtime_auth_delegation_replay_model.py
+```
+
 `strict_runtime_auth_evidence.md` is the current paper-facing proof evidence
 summary. It indexes the core claim, covered and excluded paths, proof artifacts,
 TLC state counts, protected sinks, mutation evidence, model refinement mappings,

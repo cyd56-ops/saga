@@ -40,6 +40,7 @@ Excluded or limited paths:
 | Artifact | Role | Claim Contribution | Boundary |
 | --- | --- | --- | --- |
 | `proofs/strict_runtime_auth_model.py` | Python state exploration | Exhaustively checks the five abstract Boolean predicates for each protected surface. | Abstract model only, not whole-repo execution. |
+| `proofs/strict_runtime_auth_delegation_replay_model.py` | Python refinement submodel | Expands `delegation_ok` and `replay_ok` into parent digest, parent scope, scope attenuation, depth, and replay reserve conditions. | Delegation/replay protected sinks only. |
 | `proofs/tla/StrictRuntimeAuth.tla` | TLA+ guarded transition spec | Records `CanExecute(surface)`, `ExecuteSurfaceClaim`, and `ScopeCheckRequired`. | Full cfg is inventory-aligned but too large for default full TLC. |
 | `proofs/tla/StrictRuntimeAuthSmoke.cfg` | Single-surface TLC smoke | Checks the invariant for one representative surface. | Bounded smoke model. |
 | `proofs/tla/StrictRuntimeAuthPairSmoke.cfg` | Two-surface TLC smoke | Checks coexistence of two protected surfaces under the same invariant. | Bounded smoke model. |
@@ -116,6 +117,16 @@ The refinement table maps abstract model terms to Python symbols, evidence
 tests, trusted-computing-base assumptions, excluded paths, residual risks, and
 linked protected sinks. This keeps the formal model tied to implementation
 evidence without claiming whole-repository non-bypassability.
+
+The delegation/replay refinement submodel checks the more detailed claim:
+
+```text
+DelegateExecute => N_verify=1 AND scope_ok AND policy_ok AND parent_digest_present AND parent_digest_known AND parent_authorized_scopes_present AND parent_authorized_scopes_match AND child_scopes_attenuated AND delegation_depth_ok AND replay_reserved_once
+```
+
+It also includes mutation counterexamples for skipping the parent capability
+fact source and skipping replay reserve. Those counterexamples are expected to
+trigger an execution side effect while violating the detailed claim.
 
 ## Layered TLA Refinement Mapping
 
