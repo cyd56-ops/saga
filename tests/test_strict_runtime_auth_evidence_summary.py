@@ -9,6 +9,7 @@ import unittest
 from experiments.security_evidence import property_claims
 from saga.security_kernel import (
     EXECUTE_SURFACE_CLAIM,
+    layer_refinement_mappings,
     model_refinement_mappings,
     mutation_evidence,
     no_side_effect_oracles,
@@ -86,6 +87,25 @@ class StrictRuntimeAuthEvidenceSummaryTests(unittest.TestCase):
             {
                 mapping.mapping_id: mapping.model_term
                 for mapping in model_refinement_mappings()
+            },
+        )
+
+    def test_summary_lists_all_layer_refinement_mappings(self) -> None:
+        """layered TLA+ refinement mapping 必须写入 proof evidence summary。"""
+        rows = _markdown_table_rows(
+            SUMMARY_PATH.read_text(encoding="utf-8"),
+            "Layered TLA Refinement Mapping",
+        )
+        layer_rows = {
+            cells[0].strip("`"): cells[1].replace("`", "")
+            for cells in rows
+        }
+
+        self.assertEqual(
+            layer_rows,
+            {
+                mapping.layer_id: ", ".join(mapping.tla_surface_values)
+                for mapping in layer_refinement_mappings()
             },
         )
 

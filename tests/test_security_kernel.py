@@ -12,6 +12,7 @@ from saga.security_kernel import (
     covered_surfaces,
     entries_for_status,
     excluded_entries,
+    layer_refinement_mappings,
     model_refinement_mappings,
     mutation_evidence,
     no_side_effect_oracles,
@@ -277,6 +278,67 @@ class SecurityKernelInventoryTests(unittest.TestCase):
                 ),
                 mapping.mapping_id,
             )
+
+    def test_layer_refinement_partitions_protected_sinks_and_surfaces(self) -> None:
+        """layered TLA+ 对照必须不重叠地覆盖所有 protected sinks 和 surfaces。"""
+        expected_layers = {
+            "prompt_layer",
+            "tool_layer",
+            "memory_layer",
+            "delegation_layer",
+            "replay_layer",
+        }
+        layer_ids = [mapping.layer_id for mapping in layer_refinement_mappings()]
+        sink_ids = {sink.sink_id for sink in protected_sink_audits()}
+        surface_set = set(protected_sink_surfaces())
+        seen_sinks: set[str] = set()
+        seen_surfaces: set[str] = set()
+
+        self.assertEqual(set(layer_ids), expected_layers)
+        self.assertEqual(len(layer_ids), len(set(layer_ids)))
+        for mapping in layer_refinement_mappings():
+            with self.subTest(layer=mapping.layer_id):
+                self.assertTrue(mapping.linked_sink_ids)
+                self.assertTrue(mapping.python_surfaces)
+                self.assertTrue(set(mapping.linked_sink_ids) <= sink_ids)
+                self.assertTrue(set(mapping.python_surfaces) <= surface_set)
+                self.assertFalse(seen_sinks.intersection(mapping.linked_sink_ids))
+                self.assertFalse(seen_surfaces.intersection(mapping.python_surfaces))
+                seen_sinks.update(mapping.linked_sink_ids)
+                seen_surfaces.update(mapping.python_surfaces)
+
+        self.assertEqual(seen_sinks, sink_ids)
+        self.assertEqual(seen_surfaces, surface_set)
+
+    def test_layer_refinement_entries_have_guards_evidence_and_boundaries(self) -> None:
+        """每个 layered refinement 都必须绑定同一 guard、Python 证据和边界说明。"""
+        required_terms = (
+            "N_verify",
+            "scope_ok",
+            "replay_ok",
+            "delegation_ok",
+            "policy_ok",
+        )
+
+        for mapping in layer_refinement_mappings():
+            with self.subTest(layer=mapping.layer_id):
+                self.assertEqual(mapping.guard_terms, required_terms)
+                self.assertTrue(mapping.tla_layer_constant.endswith("Layer"))
+                self.assertTrue(mapping.tla_surfaces_constant.endswith("LayerSurfaces"))
+                self.assertTrue(mapping.tla_surface_values)
+                self.assertTrue(mapping.python_symbols)
+                self.assertTrue(mapping.evidence_tests)
+                self.assertTrue(mapping.abstraction_note)
+                self.assertTrue(mapping.residual_risk)
+                self.assertTrue(
+                    all(
+                        symbol.startswith(("saga.", "agent_backend."))
+                        for symbol in mapping.python_symbols
+                    ),
+                    mapping.layer_id,
+                )
+                for term in mapping.guard_terms:
+                    self.assertIn(term, EXECUTE_SURFACE_CLAIM)
 
     def test_covered_entries_have_evidence_and_risk_statements(self) -> None:
         """每个已覆盖入口都要记录代码路径、证据测试和剩余风险。"""

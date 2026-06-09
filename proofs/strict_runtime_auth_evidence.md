@@ -117,6 +117,21 @@ tests, trusted-computing-base assumptions, excluded paths, residual risks, and
 linked protected sinks. This keeps the formal model tied to implementation
 evidence without claiming whole-repository non-bypassability.
 
+## Layered TLA Refinement Mapping
+
+| Layer ID | TLA Surfaces | Protected Sinks |
+| --- | --- | --- |
+| `prompt_layer` | `llm_prompt` | `prompt_local_agent_run` |
+| `tool_layer` | `tool_call_placeholder`, `tool_backend_method` | `smolagents_tool_forward`, `business_backend_method` |
+| `memory_layer` | `memory_read`, `memory_write` | `memory_read_facade`, `memory_write_facade` |
+| `delegation_layer` | `delegation` | `delegation_handler` |
+| `replay_layer` | `request_envelope_replay` | `replay_reserve_consume` |
+
+The layered TLA+ model uses the same five guard terms as the surface-level
+model. The mapping above records which Python protected sinks each
+symmetry-reduced layer represents, so the layer abstraction remains tied to the
+sink-centric implementation evidence.
+
 ## Paper-Level Security Properties
 
 | Property ID | Property |

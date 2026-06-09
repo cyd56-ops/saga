@@ -6,7 +6,11 @@ import re
 from pathlib import Path
 import unittest
 
-from saga.security_kernel import EXECUTE_SURFACE_CLAIM, protected_sink_surfaces
+from saga.security_kernel import (
+    EXECUTE_SURFACE_CLAIM,
+    layer_refinement_mappings,
+    protected_sink_surfaces,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -153,6 +157,34 @@ class TLAStrictRuntimeAuthTests(unittest.TestCase):
 
         self.assertEqual(seen, full_surfaces)
 
+    def test_layered_tla_config_matches_python_layer_refinement(self) -> None:
+        """TLA+ layer cfg 必须和 Python layer refinement 对照表一致。"""
+        layered_text = TLA_LAYERED_CONFIG.read_text(encoding="utf-8")
+        configured_layer_values = {
+            mapping.layer_id: _extract_tla_constant_value(
+                layered_text, mapping.tla_layer_constant
+            )
+            for mapping in layer_refinement_mappings()
+        }
+        configured_layer_surfaces = {
+            mapping.layer_id: set(
+                _extract_tla_constant_set(layered_text, mapping.tla_surfaces_constant)
+            )
+            for mapping in layer_refinement_mappings()
+        }
+
+        self.assertEqual(
+            configured_layer_values,
+            {mapping.layer_id: mapping.layer_id for mapping in layer_refinement_mappings()},
+        )
+        self.assertEqual(
+            configured_layer_surfaces,
+            {
+                mapping.layer_id: set(mapping.tla_surface_values)
+                for mapping in layer_refinement_mappings()
+            },
+        )
+
     def test_layered_tla_spec_preserves_execute_claim_terms(self) -> None:
         """layered TLA+ 规格必须保留同一 Execute 必要条件命题。"""
         spec_text = TLA_LAYERED_SPEC.read_text(encoding="utf-8")
@@ -199,6 +231,17 @@ def _extract_tla_constant_set(config_text: str, constant_name: str) -> tuple[str
         for value in match.group("body").split(",")
         if value.strip()
     )
+
+
+def _extract_tla_constant_value(config_text: str, constant_name: str) -> str:
+    """从 TLC cfg 中提取一个单值 model-value 常量。"""
+    match = re.search(
+        rf"(?m)^\s*{re.escape(constant_name)}\s*=\s*(?P<value>[A-Za-z0-9_]+)\s*$",
+        config_text,
+    )
+    if match is None:
+        raise AssertionError(f"{constant_name} constant value not found")
+    return match.group("value")
 
 
 def _extract_definition_block(spec_text: str, definition_name: str) -> str:

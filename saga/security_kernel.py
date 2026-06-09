@@ -7,6 +7,13 @@ from typing import Literal
 
 
 KernelEntryStatus = Literal["covered", "compat_excluded", "planned_hardening"]
+LayerId = Literal[
+    "prompt_layer",
+    "tool_layer",
+    "memory_layer",
+    "delegation_layer",
+    "replay_layer",
+]
 
 
 @dataclass(frozen=True)
@@ -76,11 +83,38 @@ class ModelRefinementMapping:
     linked_sink_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class LayerRefinementMapping:
+    """记录 layered TLA+ 抽象层到 Python protected sinks 的细化对应关系。"""
+
+    layer_id: LayerId
+    tla_layer_constant: str
+    tla_surfaces_constant: str
+    tla_surface_values: tuple[str, ...]
+    python_surfaces: tuple[str, ...]
+    linked_sink_ids: tuple[str, ...]
+    guard_terms: tuple[str, ...]
+    python_symbols: tuple[str, ...]
+    evidence_tests: tuple[str, ...]
+    abstraction_note: str
+    residual_risk: str
+
+
 EXECUTE_SURFACE_CLAIM = (
     "Execute(surface) => N_verify=1 AND scope_ok AND replay_ok "
     "AND delegation_ok AND policy_ok"
 )
 """严格 runtime-auth kernel 中 protected sink 的论文级安全命题。"""
+
+
+STRICT_RUNTIME_AUTH_GUARD_TERMS = (
+    "N_verify",
+    "scope_ok",
+    "replay_ok",
+    "delegation_ok",
+    "policy_ok",
+)
+"""layered TLA+ 与 Python refinement 共享的执行必要条件。"""
 
 
 SECURITY_KERNEL_ENTRIES: tuple[SecurityKernelEntry, ...] = (
@@ -1043,6 +1077,150 @@ MODEL_REFINEMENT_MAPPINGS: tuple[ModelRefinementMapping, ...] = (
 )
 
 
+LAYER_REFINEMENT_MAPPINGS: tuple[LayerRefinementMapping, ...] = (
+    LayerRefinementMapping(
+        layer_id="prompt_layer",
+        tla_layer_constant="PromptLayer",
+        tla_surfaces_constant="PromptLayerSurfaces",
+        tla_surface_values=("llm_prompt",),
+        python_surfaces=("llm_prompt",),
+        linked_sink_ids=("prompt_local_agent_run",),
+        guard_terms=STRICT_RUNTIME_AUTH_GUARD_TERMS,
+        python_symbols=(
+            "saga.agent.Agent.receive_conversation",
+            "saga.agent.Agent.initiate_conversation",
+            "saga.agent.Agent._evaluate_prompt_surface_request",
+            "saga.agent.Agent._run_local_agent_with_diagnostics",
+        ),
+        evidence_tests=(
+            "tests/integration/test_baseline_agent_flow.py::test_receive_conversation_rejects_tool_only_scope_before_prompt",
+            "tests/integration/test_baseline_agent_flow.py::test_receive_conversation_rejects_replayed_signed_envelope",
+            "tests/test_negative_injection_runner.py::test_runner_covers_real_agent_runtime_negative_paths",
+        ),
+        abstraction_note=(
+            "Layered TLA+ folds receiving-side prompt and signed response prompt execution "
+            "into the prompt protected-sink representative."
+        ),
+        residual_risk=(
+            "Only prompt execution through the active strict Agent wrapper is represented; "
+            "legacy compatibility local-agent calls remain excluded."
+        ),
+    ),
+    LayerRefinementMapping(
+        layer_id="tool_layer",
+        tla_layer_constant="ToolLayer",
+        tla_surfaces_constant="ToolLayerSurfaces",
+        tla_surface_values=("tool_call_placeholder", "tool_backend_method"),
+        python_surfaces=("tool_call:<tool_name>", "tool_backend_method"),
+        linked_sink_ids=("smolagents_tool_forward", "business_backend_method"),
+        guard_terms=STRICT_RUNTIME_AUTH_GUARD_TERMS,
+        python_symbols=(
+            "agent_backend.base.AgentWrapper._wrap_tool_with_execution_gate",
+            "agent_backend.base.AgentWrapper._gated_tool_resource",
+            "saga.execution_gate.GatedExecutionResource",
+            "saga.execution_gate.ExecutionCapabilityFacade.call_any_action",
+        ),
+        evidence_tests=(
+            "tests/test_agent_wrapper_gate.py::test_tool_call_is_rejected_when_scope_mismatches",
+            "tests/test_agent_wrapper_gate.py::test_direct_tool_backend_proxy_rejects_without_scope",
+            "tests/test_security_kernel.py::test_business_tool_backends_remain_gated_resources",
+        ),
+        abstraction_note=(
+            "The TLA+ tool layer groups smolagents tool forward calls and lower-level "
+            "business backend method access under one guarded layer."
+        ),
+        residual_risk=(
+            "Tools or backend clients constructed outside AgentWrapper and the gated "
+            "resource facade are outside the strict-kernel claim."
+        ),
+    ),
+    LayerRefinementMapping(
+        layer_id="memory_layer",
+        tla_layer_constant="MemoryLayer",
+        tla_surfaces_constant="MemoryLayerSurfaces",
+        tla_surface_values=("memory_read", "memory_write"),
+        python_surfaces=("memory_read", "memory_write"),
+        linked_sink_ids=("memory_read_facade", "memory_write_facade"),
+        guard_terms=STRICT_RUNTIME_AUTH_GUARD_TERMS,
+        python_symbols=(
+            "agent_backend.base.AgentWrapper._read_agent_memory_steps",
+            "agent_backend.base.AgentWrapper._append_agent_memory_step",
+            "saga.execution_gate.ExecutionCapabilityFacade.read_memory_steps",
+            "saga.execution_gate.ExecutionCapabilityFacade.append_memory_step",
+        ),
+        evidence_tests=(
+            "tests/test_agent_wrapper_gate.py::test_memory_read_helper_rejects_without_scope",
+            "tests/test_agent_wrapper_gate.py::test_memory_write_helper_rejects_without_scope",
+            "tests/test_security_kernel.py::test_raw_memory_mutation_remains_inside_capability_facade",
+        ),
+        abstraction_note=(
+            "Read and write memory sinks share the same layered guard while retaining "
+            "separate Python sink IDs and no-side-effect oracles."
+        ),
+        residual_risk=(
+            "Raw downstream memory object access outside ExecutionCapabilityFacade is "
+            "not represented by the layered proof claim."
+        ),
+    ),
+    LayerRefinementMapping(
+        layer_id="delegation_layer",
+        tla_layer_constant="DelegationLayer",
+        tla_surfaces_constant="DelegationLayerSurfaces",
+        tla_surface_values=("delegation",),
+        python_surfaces=("delegation",),
+        linked_sink_ids=("delegation_handler",),
+        guard_terms=STRICT_RUNTIME_AUTH_GUARD_TERMS,
+        python_symbols=(
+            "agent_backend.base.AgentWrapper.delegate_to_agent",
+            "saga.execution_gate.ExecutionCapabilityFacade.delegate",
+            "saga.execution_gate.LocalExecutionContext.require_delegation",
+            "saga.agent.Agent._delegate_to_agent",
+        ),
+        evidence_tests=(
+            "tests/test_agent_wrapper_gate.py::test_delegation_helper_rejects_without_scope",
+            "tests/test_execution_gate.py::test_authorize_rejects_delegated_child_scope_escalation",
+            "tests/test_security_kernel.py::test_direct_delegation_connect_calls_remain_excluded_or_gated",
+        ),
+        abstraction_note=(
+            "The delegation layer represents first-class delegated execution and the "
+            "parent-bound signed capability checks that precede Agent.connect."
+        ),
+        residual_risk=(
+            "Ad hoc Agent.connect calls in experiment drivers remain excluded from "
+            "the protected delegation layer."
+        ),
+    ),
+    LayerRefinementMapping(
+        layer_id="replay_layer",
+        tla_layer_constant="ReplayLayer",
+        tla_surfaces_constant="ReplayLayerSurfaces",
+        tla_surface_values=("request_envelope_replay",),
+        python_surfaces=("request_envelope_replay",),
+        linked_sink_ids=("replay_reserve_consume",),
+        guard_terms=STRICT_RUNTIME_AUTH_GUARD_TERMS,
+        python_symbols=(
+            "saga.agent.Agent._evaluate_execution_request",
+            "saga.execution_gate.SignedRequestExecutionGate.consume_request",
+            "saga.execution_gate.SignedRequestExecutionGate.evaluate_request",
+            "saga.execution_gate.ReplayStateStore.reserve_request",
+        ),
+        evidence_tests=(
+            "tests/test_execution_gate.py::test_consume_request_rejects_replayed_envelope",
+            "tests/test_execution_gate.py::test_consume_request_allows_only_one_concurrent_consumer",
+            "tests/test_agent_runtime_auth.py::test_config_default_workdir_replay_store_survives_restart",
+        ),
+        abstraction_note=(
+            "The replay layer models the consume/reserve side effect separately so "
+            "the proof records at-most-once execution before downstream sinks."
+        ),
+        residual_risk=(
+            "File-marker replay state is local research evidence; distributed claims "
+            "still require an injected strongly consistent backend."
+        ),
+    ),
+)
+
+
 def security_kernel_entries() -> tuple[SecurityKernelEntry, ...]:
     """返回当前 security runtime kernel 的不可变执行入口清单。"""
     return SECURITY_KERNEL_ENTRIES
@@ -1071,6 +1249,11 @@ def mutation_evidence() -> tuple[MutationEvidence, ...]:
 def model_refinement_mappings() -> tuple[ModelRefinementMapping, ...]:
     """返回 P5 抽象模型到 Python 实现与测试证据的 P6 对照表。"""
     return MODEL_REFINEMENT_MAPPINGS
+
+
+def layer_refinement_mappings() -> tuple[LayerRefinementMapping, ...]:
+    """返回 StrictRuntimeAuthLayered.tla 到 Python protected sinks 的逐层对照表。"""
+    return LAYER_REFINEMENT_MAPPINGS
 
 
 def entries_for_status(status: KernelEntryStatus) -> tuple[SecurityKernelEntry, ...]:
