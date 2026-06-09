@@ -2018,6 +2018,10 @@ GitHub / checkpoint 状态：
 - 已推送到专用备份分支：
   - `origin/backup/repro-local-sanitized`
 - 未推送主开发分支。
+- 用户已明确纠正后续备份目标应沿用：
+  - `origin/backup/repro-local`
+  - 本轮同一 HEAD 已补推到 `origin/backup/repro-local`
+  - `origin/backup/repro-local-sanitized` 保留为误用但非破坏性的额外备份分支，未删除。
 
 ### 2026-06-09 Layered TLA Refinement Mapping Session
 
