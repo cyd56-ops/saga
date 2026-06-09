@@ -37,6 +37,12 @@ from saga.security_kernel import (
 )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PROOF_APPENDIX_ARCHIVE_DIR = (
+    REPO_ROOT / "experiments" / "tables" / "20260609-proof-hardening-appendix"
+)
+
+
 def _summary(
     *,
     runtime_auth_enabled: bool,
@@ -490,6 +496,35 @@ class PaperTablesTests(unittest.TestCase):
                 archived["proof_artifact_rows"][0]["proof_tests_summary"],
                 "85 passed, 37 subtests passed",
             )
+
+    def test_checked_in_proof_appendix_manifest_matches_archive(self) -> None:
+        """checked-in manifest 必须与 appendix 表格中的 artifact summary 一致。"""
+        manifest = json.loads(
+            (PROOF_APPENDIX_ARCHIVE_DIR / "artifact_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        archive = json.loads(
+            (PROOF_APPENDIX_ARCHIVE_DIR / "paper_tables.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        artifact_row = archive["proof_artifact_rows"][0]
+        self.assertEqual(artifact_row["artifact_name"], manifest["artifact_name"])
+        self.assertEqual(artifact_row["artifact_sha256"], manifest["artifact_sha256"])
+        self.assertEqual(
+            artifact_row["proof_tests_summary"],
+            manifest["proof_tests_summary"],
+        )
+        self.assertEqual(artifact_row["mutation_count"], manifest["mutation_count"])
+        self.assertEqual(artifact_row["detected_count"], manifest["detected_count"])
+        self.assertEqual(
+            artifact_row["undetected_count"],
+            manifest["undetected_count"],
+        )
+        for output_path in manifest["generated_outputs"]:
+            self.assertTrue((REPO_ROOT / output_path).exists())
 
     def test_default_summary_paths_can_build_current_20260527_tables(self) -> None:
         """Checked local run summaries should remain readable when present in the workspace."""

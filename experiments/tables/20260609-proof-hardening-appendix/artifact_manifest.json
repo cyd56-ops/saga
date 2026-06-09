@@ -1,0 +1,49 @@
+{
+  "artifact_name": "proof-hardening-27191142461.zip",
+  "artifact_sha256": "f659a94e977ecf27ef93b1039d2914260ebf9e7b279ca5fbb0aa393505a75864",
+  "artifact_windows_path": "D:\\SAGA\\saga\\proof-hardening-27191142461.zip",
+  "artifact_wsl_path": "/mnt/d/SAGA/saga/proof-hardening-27191142461.zip",
+  "artifact_zip_committed": false,
+  "source_branch": "backup/repro-local",
+  "synced_default_branch": "repro-local",
+  "proof_hardening_summary_path": "/tmp/saga-proof-gh-27191142461/proof_hardening_check_summary.json",
+  "mutation_evidence_summary_path": "/tmp/saga-proof-gh-27191142461/mutation_evidence/mutation_evidence_summary.json",
+  "mutation_evidence_jsonl_path": "/tmp/saga-proof-gh-27191142461/mutation_evidence/mutation_evidence.jsonl",
+  "proof_tests_summary": "85 passed, 37 subtests passed",
+  "proof_finding_count": 0,
+  "mutation_count": 8,
+  "detected_count": 8,
+  "all_detected": true,
+  "undetected_count": 0,
+  "mutation_recorded_at": "2026-06-09T07:35:29.610329+00:00",
+  "validator_command": [
+    ".venv/bin/python",
+    "experiments/end_to_end_validation.py",
+    "--mutation-evidence-run-dir",
+    "/tmp/saga-proof-gh-27191142461/mutation_evidence"
+  ],
+  "validator_result": {
+    "passed": true,
+    "finding_count": 0
+  },
+  "paper_table_regenerate_command": [
+    ".venv/bin/python",
+    "experiments/paper_tables.py",
+    "--format",
+    "markdown",
+    "--proof-hardening-summary",
+    "/tmp/saga-proof-gh-27191142461/proof_hardening_check_summary.json",
+    "--mutation-evidence-summary",
+    "/tmp/saga-proof-gh-27191142461/mutation_evidence/mutation_evidence_summary.json",
+    "--proof-artifact-name",
+    "proof-hardening-27191142461.zip",
+    "--proof-artifact-sha256",
+    "f659a94e977ecf27ef93b1039d2914260ebf9e7b279ca5fbb0aa393505a75864",
+    "--output-dir",
+    "experiments/tables/20260609-proof-hardening-appendix"
+  ],
+  "generated_outputs": [
+    "experiments/tables/20260609-proof-hardening-appendix/paper_tables.json",
+    "experiments/tables/20260609-proof-hardening-appendix/paper_tables.md"
+  ]
+}
