@@ -3918,6 +3918,36 @@ GitHub / checkpoint 状态：
 
 - 当前工作区改动尚未形成 checkpoint commit；需在规定测试通过后执行最终 git 状态检查。
 
+### 2026-06-09 Backup Branch Consolidation Check
+
+目标：
+
+- 确认新开对话后的自动备份推送也优先使用 `origin/backup/repro-local`。
+- 在计划删除 `origin/backup/repro-local-sanitized` 前，确认该分支是否还有 `origin/backup/repro-local` 缺少的内容。
+
+已检查：
+
+- 已执行 `git fetch origin --prune` 刷新远端引用。
+- `origin/backup/repro-local` 当前为 `2a7996b docs: record backup branch correction`。
+- `origin/backup/repro-local-sanitized` 当前为 `fb3bab7 docs: record delegation replay checkpoint`。
+- `git merge-base --is-ancestor origin/backup/repro-local-sanitized origin/backup/repro-local` 通过，说明 sanitized backup 是当前 `backup/repro-local` 的祖先。
+- `git log --oneline --left-right --cherry-pick origin/backup/repro-local...origin/backup/repro-local-sanitized` 只显示 `backup/repro-local` 独有的 `2a7996b`，没有 sanitized backup 独有提交。
+- `git diff --name-status origin/backup/repro-local..origin/backup/repro-local-sanitized` 只显示 `SAGA_PQ_CAN_WORKLOG.md` 会回退删除 4 行；未发现 sanitized backup 有而 `backup/repro-local` 没有的文件内容。
+
+持久规则更新：
+
+- `AGENTS.md` 新增仓库级覆盖规则：除非用户明确指定其他目标，自动备份推送必须优先使用 `origin/backup/repro-local`，即使当前本地分支名称不同。
+- `AGENTS.md` 同时记录不要再推送到 `origin/backup/repro-local-sanitized`，除非用户明确要求；该分支是计划删除的旧备份分支。
+
+当前 checkpoint 待提交文件范围：
+
+- `AGENTS.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+
+敏感文件审查：
+
+- 待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+
 ### 2026-06-03 Security Evidence Paper Table Integration Session
 
 目标：
