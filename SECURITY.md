@@ -39,8 +39,8 @@ the execution surface inside the receiving agent:
 The strict runtime-auth security kernel is now recorded as a testable inventory
 in `saga/security_kernel.py`. It lists each execution entry and each protected
 sink, the protected surface, the code paths that mediate it, evidence tests,
-and residual risk. The sink-centric claim is intentionally narrower than "all
-Python code in the repository is impossible to bypass":
+and residual risk. The final paper-facing claim is sink-centric and intentionally
+narrower than "all Python code in the repository is impossible to bypass":
 
 ```text
 Execute(surface) => N_verify=1 AND scope_ok AND replay_ok AND delegation_ok AND policy_ok
@@ -103,14 +103,20 @@ conservative:
   envelope is otherwise valid. Non-strict compatibility mode remains excluded
   from PQ-CAN security claims.
 - Historical attack-model copies and experiment harnesses are not part of the
-  active runtime kernel unless they explicitly opt into runtime auth.
+  active runtime kernel unless they explicitly opt into runtime auth. They may
+  retain legacy helper code used for reproduction or adversary scenarios; those
+  copies are not evidence of an allowed bypass in the strict runtime-auth
+  protected-sink claim.
 
 Experiment, paper-reproduction, and demonstration code is not part of the
 mandatory runtime security boundary for the PQ-CAN prototype. In particular,
 `experiments/`, `proofs/`, `saga/attack_models/`, and most of `agent_backend/`
 are evidence, harness, or demo layers unless a specific test or experiment
 explicitly opts into them. These directories must not be treated as required
-authorization bypass paths for the active runtime gate.
+authorization bypass paths for the active runtime gate. Main-code hygiene fixes
+apply to the SAGA/PQ-CAN kernels above; historical copied attack-model files are
+documented as excluded paths rather than silently folded into the strict-kernel
+claim.
 
 The effective authorization rule is:
 

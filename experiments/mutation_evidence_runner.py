@@ -137,12 +137,14 @@ def mutation_specs() -> tuple[MutationSpec, ...]:
                 MutationPatch(
                     relative_path="saga/execution_gate.py",
                     needle=(
-                        "        assert decision.request_envelope is not None\n"
+                        "        if decision.request_envelope is None:\n"
+                        "            return replace(decision, allowed=False, reason=\"missing_request_envelope\")\n"
                         "        request_id = self._request_replay_id(decision.request_envelope)\n"
                     ),
                     replacement=(
+                        "        if decision.request_envelope is None:\n"
+                        "            return replace(decision, allowed=False, reason=\"missing_request_envelope\")\n"
                         "        return decision\n\n"
-                        "        assert decision.request_envelope is not None\n"
                         "        request_id = self._request_replay_id(decision.request_envelope)\n"
                     ),
                 ),

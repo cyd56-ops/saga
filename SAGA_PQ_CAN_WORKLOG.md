@@ -819,17 +819,17 @@ AND internal_policy_accept
 
 - SAGA 主线代码骨架：`已完成`
 - SAGA Phase 0 基线运行验证：`已完成`
-- 生命周期接口补齐：`部分完成`
-- 核心协议正确性审计：`进行中`
+- 生命周期接口补齐：`已完成`（第一阶段：Provider/User 侧 policy update、deactivate、OTK refresh 已存在并纳入当前主线边界）
+- 核心协议正确性审计：`已完成`（第一阶段：主代码路径已完成 token/OTK/replay/验签异常/密文长度/安全 assert 审计修复；历史 attack model 副本不纳入 strict runtime-auth claim）
 - 最小自动化测试基线：`已完成`
-- 论文级实验复现 harness：`进行中`
-- 代码范围收缩与关键路径隔离：`进行中`
-- PQ/LWE 签名抽象：`进行中`
-- canonical request context / request envelope：`进行中`
+- 论文级实验复现 harness：`已完成`（第一阶段：正向 batch、真实负向 runner、artifact validation、paper table helper、proof-hardening appendix 均已落地；更多 live sample 属于后续增强）
+- 代码范围收缩与关键路径隔离：`已完成`（第一阶段：SAGA 协议内核、PQ-CAN 扩展内核、evidence/harness/attack-model 非强制边界已写入工作文档与 `SECURITY.md`）
+- PQ/LWE 签名抽象：`已完成`（第一阶段：toy LWE research backend 与 fail-closed ML-DSA external adapter 边界已落地；真实 ML-DSA backend 接线属于后续增强）
+- canonical request context / request envelope：`已完成`（第一阶段：sender/receiver/token/message/scope/time/capability/delegation/replay 绑定已接入 runtime gate）
 - Shamir STEP/RECT/MASK：`已完成`
-- compiled DNN verifier：`进行中`
-- CNN + Ring/Module-LWE verifier：`未开始`
-- SAGA + PQ-CAN 执行层集成：`进行中`
+- compiled DNN verifier：`已完成`（第一阶段：toy LWE 公开矩阵投影与 deterministic preprocessing 边界固定；更细粒度算术 gadget 神经化属于后续增强）
+- CNN + Ring/Module-LWE verifier：`未开始`（明确后置增强方向，不是当前 strict runtime-auth proof closure 的前置条件）
+- SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
 
 ### 3.4 阻塞 / 风险
 
@@ -1945,6 +1945,10 @@ protected sinks 至少覆盖：
    - 连接关闭日志拼写已修复。
    - 新增回归测试覆盖 Path material、短密文拒绝和 optimized-mode 下不依赖 assert 的 fail-closed 行为。
 9. 若切回系统工程主线，可选择 ML-DSA adapter 真实 backend 接线、Redis/PostgreSQL replay backend artifact、CNN + Ring/Module-LWE 路线评估或更多 live sample；这些方向仍暂后置，除非用户重新指定。
+10. 当前不再需要新增主线大模块即可进入 release / paper closure：
+   - 状态面板已收敛为“第一阶段已完成 + 后续增强另列”。
+   - 最终论文 claim 固定为 strict runtime-auth protected sinks 的 sink-centric 命题，不扩大到全仓库任意 Python 代码。
+   - 研究原型边界固定为：主代码路径接受 hygiene 审计；`experiments/`、`proofs/`、`saga/attack_models/` 等 evidence / harness / 历史副本路径只有显式 opt-in 时才进入具体实验或测试 claim。
 
 API cost 目前不从价格表估算；只有模型后端诊断记录显式提供 usage/cost 字段时才会进入统计。
 
@@ -1973,6 +1977,64 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-06-14 Mainline Release-Closure Pass
+
+目标：
+
+- 完成当前主线剩余收口项：状态面板一致性、最终 claim / 边界说明、artifact/repro 验收、paper appendix 表格复核，以及研究原型边界清理。
+
+已做工作：
+
+- 更新 `SAGA_PQ_CAN_WORKLOG.md`：
+  - `3.3 已完成程度评估` 从旧的多项 `进行中` 收敛为“第一阶段已完成 / 后续增强另列”。
+  - `7. 当前工作焦点` 明确当前不再需要新增主线大模块即可进入 release / paper closure。
+  - 保留 ML-DSA 真实 backend、Redis/PostgreSQL replay artifact、CNN + Ring/Module-LWE 与更多 live sample 为后续增强方向。
+- 更新 `SECURITY.md`：
+  - 明确 strict runtime-auth claim 是 sink-centric，不是 whole-repository non-bypassability claim。
+  - 明确 historical `saga/attack_models/**` copies、experiment/proof harness 和 raw backend use 的 excluded-path 语义。
+- 更新 `proofs/strict_runtime_auth_evidence.md`：
+  - 将 paper-facing excluded-path 边界写清楚，避免 appendix 读者把历史副本遗留误读为 strict-kernel 漏洞。
+- 修复 `experiments/mutation_evidence_runner.py` 中 `skip_replay_reserve` mutation 的 stale patch anchor：
+  - 该 anchor 仍匹配旧的 `assert decision.request_envelope is not None` 结构；主代码已改为显式 fail-closed guard 后，全量 proof-hardening 会将该 mutation 标记为未应用。
+  - 现已更新为匹配当前 `missing_request_envelope` fail-closed guard 后的 replay reserve 代码。
+  - 新增 `tests/test_mutation_evidence_runner.py::MutationEvidenceRunnerTests::test_mutation_patch_needles_match_current_source`，防止后续主代码演进导致 mutation patch 静默漂移。
+
+已验证：
+
+- proof-test-only 验收通过：
+  - `.venv/bin/python -m experiments.proof_hardening_check --skip-mutations --output-dir /tmp/saga-release-closure-proof-fast-20260614 --proof-timeout-seconds 180 --python-executable /home/kali/saga/.venv/bin/python`
+  - 结果：`passed=true`，`finding_count=0`，proof tests `85 passed, 37 subtests passed`。
+- 正向 baseline / PQ-CAN 与 8 场景真实负向 artifact validation 通过：
+  - `.venv/bin/python experiments/end_to_end_validation.py ... --real-negative-run-dir experiments/runs/20260602T062649Z-real-negative-missing_request_envelope-tampered_message-prompt_surface_tool_only-replayed_envelope-wrong_trusted_sender_key-unauthorized_tool_scope-unauthorized_memory_write-unauthorized_delegation ...`
+  - 结果：`passed=true`，`finding_count=0`，8 个 required real-negative scenarios 全部 validated。
+- 默认 paper table 生成通过：
+  - `.venv/bin/python experiments/paper_tables.py --format markdown --output-dir /tmp/saga-release-closure-paper-tables-20260614`
+- proof artifact appendix 表格生成的 CLI 合约已复核：
+  - 只提供 `--proof-hardening-summary` 而缺少 `--mutation-evidence-summary` 时按预期拒绝，避免 appendix 表格缺 mutation 证据。
+- 全量 proof-hardening 验收通过：
+  - `.venv/bin/python -m experiments.proof_hardening_check --output-dir /tmp/saga-release-closure-proof-full-20260614 --proof-timeout-seconds 180 --mutation-timeout-seconds 180 --python-executable /home/kali/saga/.venv/bin/python`
+  - 结果：`passed=true`，`finding_count=0`，proof tests `86 passed, 45 subtests passed`，mutation evidence `8/8` detected。
+- mutation evidence artifact validation 通过：
+  - `.venv/bin/python experiments/end_to_end_validation.py --mutation-evidence-run-dir /tmp/saga-release-closure-proof-full-20260614/mutation_evidence`
+  - 结果：`passed=true`，`finding_count=0`。
+- proof artifact appendix 表格生成通过：
+  - `.venv/bin/python experiments/paper_tables.py --format markdown --proof-hardening-summary /tmp/saga-release-closure-proof-full-20260614/proof_hardening_check_summary.json --mutation-evidence-summary /tmp/saga-release-closure-proof-full-20260614/mutation_evidence/mutation_evidence_summary.json --proof-artifact-name saga-release-closure-proof-full-20260614 --proof-artifact-sha256 local-release-closure-full --output-dir /tmp/saga-release-closure-proof-paper-tables-20260614`
+- 相关回归测试通过：
+  - `.venv/bin/python -m pytest -q tests/test_mutation_evidence_runner.py tests/test_end_to_end_validation.py tests/test_security_kernel.py`
+  - 结果：`44 passed, 18 subtests passed`。
+- 完成前测试矩阵通过：
+  - `.venv/bin/python -m pytest -q` -> `409 passed, 69 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `36 passed, 12 subtests passed`
+  - `git diff --check` -> 无输出，通过。
+  - 未发现 `ruff` / `mypy` 配置文件，因此未运行额外 lint/typecheck。
+
+当前 checkpoint 状态：
+
+- 本轮 release-closure pass 以 `checkpoint: release mainline closure` 形成 checkpoint。
+- 本次待提交文件只包含工作日志、安全边界文档、proof evidence 文档、mutation evidence runner 与对应测试；不包含 secrets、生成凭据、本地 DB、模型输出或 `paper/`。
+- 满足备份推送安全条件，结束前推送到 `origin/backup/repro-local`，不推送主开发分支。
 
 ### 2026-06-14 Main-Code Audit Repair Session
 

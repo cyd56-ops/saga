@@ -30,6 +30,17 @@ class MutationEvidenceRunnerTests(unittest.TestCase):
             self.assertTrue(spec.description)
             self.assertTrue(spec.patches)
 
+    def test_mutation_patch_needles_match_current_source(self) -> None:
+        """所有 mutation patch 必须能在当前源码中精确命中。"""
+        for spec in runner.mutation_specs():
+            for patch in spec.patches:
+                with self.subTest(mutation_id=spec.mutation_id, path=patch.relative_path):
+                    source = (runner.REPO_ROOT / patch.relative_path).read_text(
+                        encoding="utf-8"
+                    )
+
+                    self.assertIn(patch.needle, source)
+
     def test_select_mutations_deduplicates_and_expands_all(self) -> None:
         """CLI mutation 选择应支持 all 和重复项去重。"""
         all_specs = runner.select_mutations(("all",))

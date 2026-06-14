@@ -30,10 +30,17 @@ Excluded or limited paths:
 
 - legacy compatibility paths without strict runtime auth
 - `experiments/` harnesses unless they explicitly opt into runtime auth
-- `saga/attack_models/` historical copies
+- `saga/attack_models/` historical copies, including stale helper code retained
+  for reproduction or adversary scenario documentation
 - arbitrary raw backend or memory object use outside the gated facade
 - toy LWE production security claims
 - full post-quantum transport security without a separate PQ key exchange story
+
+These exclusions are part of the claim, not undocumented exceptions. The
+strict-kernel statement covers the protected sinks mediated by the active SAGA
+and PQ-CAN runtime code paths, while historical copies and harnesses remain
+evidence or reproduction material unless a test explicitly opts them into
+runtime auth.
 
 ## Proof Artifact Matrix
 
