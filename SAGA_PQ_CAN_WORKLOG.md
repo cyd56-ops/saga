@@ -2034,7 +2034,8 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 
 - 本轮 release-closure pass 以 `checkpoint: release mainline closure` 形成 checkpoint。
 - 本次待提交文件只包含工作日志、安全边界文档、proof evidence 文档、mutation evidence runner 与对应测试；不包含 secrets、生成凭据、本地 DB、模型输出或 `paper/`。
-- 满足备份推送安全条件，结束前推送到 `origin/backup/repro-local`，不推送主开发分支。
+- 已形成本地 checkpoint commit。
+- 已成功推送备份分支 `origin/backup/repro-local`；未推送主开发分支。
 
 ### 2026-06-14 Main-Code Audit Repair Session
 
