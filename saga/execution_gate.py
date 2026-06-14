@@ -845,7 +845,8 @@ class SignedRequestExecutionGate:
         if not decision.allowed:
             return decision
 
-        assert decision.request_envelope is not None
+        if decision.request_envelope is None:
+            return replace(decision, allowed=False, reason="missing_request_envelope")
         request_id = self._request_replay_id(decision.request_envelope)
         # 同一 gate 实例内的内存集合也要在锁内检查/写入，避免并发消费双放行。
         with self._replay_lock:
@@ -876,8 +877,8 @@ class SignedRequestExecutionGate:
         if not decision.allowed:
             return None
 
-        assert decision.request_envelope is not None
-        assert decision.pq_signature is not None
+        if decision.request_envelope is None or decision.pq_signature is None:
+            return None
         return LocalExecutionContext(
             sender_aid=request.sender_aid,
             receiver_aid=request.receiver_aid,

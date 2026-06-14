@@ -17,6 +17,7 @@ from pq import ToyLWESignatureScheme
 from saga.execution_gate import (
     append_execution_gate_audit_record,
     ExecutionAuthorizationError,
+    ExecutionGateDecision,
     ExecutionGateRequest,
     FileReplayStateStore,
     RedisReplayStateStore,
@@ -498,6 +499,27 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
 
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.reason, "replay_state_persistence_failed")
+
+    def test_consume_request_fails_closed_when_allowed_decision_lacks_envelope(self) -> None:
+        """即使内部 decision 不变量被破坏，消费路径也必须显式拒绝。"""
+        with mock.patch.object(
+            self.gate,
+            "evaluate_request",
+            return_value=ExecutionGateDecision(True, "authorized"),
+        ):
+            decision = self.gate.consume_request(self._build_request())
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "missing_request_envelope")
+
+    def test_build_local_execution_context_rejects_incomplete_allowed_decision(self) -> None:
+        """构造本地执行上下文时不能依赖可被优化移除的 assert。"""
+        context = self.gate.build_local_execution_context_from_decision(
+            self._build_request(),
+            ExecutionGateDecision(True, "authorized"),
+        )
+
+        self.assertIsNone(context)
 
     def test_authorize_rejects_message_digest_mismatch(self) -> None:
         """Changing the transport message must invalidate the envelope binding."""

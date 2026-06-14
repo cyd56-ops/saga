@@ -2,8 +2,10 @@
     SAGA Cryptographic module for key generation.
 """
 import base64
+import binascii
 import ipaddress
 import json
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -143,7 +145,7 @@ def verify_signature(ed25519_public_key, message, signature):
             message.encode("utf-8")
         )
         return True
-    except:
+    except InvalidSignature:
         return False
 
 def derive_x25519_keypair(ed25519_private_key):
@@ -525,21 +527,24 @@ def encrypt_token(token_dict, sdhkey) -> bytes:
 
 def decrypt_token(encrypted_token, sdhkey) -> dict:
     """
-    Decrypts an encrypted token using AES-GCM with a Diffie-Hellman shared key.
+    使用 AES-GCM 和 Diffie-Hellman 共享密钥解密 base64 编码的 token。
 
     Args:
         encrypted_token: The Base64-encoded encrypted token.
         sdhkey: The shared DH key (must be 32 bytes for AES-256).
     """
-    # Decode the encrypted token
-    encrypted_data = base64.b64decode(encrypted_token.encode('utf-8'))
+    try:
+        encrypted_data = base64.b64decode(encrypted_token.encode("utf-8"), validate=True)
+    except (binascii.Error, AttributeError) as exc:
+        raise ValueError("encrypted token must be valid base64 text") from exc
 
-    # Extract the nonce, ciphertext, and tag
+    min_encrypted_token_size = 12 + 16
+    if len(encrypted_data) < min_encrypted_token_size:
+        raise ValueError("encrypted token is too short for AES-GCM nonce and tag")
+
     nonce = encrypted_data[:12]
     ciphertext = encrypted_data[12:-16]
     tag = encrypted_data[-16:]
-
-    # TODO: Validation checks for lengths (match expected length, might not be noticed when slicing)
 
     # Decrypt the token
     cipher = Cipher(algorithms.AES(sdhkey), modes.GCM(nonce, tag))

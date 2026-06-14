@@ -206,6 +206,18 @@ class TokenValidationTests(unittest.TestCase):
             0,
         )
 
+    def test_decrypt_token_rejects_non_base64_input(self) -> None:
+        """AES-GCM token 解密前必须拒绝非 base64 输入。"""
+        with self.assertRaisesRegex(ValueError, "valid base64"):
+            sc.decrypt_token("not base64!", b"\x00" * 32)
+
+    def test_decrypt_token_rejects_truncated_payload_before_slicing(self) -> None:
+        """AES-GCM token 解密前必须显式拒绝缺少 nonce/tag 的短密文。"""
+        truncated_token = base64.b64encode(b"too-short").decode("utf-8")
+
+        with self.assertRaisesRegex(ValueError, "too short"):
+            sc.decrypt_token(truncated_token, b"\x00" * 32)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,7 +57,7 @@ def _agent_manifest_path(aid: str) -> str:
 def _update_agent_manifest(aid: str, updater):
     manifest_path = _agent_manifest_path(aid)
     if not os.path.exists(manifest_path):
-        logger.warn(f"Local agent manifest not found at {manifest_path}. Skipping local sync.")
+        logger.warning(f"Local agent manifest not found at {manifest_path}. Skipping local sync.")
         return
 
     with open(manifest_path, "r") as f:
@@ -655,4 +655,3 @@ if __name__ == "__main__":
                 deactivate_agent(
                     name=agent.get('name')
                 )
-

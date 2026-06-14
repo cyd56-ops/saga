@@ -41,6 +41,11 @@ class Logger:
         print(f"{timestamp} {color}[WARNING] {message} {Logger.RESET}")
 
     @staticmethod
+    def warning(message):
+        """提供标准 logging 风格的 warning 别名。"""
+        Logger.warn(message)
+
+    @staticmethod
     def error(message):
         """输出固定 ERROR 标签的错误日志。"""
         timestamp = time.strftime("%H:%M:%S")

@@ -10,6 +10,7 @@ import base64
 from datetime import datetime, timezone, timedelta
 import os
 
+from cryptography.exceptions import InvalidSignature
 import saga.common.crypto as sc
 from saga.ca.CA import get_SAGA_CA
 import saga.config
@@ -181,7 +182,7 @@ class Provider:
             # Verify the user's certificate:
             try:
                 self.CA.verify(crt_u)
-            except:
+            except InvalidSignature:
                 logger.error(f"Invalid user certificate.")
                 return jsonify({"message": "Invalid user certificate"}), 401
 
@@ -317,7 +318,7 @@ class Provider:
             # Verify the agent's certificate:
             try:
                 self.CA.verify(agent_cert)
-            except:
+            except InvalidSignature:
                 logger.error(f"Invalid agent certificate.")
                 return jsonify({"message": "Invalid agent certificate"}), 401
             # Extract the aagent's public signing key 
@@ -350,7 +351,7 @@ class Provider:
                     agent_sig_bytes,
                     str(block).encode("utf-8")
                 )
-            except:
+            except InvalidSignature:
                 logger.error(f"Invalid agent signature.")
                 return jsonify({"message": "Invalid agent signature"}), 401
             

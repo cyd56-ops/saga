@@ -274,7 +274,7 @@ AND internal_policy_accept
 
 ## 3. 当前状态面板
 
-最后更新日期：`2026-06-09`
+最后更新日期：`2026-06-14`
 
 ### 3.1 代码实际状态
 
@@ -796,13 +796,18 @@ AND internal_policy_accept
   - 避免 receiving-side execution gate 审计运行产物进入提交范围
 - 工作区已做过一次整顿：
   - 已清除大部分仅由换行符漂移造成的已跟踪噪音改动
-  - 当前应重点关注的已跟踪源码改动收敛为：
-    - `.gitignore`
-    - `saga/agent.py`
-    - `saga/provider/provider.py`
-    - `saga/user/user.py`
-    - `saga/common/contact_policy.py`
-    - 对应 attack model 文件
+- `2026-06-14` 审计修复 checkpoint 当前包含：
+  - `saga/agent.py`
+  - `saga/common/crypto.py`
+  - `saga/common/logger.py`
+  - `saga/execution_gate.py`
+  - `saga/logger.py`
+  - `saga/provider/provider.py`
+  - `saga/user/user.py`
+  - `tests/security/test_token_validation.py`
+  - `tests/test_execution_gate.py`
+  - `tests/test_agent_material.py`
+  - 本轮修复只覆盖主代码路径；`saga/attack_models/**` 中历史复制版遗留同类模式仍按非 runtime authorization 强制边界处理，未在本 checkpoint 中大规模重写。
 
 ### 3.2 已确认的差异
 
@@ -979,6 +984,15 @@ AND internal_policy_accept
   - `.venv/bin/python -m pytest -q tests/integration` -> `36 passed, 12 subtests passed`
   - `git diff --check` -> no output
   - 未发现 `pyproject.toml`、`setup.cfg`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `tox.ini`，因此未运行 `ruff check .` / `mypy .`。
+- 已于 `2026-06-14` 重新确认主代码审计修复后测试结果：
+  - `.venv/bin/python -m pytest -q tests/security/test_otk_signature_binding.py tests/test_preflight.py` -> `14 passed`
+  - `.venv/bin/python -m pytest -q tests/test_agent_material.py tests/security/test_token_validation.py tests/test_execution_gate.py` -> `59 passed`
+  - `.venv/bin/python -m pytest -q` -> `408 passed, 61 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `36 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 当前 shell 中仍不存在 plain `python` 命令；验收使用 repo-local `.venv/bin/python`。
+  - 未发现 `pyproject.toml`、`setup.cfg`、`tox.ini`、`mypy.ini`、`.ruff.toml`、`ruff.toml` 或 `pyrightconfig.json`，因此未运行 `ruff check .` / `mypy .`。
 - 已于 `2026-06-01` 重新确认 C2 token 并发消费修复后局部测试结果：
   - `.venv/bin/python -m pytest -q tests/security/test_token_validation.py` -> `12 passed`
   - `.venv/bin/python -m pytest -q tests/integration/test_baseline_agent_flow.py tests/security/test_token_validation.py` -> `37 passed`
@@ -1002,7 +1016,7 @@ AND internal_policy_accept
   - 当前不声称 SHA-256 或 hash-to-challenge 已实现为神经电路
   - 后续若继续推进 compiled DNN 深化，应优先评估是否将模减 / 等式 / 聚合进一步改写为更细粒度固定 ReLU gadget，或进入 E8 的 CNN + Ring/Module-LWE 路线
 - 当前新的关键设计风险不在“是否替换 SAGA”，而在“如何把执行层 gate 插到正确节点并保持 deterministic semantics”。
-- 当前工作区已清理为干净状态；当前本地 checkpoint 已备份到 `origin/backup/repro-local`，但相对 `origin/repro-local` 仍超前多个提交；后续同步时仍需显式记录：
+- 当前工作区包含 `2026-06-14` 主代码审计修复，尚未形成 checkpoint commit；后续同步时仍需显式记录：
   - 本次同步范围
   - 是否只包含本会话变更
   - 哪些本地 checkpoint 尚未合并回常规开发分支
@@ -1922,7 +1936,15 @@ protected sinks 至少覆盖：
    - proof appendix 表格接入已完成第一版：`experiments/paper_tables.py` 现在可输出 proof claim、protected sinks、mutation evidence、model refinement、layer refinement 与可选 GitHub artifact summary。
    - 当前归档输出位于 `experiments/tables/20260609-proof-hardening-appendix/`，包含 `paper_tables.json` 与 `paper_tables.md`。
    - 分支同步流程已完成：用户确认后，`origin/repro-local` 已 fast-forward 到 `origin/backup/repro-local` 的 `4e3c146 log: archive proof-hardening artifact`。
-8. 若切回系统工程主线，可选择 ML-DSA adapter 真实 backend 接线、Redis/PostgreSQL replay backend artifact、CNN + Ring/Module-LWE 路线评估或更多 live sample；这些方向仍暂后置，除非用户重新指定。
+8. `2026-06-14` 已按审计意见完成主代码低/中风险修复：
+   - `get_agent_material(...)` 支持 `str | Path` 并使用 `Path` API 读取 `agent.json`。
+   - 主验签 / 证书验证路径裸 `except:` 已收窄到 `InvalidSignature` 与输入解码类错误；provider 主路径也已同步修复。
+   - AES-GCM token 解密已新增 base64 与 nonce/tag 最短长度校验。
+   - execution gate 中安全相关 `assert` 已改为显式 fail-closed 分支。
+   - 主代码 `logger.warn` 已迁移到 `logger.warning`，两个 Logger 实现均提供兼容别名。
+   - 连接关闭日志拼写已修复。
+   - 新增回归测试覆盖 Path material、短密文拒绝和 optimized-mode 下不依赖 assert 的 fail-closed 行为。
+9. 若切回系统工程主线，可选择 ML-DSA adapter 真实 backend 接线、Redis/PostgreSQL replay backend artifact、CNN + Ring/Module-LWE 路线评估或更多 live sample；这些方向仍暂后置，除非用户重新指定。
 
 API cost 目前不从价格表估算；只有模型后端诊断记录显式提供 usage/cost 字段时才会进入统计。
 
@@ -1934,6 +1956,7 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
   - `saga/user/emma_johnson@gmail.com:calendar_agent/agent.crt.stale-20260516`
   - `saga/user/raj.sharma@gmail.com:calendar_agent/agent.crt.stale-20260516`
 - 工作区包含生成凭据、实验结果和本地 DB 状态变更；不得自动 push 到主开发分支。
+- `2026-06-14` 审计修复待提交文件未包含 secrets、生成凭据、本地 DB、模型输出或 `paper/`；仍需在 checkpoint 前展示确切文件列表。
 
 ### 当前结束前固定动作
 
@@ -1950,6 +1973,70 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-06-14 Main-Code Audit Repair Session
+
+目标：
+
+- 根据同事审计清单修复主代码中的低/中风险问题，并确认修复后没有同类主路径残留。
+
+已做工作：
+
+- 更新 `saga/agent.py`：
+  - `get_agent_material(...)` 改为 `str | Path` 输入，使用 `Path` 拼接和 UTF-8 读取。
+  - provider stamp、peer certificate、agent signature 验证路径不再使用裸 `except:`。
+  - 主代码 `logger.warn(...)` 调用统一切到 `logger.warning(...)`。
+  - 连接关闭日志中的 `succesfully` 修为 `successfully`。
+  - `deserialize(...)` 的 base64 探测只捕获解码类异常，不再吞掉系统中断。
+- 更新 `saga/common/crypto.py`：
+  - `verify_signature(...)` 只捕获 `InvalidSignature`。
+  - `decrypt_token(...)` 在 AES-GCM 切片前校验 base64 格式与 nonce/tag 最短长度。
+- 更新 `saga/execution_gate.py`：
+  - `consume_request(...)` 和 `build_local_execution_context_from_decision(...)` 不再依赖安全相关 `assert`，内部不变量缺失时显式 fail-closed。
+- 更新 `saga/common/logger.py` 与 `saga/logger.py`：
+  - 新增标准 logging 风格 `warning(...)` 兼容别名，保留现有 `warn(...)`。
+- 更新 `saga/provider/provider.py` 与 `saga/user/user.py`：
+  - provider 注册路径证书/签名验证裸 `except:` 收窄为 `InvalidSignature`。
+  - user manifest 同步路径切换到 `logger.warning(...)`。
+- 新增/更新测试：
+  - 新增 `tests/test_agent_material.py`
+  - 更新 `tests/security/test_token_validation.py`
+  - 更新 `tests/test_execution_gate.py`
+
+已验证：
+
+- `.venv/bin/python -m pytest -q tests/security/test_otk_signature_binding.py tests/test_preflight.py` -> `14 passed`
+- `.venv/bin/python -m pytest -q tests/test_agent_material.py tests/security/test_token_validation.py tests/test_execution_gate.py` -> `59 passed`
+- `.venv/bin/python -m pytest -q` -> `408 passed, 61 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `36 passed, 12 subtests passed`
+- `git diff --check` -> no output
+- 主代码扫描 `saga/**` 且排除 `saga/attack_models/**` 后，审计列出的裸 `except:`、旧 `logger.warn`、`succesfully`、安全相关 `assert decision...` 和 `decrypt_token` 长度 TODO 均已清理；剩余命中仅为预期的 `logger.warning(...)` 调用。
+- 未发现 ruff/mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
+
+当前 checkpoint 待提交文件范围：
+
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `saga/agent.py`
+- `saga/common/crypto.py`
+- `saga/common/logger.py`
+- `saga/execution_gate.py`
+- `saga/logger.py`
+- `saga/provider/provider.py`
+- `saga/user/user.py`
+- `tests/security/test_token_validation.py`
+- `tests/test_execution_gate.py`
+- `tests/test_agent_material.py`
+
+敏感文件审查：
+
+- 待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、模型输出、实验运行结果或 `paper/`。
+- `saga/attack_models/**` 中仍有历史复制版同类模式；本轮不纳入 checkpoint，因该目录已在工作文档中列为非 runtime authorization 强制边界。
+
+GitHub / checkpoint 状态：
+
+- 当前工作区改动尚未形成 checkpoint commit。
+- 下一步应执行最终 `git status --short`，如用户同意 checkpoint，可提交本地 checkpoint；如需备份推送，目标应为 `origin/backup/repro-local`，不得推送到主开发分支。
 
 ### 2026-06-09 Proof Appendix Paper Tables Session
 

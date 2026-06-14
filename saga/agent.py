@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import traceback
 from pathlib import Path
 from collections.abc import Callable
+from cryptography.exceptions import InvalidSignature
 from cryptography.x509 import Certificate
 
 import saga.config
@@ -52,28 +53,20 @@ CONVERSATION_SOCKET_TIMEOUT_SECONDS = 300.0
 # TODO: Handle max_queries
 
 
-def get_agent_material(dir_path: Path) -> dict:
+def get_agent_material(dir_path: str | Path) -> dict:
     """
-    Reads the agent material from the agent.json file in the given directory.
+    读取指定 agent 工作目录中的 ``agent.json`` 材料文件。
 
     Args:
-        dir_path (Path): The directory path where the agent.json file is located.
+        dir_path (str | Path): The directory path where the agent.json file is located.
     Returns:
         dict: The material read from the agent.json file.
     """
-    # Check if dir exists:
-    if not os.path.exists(dir_path):
-        os.mkdir(dir_path)
+    agent_dir = Path(dir_path)
+    agent_dir.mkdir(parents=False, exist_ok=True)
 
-    # Open agent.json
-    if dir_path[-1] != '/':
-        dir_path += "/"
-
-    material = None
-    with open(dir_path+"agent.json", "r") as f:
-        material = json.load(f)
-    
-    return material
+    with (agent_dir / "agent.json").open("r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def serialize(obj):
@@ -103,7 +96,7 @@ def deserialize(obj):
     if isinstance(obj, str):
         try:
             return base64.b64decode(obj)
-        except:
+        except (binascii.Error, ValueError):
             return obj
     elif isinstance(obj, list):
         return [deserialize(item) for item in obj]
@@ -296,7 +289,7 @@ class Agent:
         # library-agnostic agent object
         self.local_agent = local_agent
         if local_agent is None:
-            logger.warn("No local agent provided. Using dummy agent.")
+            logger.warning("No local agent provided. Using dummy agent.")
             self.local_agent = DummyAgent()
         
         # Check if local_agent is a child of LocalAgent:
@@ -404,7 +397,7 @@ class Agent:
                 base64.b64decode(self.stamp),
                 str(self.card).encode("utf-8")
             )
-        except:
+        except (InvalidSignature, TypeError, ValueError, binascii.Error):
             logger.error("ERROR: PROVIDER STAMP VERIFICATION FAILED. UNSAFE CONNECTION.")
             raise Exception("ERROR: PROVIDER STAMP VERIFICATION FAILED. UNSAFE CONNECTION.")
         
@@ -1314,7 +1307,7 @@ class Agent:
             response = self.recv(conn)
             self.monitor.start("agent:communication_conv_init")
             if not response:
-                logger.warn("Failed to parse incoming socket message; connection may have closed abruptly during reception.")
+                logger.warning("Failed to parse incoming socket message; connection may have closed abruptly during reception.")
                 self.monitor.stop("agent:communication_conv_init")
                 return False
 
@@ -1393,7 +1386,7 @@ class Agent:
             
             # Process message:
             if i > MAX_QUERIES:
-                logger.warn("Maximum allowed number of queries in the conversation is reached. Ending conversation...")
+                logger.warning("Maximum allowed number of queries in the conversation is reached. Ending conversation...")
                 self.monitor.stop("agent:communication_conv_init")
                 return True
             self.monitor.stop("agent:communication_conv_init")
@@ -1442,7 +1435,7 @@ class Agent:
             message_dict = self.recv(conn)
             self.monitor.start("agent:communication_conv_recv")
             if not message_dict:
-                logger.warn("Failed to parse incoming socket message; connection may have closed abruptly during reception.")
+                logger.warning("Failed to parse incoming socket message; connection may have closed abruptly during reception.")
                 self.monitor.stop("agent:communication_conv_recv")
                 return False
             
@@ -1471,7 +1464,7 @@ class Agent:
 
             # Check if too many queries have been sent to your llm resources:
             if i > MAX_QUERIES:
-                logger.warn("Maximum allowed number of queries in the conversation is reached. Ending conversation...")
+                logger.warning("Maximum allowed number of queries in the conversation is reached. Ending conversation...")
                 self.monitor.stop("agent:communication_conv_recv")
                 return True
 
@@ -1637,7 +1630,7 @@ class Agent:
         logger.log("CRYPTO", f"Verifying {r_aid}'s user certificate.")
         try:
             self.CA.verify(r_agent_user_cert)
-        except:
+        except (InvalidSignature, ValueError, TypeError):
             logger.error(f"ERROR: {r_aid} USER CERTIFICATE VERIFICATION FAILED. UNSAFE CONNECTION.")
             raise Exception(f"ERROR: {r_aid} USER CERTIFICATE VERIFICATION FAILED. UNSAFE CONNECTION.")
 
@@ -1692,7 +1685,7 @@ class Agent:
                 r_agent_sig_bytes,
                 str(block).encode("utf-8")
             )
-        except:
+        except (InvalidSignature, TypeError, ValueError):
             logger.error(f"ERROR: {r_aid} SIGNATURE VERIFICATION FAILED. MATERIAL INTEGRITY PERHAPS COMPROMISED. UNSAFE CONNECTION.")
             return
 
@@ -1844,8 +1837,8 @@ class Agent:
                 logger.log("NETWORK", "Attempting to close connection.")
                 conn.shutdown(socket.SHUT_RDWR)
                 conn.close()
-                logger.log("NETWORK", "Connection succesfully closed.")
-            except:
+                logger.log("NETWORK", "Connection successfully closed.")
+            except OSError:
                 logger.log("NETWORK", "Connection already closed by other party.")
 
     def handle_i_agent_connection(self, conn, fromaddr):
@@ -1905,7 +1898,7 @@ class Agent:
                                 base64.b64decode(i_stamp),
                                 str(i_card).encode("utf-8")
                             )
-                        except:
+                        except (InvalidSignature, TypeError, ValueError, binascii.Error):
                             logger.error(f"ERROR: {i_aid} STAMP VERIFICATION FAILED. UNSAFE CONNECTION.")
                             raise Exception(f"ERROR: {i_aid} STAMP VERIFICATION FAILED. UNSAFE CONNECTION.")
                         
@@ -1924,7 +1917,7 @@ class Agent:
                         logger.log("CRYPTO", f"Verifying {i_aid}'s user certificate.")
                         try:
                             self.CA.verify(i_agent_user_cert)
-                        except:
+                        except (InvalidSignature, ValueError, TypeError):
                             logger.error(f"ERROR: {i_aid} USER CERTIFICATE VERIFICATION FAILED. UNSAFE CONNECTION.")
                             raise Exception(f"ERROR: {i_aid} USER CERTIFICATE VERIFICATION FAILED. UNSAFE CONNECTION.")
 
@@ -1976,7 +1969,7 @@ class Agent:
                                 i_agent_sig_bytes,
                                 str(block).encode("utf-8")
                             )
-                        except:
+                        except (InvalidSignature, TypeError, ValueError):
                             logger.error(f"ERROR: {i_aid} SIGNATURE VERIFICATION FAILED. MATERIAL INTEGRITY PERHAPS COMPROMISED. UNSAFE CONNECTION.")
                             raise Exception(f"ERROR: {i_aid} SIGNATURE VERIFICATION FAILED. MATERIAL INTEGRITY PERHAPS COMPROMISED. UNSAFE CONNECTION.")
 
@@ -2079,8 +2072,8 @@ class Agent:
                 logger.log("NETWORK", "Attempting to close connection.")
                 conn.shutdown(socket.SHUT_RDWR)
                 conn.close()
-                logger.log("NETWORK", "Connection succesfully closed.")
-            except:
+                logger.log("NETWORK", "Connection successfully closed.")
+            except OSError:
                 logger.log("NETWORK", "Connection already closed by other party.")
 
     def listen(self):
