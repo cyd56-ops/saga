@@ -280,6 +280,7 @@ local_agent_config:
 toy_runtime_auth:
   enabled: true
   mode: toy_compiled_research
+  enforcement_mode: strict
   seed: 47
   verifier_flavor: compiled
   message_bytes: 32
@@ -289,6 +290,11 @@ toy_runtime_auth:
   trusted_public_keys:
     bob@mail.com:email_agent: "<base64-encoded-toy-public-key>"
 ```
+
+`enforcement_mode` defaults to `strict` for runtime-auth configs. `permissive`
+continues execution but records `would_reject` audit rows, and `disabled` is
+only for offline ablations; both non-strict modes require a
+`downgrade_reason`.
 
 If `replay_store` is omitted, the helper stores replay markers under the
 receiving agent workdir at `audit/replay/`. If no agent workdir is available,

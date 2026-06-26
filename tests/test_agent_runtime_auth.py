@@ -16,7 +16,7 @@ from saga.agent import (
     enable_toy_lwe_runtime_auth_from_config,
 )
 from saga.config import ReplayStoreConfig, ToyRuntimeAuthConfig
-from saga.execution_gate import ExecutionGateRequest, SQLiteReplayStateStore
+from saga.execution_gate import EnforcementMode, ExecutionGateRequest, SQLiteReplayStateStore
 from saga.messages import build_request_envelope, parse_request_envelope
 
 
@@ -279,7 +279,9 @@ class AgentRuntimeAuthTests(unittest.TestCase):
         self.assertIs(alice.execution_gate, gate)
         self.assertIsNotNone(alice.pq_signature_scheme)
         self.assertTrue(alice.strict_execution_gate)
+        self.assertEqual(alice.enforcement_mode, "strict")
         self.assertEqual(runtime_auth_config.resolved_mode(), "toy_compiled_research")
+        self.assertIs(runtime_auth_config.resolved_enforcement_mode(), EnforcementMode.STRICT)
         self.assertEqual(local_agent.strict_values, [True])
 
     def test_config_replay_state_dir_is_used_as_shared_store(self) -> None:
@@ -594,12 +596,13 @@ class AgentRuntimeAuthTests(unittest.TestCase):
                     replay_state_store=SQLiteReplayStateStore(Path(tmpdir) / "replay.sqlite3"),
                 )
 
-    def test_config_can_disable_strict_execution_gate_for_compatibility(self) -> None:
-        """Config can explicitly keep legacy compatibility while runtime auth is enabled."""
+    def test_config_can_use_permissive_enforcement_for_compatibility(self) -> None:
+        """Config can explicitly keep auditable compatibility while runtime auth is enabled."""
         alice = self._make_agent("alice@example.com:calendar_agent")
         runtime_auth_config = ToyRuntimeAuthConfig(
             enabled=True,
-            strict_execution_gate=False,
+            enforcement_mode="permissive",
+            downgrade_reason="legacy experiment replay",
             seed=47,
             verifier_flavor="compiled",
             trusted_public_keys={
@@ -616,6 +619,43 @@ class AgentRuntimeAuthTests(unittest.TestCase):
         )
 
         self.assertFalse(alice.strict_execution_gate)
+        self.assertEqual(alice.enforcement_mode, "permissive")
+        self.assertEqual(alice.execution_gate_downgrade_reason, "legacy experiment replay")
+        self.assertIs(
+            runtime_auth_config.resolved_enforcement_mode(),
+            EnforcementMode.PERMISSIVE,
+        )
+
+    def test_legacy_false_strict_gate_maps_to_permissive_with_reason(self) -> None:
+        """旧 strict_execution_gate=False 配置仍可迁移为 permissive，但必须写明理由。"""
+        runtime_auth_config = ToyRuntimeAuthConfig(
+            enabled=True,
+            strict_execution_gate=False,
+            downgrade_reason="legacy config migration",
+        )
+
+        self.assertIs(
+            runtime_auth_config.resolved_enforcement_mode(),
+            EnforcementMode.PERMISSIVE,
+        )
+
+    def test_non_strict_enforcement_requires_downgrade_reason(self) -> None:
+        """非 strict 模式必须带降级说明，避免静默绕过安全路径。"""
+        with self.assertRaisesRegex(ValueError, "downgrade_reason"):
+            ToyRuntimeAuthConfig(enabled=True, enforcement_mode="permissive")
+
+        with self.assertRaisesRegex(ValueError, "downgrade_reason"):
+            ToyRuntimeAuthConfig(enabled=True, enforcement_mode="disabled")
+
+    def test_config_rejects_conflicting_strict_flag_and_enforcement_mode(self) -> None:
+        """新旧 enforcement 字段冲突时应拒绝，避免配置语义含混。"""
+        with self.assertRaisesRegex(ValueError, "conflicts with enforcement_mode"):
+            ToyRuntimeAuthConfig(
+                enabled=True,
+                enforcement_mode="strict",
+                strict_execution_gate=False,
+                downgrade_reason="conflicting legacy flag",
+            )
 
     def test_config_mode_selects_wrapper_toy_runtime_auth(self) -> None:
         """显式 toy_wrapper mode 应启用 wrapper verifier 路径。"""

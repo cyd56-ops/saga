@@ -134,6 +134,10 @@ allow = saga_token_valid
 The current U9/U10 claim surface is intentionally scoped to the strict runtime
 kernel above. It does not cover legacy compatibility paths, raw backend use
 outside gated facades, or production post-quantum security for toy LWE code.
+Runtime-auth configuration now exposes an explicit `enforcement_mode`.
+`strict` is the security default. `permissive` may continue execution only
+while recording `would_reject` audit rows with a `downgrade_reason`; `disabled`
+is reserved for offline ablations and is outside the strict-kernel claim.
 
 The paper-level properties are:
 

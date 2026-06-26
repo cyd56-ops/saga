@@ -311,6 +311,83 @@ class BaselineAgentFlowTests(unittest.TestCase):
             )
             self.assertIn("recorded_at", persisted_record)
 
+    def test_permissive_enforcement_records_would_reject_without_blocking_prompt(self) -> None:
+        """Permissive mode should audit strict failures while preserving legacy execution."""
+        token = "enc-token"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = Agent.__new__(Agent)
+            local_agent = self._TrackingLocalAgent()
+
+            agent.execution_gate = None
+            agent.enforcement_mode = "permissive"
+            agent.execution_gate_downgrade_reason = "legacy integration smoke"
+            agent.strict_execution_gate = False
+            agent.local_agent = local_agent
+            agent.task_finished_token = local_agent.task_finished_token
+            agent.monitor = self._NoOpMonitor()
+            agent.llm_monitor = self._NoOpMonitor()
+            agent.active_tokens_lock = threading.Lock()
+            agent.active_tokens = {
+                token: _token_dict(
+                    expires_in_seconds=60,
+                    communication_quota=1,
+                    recipient_pac="recipient-pac",
+                )
+            }
+            agent.aid = "bob@example.com:email_agent"
+            agent.workdir = tmpdir
+            agent.token_is_valid = lambda _token, _recipient_pac: True
+            agent.recv = lambda _conn: {"msg": "hello", "token": token}
+            agent.send = lambda _conn, _payload: None
+
+            ended_from_receiver = agent.receive_conversation(
+                self._SingleMessageConn(),
+                token,
+                recipient_pac=object(),
+                sender_aid="alice@example.com:calendar_agent",
+            )
+
+            self.assertTrue(ended_from_receiver)
+            self.assertEqual(local_agent.run_calls, 1)
+            audit_path = Path(tmpdir) / "audit" / "execution_gate.jsonl"
+            rows = [
+                json.loads(line)
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertGreaterEqual(len(rows), 1)
+            self.assertEqual(rows[0]["reason"], "no_execution_gate")
+            self.assertEqual(rows[0]["enforcement_mode"], "permissive")
+            self.assertEqual(rows[0]["downgrade_reason"], "legacy integration smoke")
+            self.assertTrue(rows[0]["would_reject"])
+            self.assertEqual(rows[0]["would_reject_reason"], "missing_execution_gate")
+
+    def test_disabled_enforcement_skips_gate_with_explicit_downgrade_reason(self) -> None:
+        """Disabled mode is an explicit offline-test bypass, not a security default."""
+        agent = Agent.__new__(Agent)
+        agent.aid = "bob@example.com:email_agent"
+        agent.execution_gate = self._DenyAllGate()
+        agent.enforcement_mode = "disabled"
+        agent.execution_gate_downgrade_reason = "offline ablation only"
+        agent.strict_execution_gate = False
+        agent.task_finished_token = "<TASK_FINISHED>"
+
+        decision = Agent._evaluate_execution_request(
+            agent,
+            sender_aid="alice@example.com:calendar_agent",
+            token="enc-token",
+            message_dict={"msg": "hello", "token": "enc-token"},
+            consume=True,
+            protocol_allow=True,
+        )
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.reason, "execution_gate_disabled")
+        self.assertEqual(decision.enforcement_mode, "disabled")
+        self.assertEqual(decision.downgrade_reason, "offline ablation only")
+        self.assertTrue(decision.would_reject)
+        self.assertEqual(decision.would_reject_reason, "execution_gate_disabled")
+        self.assertEqual(agent.execution_gate.requests, [])
+
     def test_strict_execution_gate_rejects_missing_gate_before_local_agent(self) -> None:
         """Strict runtime-auth mode must fail closed when no gate is installed."""
         token = "enc-token"

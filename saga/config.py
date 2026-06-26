@@ -9,6 +9,7 @@ from typing import Literal, List, Optional
 from simple_parsing.helpers import Serializable
 
 from agent_backend.config import LocalAgentConfig
+from saga.execution_gate import EnforcementMode, normalize_enforcement_mode
 
 
 CA_CONFIG = None
@@ -124,8 +125,12 @@ class ToyRuntimeAuthConfig(Serializable):
     """Whether to enable the toy LWE runtime-auth path for this agent."""
     mode: Literal["toy_compiled_research", "toy_wrapper", "mldsa_external"] | None = None
     """Runtime-auth mode; omitted legacy configs are inferred from ``verifier_flavor``."""
-    strict_execution_gate: bool = True
-    """Whether runtime-auth mode rejects missing gate/context state."""
+    enforcement_mode: Literal["strict", "permissive", "disabled"] | None = None
+    """Execution enforcement mode; omitted legacy configs are treated as strict."""
+    downgrade_reason: str | None = None
+    """Required operator rationale when enforcement is permissive or disabled."""
+    strict_execution_gate: bool | None = None
+    """Legacy boolean strict flag; prefer ``enforcement_mode`` in new configs."""
     seed: int = 0
     """Deterministic seed used to derive the toy LWE key pair."""
     verifier_flavor: str = "compiled"
@@ -156,6 +161,20 @@ class ToyRuntimeAuthConfig(Serializable):
             raise ValueError("message_bytes must be positive")
         if self.replay_store is not None and self.replay_state_dir is not None:
             raise ValueError("configure either replay_store or replay_state_dir, not both")
+        if self.enforcement_mode is not None:
+            normalize_enforcement_mode(self.enforcement_mode)
+        if self.enforcement_mode is not None and self.strict_execution_gate is not None:
+            strict_mode = normalize_enforcement_mode(self.enforcement_mode) is EnforcementMode.STRICT
+            if bool(self.strict_execution_gate) != strict_mode:
+                raise ValueError(
+                    "strict_execution_gate conflicts with enforcement_mode; "
+                    "prefer enforcement_mode in new configs"
+                )
+        if self.resolved_enforcement_mode() is not EnforcementMode.STRICT:
+            if not self.downgrade_reason or not self.downgrade_reason.strip():
+                raise ValueError(
+                    "non-strict enforcement_mode requires a non-empty downgrade_reason"
+                )
 
     def resolved_mode(self) -> Literal["toy_compiled_research", "toy_wrapper", "mldsa_external"]:
         """返回规范化 runtime-auth mode，兼容旧的 verifier_flavor 配置。"""
@@ -181,6 +200,14 @@ class ToyRuntimeAuthConfig(Serializable):
         if self.replay_state_dir is not None:
             return ReplayStoreConfig(backend="file_marker", state_dir=self.replay_state_dir)
         return None
+
+    def resolved_enforcement_mode(self) -> EnforcementMode:
+        """返回规范化执行强制模式，兼容旧的 strict_execution_gate 字段。"""
+        if self.enforcement_mode is not None:
+            return normalize_enforcement_mode(self.enforcement_mode)
+        if self.strict_execution_gate is False:
+            return EnforcementMode.PERMISSIVE
+        return EnforcementMode.STRICT
 
 
 @dataclass

@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from enum import Enum
 import json
 from pathlib import Path
 import sqlite3
@@ -26,6 +27,24 @@ from saga.messages import (
 P = ParamSpec("P")
 T = TypeVar("T")
 ActionScopeSpec = str | tuple[str, ...] | Callable[..., str | tuple[str, ...]]
+
+
+class EnforcementMode(str, Enum):
+    """执行层 gate 的强制模式；非 strict 模式只用于兼容或离线测试。"""
+
+    STRICT = "strict"
+    PERMISSIVE = "permissive"
+    DISABLED = "disabled"
+
+
+def normalize_enforcement_mode(mode: EnforcementMode | str) -> EnforcementMode:
+    """把配置或调用方传入的 mode 规范化为 ``EnforcementMode``。"""
+    if isinstance(mode, EnforcementMode):
+        return mode
+    try:
+        return EnforcementMode(str(mode).lower())
+    except ValueError as exc:
+        raise ValueError("enforcement_mode must be strict, permissive, or disabled") from exc
 
 
 def bytes_to_bits(payload: bytes) -> list[int]:
@@ -76,6 +95,14 @@ class ExecutionGateDecision:
     """Detached signature bytes when validation succeeded."""
     sender_public_key: bytes | None = None
     """Trusted sender public key used for verification when validation succeeded."""
+    enforcement_mode: str | None = None
+    """Runtime enforcement mode used when the decision reached the Agent boundary."""
+    downgrade_reason: str | None = None
+    """Operator-supplied reason for non-strict compatibility or offline mode."""
+    would_reject: bool = False
+    """Whether non-strict enforcement allowed a request that strict mode would reject."""
+    would_reject_reason: str | None = None
+    """Strict-mode reject reason preserved when permissive mode continues execution."""
 
     def with_formula_values(
         self,
@@ -86,9 +113,13 @@ class ExecutionGateDecision:
         can_accept: bool | None = None,
         execution_scope_allowed: bool | None = None,
         internal_policy_accept: bool | None = None,
+        enforcement_mode: str | None = None,
+        downgrade_reason: str | None = None,
+        would_reject: bool | None = None,
+        would_reject_reason: str | None = None,
     ) -> "ExecutionGateDecision":
         """返回带有更新公式项的新 decision，避免原地修改审计状态。"""
-        updates: dict[str, bool | None] = {}
+        updates: dict[str, bool | str | None] = {}
         if protocol_allow is not None:
             updates["protocol_allow"] = protocol_allow
         if request_envelope_valid is not None:
@@ -101,6 +132,14 @@ class ExecutionGateDecision:
             updates["execution_scope_allowed"] = execution_scope_allowed
         if internal_policy_accept is not None:
             updates["internal_policy_accept"] = internal_policy_accept
+        if enforcement_mode is not None:
+            updates["enforcement_mode"] = enforcement_mode
+        if downgrade_reason is not None:
+            updates["downgrade_reason"] = downgrade_reason
+        if would_reject is not None:
+            updates["would_reject"] = would_reject
+        if would_reject_reason is not None:
+            updates["would_reject_reason"] = would_reject_reason
         return replace(self, **updates)
 
     def formula_terms(self) -> dict[str, bool | None]:
@@ -142,6 +181,10 @@ def build_execution_gate_audit_record(
         "token_digest": sha256_hex(request.token.encode("utf-8")),
         "has_request_envelope": request.request_envelope is not None,
         "has_pq_signature": request.pq_signature is not None,
+        "enforcement_mode": decision.enforcement_mode,
+        "downgrade_reason": decision.downgrade_reason,
+        "would_reject": decision.would_reject,
+        "would_reject_reason": decision.would_reject_reason,
     }
     formula_terms = {
         "saga_token_valid": getattr(decision, "protocol_allow", None),

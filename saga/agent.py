@@ -29,6 +29,7 @@ import saga.common.crypto as sc
 from saga.execution_gate import (
     append_execution_gate_audit_record,
     build_execution_gate_audit_record,
+    EnforcementMode,
     ExecutionAuthorizationError,
     ExecutionGateDecision,
     ExecutionGate,
@@ -36,6 +37,7 @@ from saga.execution_gate import (
     LocalExecutionContext,
     ReplayStateStore,
     build_toy_lwe_execution_gate,
+    normalize_enforcement_mode,
 )
 from saga.messages import RequestEnvelope, build_request_envelope
 from saga.intent import AgentIntent, IntentCompiler, PolicyDecision
@@ -51,6 +53,44 @@ MAX_QUERIES = 100
 # 真实 LLM 工具调用可能超过两分钟；该超时只限制 socket 等待，不改变 token/信封有效期。
 CONVERSATION_SOCKET_TIMEOUT_SECONDS = 300.0
 # TODO: Handle max_queries
+
+_LEGACY_DOWNGRADE_REASON = "legacy_non_strict_execution_gate"
+
+
+def _agent_enforcement_mode(agent: "Agent") -> EnforcementMode:
+    """解析 agent 当前执行强制模式，兼容旧 strict_execution_gate 布尔字段。"""
+    if bool(getattr(agent, "strict_execution_gate", False)):
+        return EnforcementMode.STRICT
+    raw_mode = getattr(agent, "enforcement_mode", None)
+    if raw_mode is not None:
+        return normalize_enforcement_mode(raw_mode)
+    return EnforcementMode.PERMISSIVE
+
+
+def _agent_has_explicit_enforcement_mode(agent: "Agent") -> bool:
+    """判断调用方是否显式选择了 enforcement mode，而不是旧兼容默认值。"""
+    return getattr(agent, "enforcement_mode", None) is not None
+
+
+def _agent_allows_permissive_continue(agent: "Agent") -> bool:
+    """只有显式 permissive 才能把 strict 拒绝改为 would-reject 后继续。"""
+    return (
+        _agent_has_explicit_enforcement_mode(agent)
+        and _agent_enforcement_mode(agent) is EnforcementMode.PERMISSIVE
+    )
+
+
+def _agent_downgrade_reason(agent: "Agent") -> str | None:
+    """返回非 strict 模式的降级理由；旧兼容路径使用稳定默认值。"""
+    reason = getattr(agent, "execution_gate_downgrade_reason", None)
+    if reason:
+        return str(reason)
+    if (
+        _agent_has_explicit_enforcement_mode(agent)
+        and _agent_enforcement_mode(agent) is not EnforcementMode.STRICT
+    ):
+        return _LEGACY_DOWNGRADE_REASON
+    return None
 
 
 def get_agent_material(dir_path: str | Path) -> dict:
@@ -149,9 +189,7 @@ def _sync_execution_capability_mode(agent: "Agent") -> None:
     """把外层 strict runtime-auth 模式同步给支持 capability facade 的本地 agent。"""
     local_agent = getattr(agent, "local_agent", None)
     if hasattr(local_agent, "set_strict_execution_capabilities"):
-        local_agent.set_strict_execution_capabilities(
-            bool(getattr(agent, "strict_execution_gate", False))
-        )
+        local_agent.set_strict_execution_capabilities(_agent_enforcement_mode(agent) is EnforcementMode.STRICT)
 
 
 def enable_toy_lwe_runtime_auth(
@@ -165,6 +203,8 @@ def enable_toy_lwe_runtime_auth(
     now_fn: Callable[[], datetime] | None = None,
     replay_state_dir: str | Path | None = None,
     replay_state_store: ReplayStateStore | None = None,
+    enforcement_mode: EnforcementMode | str = EnforcementMode.STRICT,
+    downgrade_reason: str | None = None,
 ) -> ExecutionGate:
     """Attach research-only toy LWE signing and execution-gate wiring to an agent.
 
@@ -173,8 +213,13 @@ def enable_toy_lwe_runtime_auth(
     call instead of manually configuring both outbound signing and inbound gate
     verification.
 
-    启用 toy LWE runtime auth 时默认打开严格执行层 gate，缺失 gate/context 会拒绝。
+    启用 toy LWE runtime auth 时默认使用严格执行层 gate，非 strict 模式必须说明降级理由。
     """
+    resolved_enforcement_mode = normalize_enforcement_mode(enforcement_mode)
+    if resolved_enforcement_mode is not EnforcementMode.STRICT:
+        if downgrade_reason is None or not downgrade_reason.strip():
+            raise ValueError("non-strict enforcement_mode requires downgrade_reason")
+
     effective_replay_state_dir = replay_state_dir
     if replay_state_store is None:
         effective_replay_state_dir = replay_state_dir or _require_default_replay_state_dir(agent)
@@ -192,7 +237,9 @@ def enable_toy_lwe_runtime_auth(
     agent.pq_public_key = key_pair.public_key
     agent.pq_secret_key = key_pair.secret_key
     agent.execution_gate = gate
-    agent.strict_execution_gate = True
+    agent.enforcement_mode = resolved_enforcement_mode.value
+    agent.execution_gate_downgrade_reason = downgrade_reason
+    agent.strict_execution_gate = resolved_enforcement_mode is EnforcementMode.STRICT
     _sync_execution_capability_mode(agent)
     return gate
 
@@ -248,10 +295,9 @@ def enable_toy_lwe_runtime_auth_from_config(
         now_fn=now_fn,
         replay_state_dir=replay_state_dir,
         replay_state_store=replay_state_store,
+        enforcement_mode=runtime_auth_config.resolved_enforcement_mode(),
+        downgrade_reason=runtime_auth_config.downgrade_reason,
     )
-    if agent.strict_execution_gate != runtime_auth_config.strict_execution_gate:
-        agent.strict_execution_gate = runtime_auth_config.strict_execution_gate
-        _sync_execution_capability_mode(agent)
     return gate
 
 
@@ -268,6 +314,8 @@ class Agent:
         local_agent: LocalAgent = None,
         execution_gate: ExecutionGate | None = None,
         strict_execution_gate: bool = False,
+        enforcement_mode: EnforcementMode | str | None = None,
+        execution_gate_downgrade_reason: str | None = None,
     ):
         """
         Initializes the Agent object with the given work directory and material.
@@ -278,9 +326,22 @@ class Agent:
             local_agent (LocalAgent): An optional local agent object that will be used to run tasks. If not provided, a DummyAgent will be used.
             execution_gate (ExecutionGate | None): Optional execution-layer gate.
             strict_execution_gate (bool): Reject execution when gate/context state is missing.
+            enforcement_mode (EnforcementMode | str | None): Optional explicit runtime-auth enforcement mode.
+            execution_gate_downgrade_reason (str | None): Required rationale for explicit non-strict mode.
 
         严格执行层 gate 模式用于 PQ-CAN 安全路径，缺少 gate 或上下文时默认拒绝。
         """
+        if enforcement_mode is not None:
+            resolved_enforcement_mode = normalize_enforcement_mode(enforcement_mode)
+            if resolved_enforcement_mode is not EnforcementMode.STRICT:
+                if (
+                    execution_gate_downgrade_reason is None
+                    or not execution_gate_downgrade_reason.strip()
+                ):
+                    raise ValueError("non-strict enforcement_mode requires downgrade_reason")
+            strict_execution_gate = resolved_enforcement_mode is EnforcementMode.STRICT
+        else:
+            resolved_enforcement_mode = None
 
         self.workdir = workdir
         if self.workdir[-1] != '/':
@@ -299,6 +360,12 @@ class Agent:
         self._bind_local_agent_runtime_hooks()
         self.task_finished_token = self.local_agent.task_finished_token
         self.execution_gate = execution_gate
+        self.enforcement_mode = (
+            resolved_enforcement_mode.value
+            if resolved_enforcement_mode is not None
+            else (EnforcementMode.STRICT.value if strict_execution_gate else None)
+        )
+        self.execution_gate_downgrade_reason = execution_gate_downgrade_reason
         self.strict_execution_gate = strict_execution_gate
         self._sync_local_agent_execution_capability_mode()
         self.pq_signature_scheme = None
@@ -904,19 +971,42 @@ class Agent:
         protocol_allow: bool | None = None,
     ) -> ExecutionGateDecision:
         """Evaluate or consume a received request and keep a stable audit reason."""
+        enforcement_mode = _agent_enforcement_mode(self)
+        downgrade_reason = _agent_downgrade_reason(self)
+        if enforcement_mode is EnforcementMode.DISABLED:
+            return ExecutionGateDecision(
+                True,
+                "execution_gate_disabled",
+                protocol_allow=protocol_allow,
+                internal_policy_accept=True,
+                enforcement_mode=enforcement_mode.value,
+                downgrade_reason=downgrade_reason,
+                would_reject=True,
+                would_reject_reason="execution_gate_disabled",
+            )
+
         execution_gate = getattr(self, "execution_gate", None)
         if execution_gate is None:
-            if getattr(self, "strict_execution_gate", False):
+            if enforcement_mode is EnforcementMode.STRICT:
                 return ExecutionGateDecision(
                     False,
                     "missing_execution_gate",
                     protocol_allow=protocol_allow,
+                    enforcement_mode=enforcement_mode.value,
                 )
             return ExecutionGateDecision(
                 True,
                 "no_execution_gate",
                 protocol_allow=protocol_allow,
                 internal_policy_accept=True,
+                enforcement_mode=enforcement_mode.value,
+                downgrade_reason=downgrade_reason,
+                would_reject=_agent_has_explicit_enforcement_mode(self),
+                would_reject_reason=(
+                    "missing_execution_gate"
+                    if _agent_has_explicit_enforcement_mode(self)
+                    else None
+                ),
             )
 
         request = self._build_execution_gate_request(
@@ -925,27 +1015,43 @@ class Agent:
             message_dict=message_dict,
         )
         if consume and hasattr(execution_gate, "consume_request"):
-            return self._attach_protocol_allow(
-                execution_gate.consume_request(request),
-                protocol_allow=protocol_allow,
+            return self._apply_enforcement_mode(
+                self._attach_protocol_allow(
+                    execution_gate.consume_request(request),
+                    protocol_allow=protocol_allow,
+                ),
+                enforcement_mode=enforcement_mode,
+                downgrade_reason=downgrade_reason,
             )
         if hasattr(execution_gate, "evaluate_request"):
-            return self._attach_protocol_allow(
-                execution_gate.evaluate_request(request),
-                protocol_allow=protocol_allow,
+            return self._apply_enforcement_mode(
+                self._attach_protocol_allow(
+                    execution_gate.evaluate_request(request),
+                    protocol_allow=protocol_allow,
+                ),
+                enforcement_mode=enforcement_mode,
+                downgrade_reason=downgrade_reason,
             )
         if execution_gate.authorize(request):
-            return ExecutionGateDecision(
-                True,
-                "authorized_by_legacy_gate",
-                protocol_allow=protocol_allow,
-                execution_scope_allowed=True,
-                internal_policy_accept=True,
+            return self._apply_enforcement_mode(
+                ExecutionGateDecision(
+                    True,
+                    "authorized_by_legacy_gate",
+                    protocol_allow=protocol_allow,
+                    execution_scope_allowed=True,
+                    internal_policy_accept=True,
+                ),
+                enforcement_mode=enforcement_mode,
+                downgrade_reason=downgrade_reason,
             )
-        return ExecutionGateDecision(
-            False,
-            "rejected_by_legacy_gate",
-            protocol_allow=protocol_allow,
+        return self._apply_enforcement_mode(
+            ExecutionGateDecision(
+                False,
+                "rejected_by_legacy_gate",
+                protocol_allow=protocol_allow,
+            ),
+            enforcement_mode=enforcement_mode,
+            downgrade_reason=downgrade_reason,
         )
 
     def _attach_protocol_allow(
@@ -961,6 +1067,50 @@ class Agent:
             bool(getattr(decision, "allowed")),
             str(getattr(decision, "reason", "legacy_gate_decision")),
             protocol_allow=protocol_allow,
+        )
+
+    def _apply_enforcement_mode(
+        self,
+        decision: ExecutionGateDecision,
+        *,
+        enforcement_mode: EnforcementMode,
+        downgrade_reason: str | None,
+    ) -> ExecutionGateDecision:
+        """按执行强制模式处理 gate 结果；permissive 只审计 would-reject。"""
+        if hasattr(decision, "with_formula_values"):
+            decorated = decision.with_formula_values(
+                enforcement_mode=enforcement_mode.value,
+                downgrade_reason=downgrade_reason,
+            )
+        else:
+            decorated = ExecutionGateDecision(
+                bool(getattr(decision, "allowed")),
+                str(getattr(decision, "reason", "legacy_gate_decision")),
+                enforcement_mode=enforcement_mode.value,
+                downgrade_reason=downgrade_reason,
+            )
+        if (
+            decorated.allowed
+            or enforcement_mode is EnforcementMode.STRICT
+            or not _agent_allows_permissive_continue(self)
+        ):
+            return decorated
+        if enforcement_mode is EnforcementMode.DISABLED:
+            return replace(
+                decorated,
+                allowed=True,
+                reason="execution_gate_disabled",
+                internal_policy_accept=True,
+                would_reject=True,
+                would_reject_reason=decorated.reason,
+            )
+        return replace(
+            decorated,
+            allowed=True,
+            reason="would_reject_permissive",
+            internal_policy_accept=True,
+            would_reject=True,
+            would_reject_reason=decorated.reason,
         )
 
     def _build_local_execution_context(
@@ -1012,6 +1162,8 @@ class Agent:
         base_decision: ExecutionGateDecision | None = None,
     ) -> ExecutionGateDecision:
         """在进入 local_agent.run() 前检查 prompt surface 是否被签名授权。"""
+        enforcement_mode = _agent_enforcement_mode(self)
+        downgrade_reason = _agent_downgrade_reason(self)
         protocol_allow = base_decision.protocol_allow if base_decision is not None else None
         request_envelope_valid = (
             base_decision.request_envelope_valid if base_decision is not None else False
@@ -1021,7 +1173,7 @@ class Agent:
         )
         can_accept = base_decision.can_accept if base_decision is not None else False
         if execution_context is None:
-            if getattr(self, "strict_execution_gate", False):
+            if enforcement_mode is EnforcementMode.STRICT:
                 return ExecutionGateDecision(
                     False,
                     "missing_local_execution_context",
@@ -1031,6 +1183,7 @@ class Agent:
                     can_accept=can_accept,
                     execution_scope_allowed=False,
                     internal_policy_accept=False,
+                    enforcement_mode=enforcement_mode.value,
                 )
             return ExecutionGateDecision(
                 True,
@@ -1041,6 +1194,14 @@ class Agent:
                 can_accept=can_accept,
                 execution_scope_allowed=True,
                 internal_policy_accept=True,
+                enforcement_mode=enforcement_mode.value,
+                downgrade_reason=downgrade_reason,
+                would_reject=_agent_has_explicit_enforcement_mode(self),
+                would_reject_reason=(
+                    "missing_local_execution_context"
+                    if _agent_has_explicit_enforcement_mode(self)
+                    else None
+                ),
             )
         if execution_context.authorize_action("llm_prompt"):
             return ExecutionGateDecision(
@@ -1054,8 +1215,10 @@ class Agent:
                 internal_policy_accept=True,
                 request_envelope=execution_context.request_envelope,
                 pq_signature=execution_context.pq_signature,
+                enforcement_mode=enforcement_mode.value,
+                downgrade_reason=downgrade_reason,
             )
-        return ExecutionGateDecision(
+        strict_decision = ExecutionGateDecision(
             False,
             "prompt_scope_not_authorized",
             protocol_allow=protocol_allow,
@@ -1066,6 +1229,18 @@ class Agent:
             internal_policy_accept=False,
             request_envelope=execution_context.request_envelope,
             pq_signature=execution_context.pq_signature,
+            enforcement_mode=enforcement_mode.value,
+            downgrade_reason=downgrade_reason,
+        )
+        if enforcement_mode is EnforcementMode.STRICT or not _agent_allows_permissive_continue(self):
+            return strict_decision
+        return replace(
+            strict_decision,
+            allowed=True,
+            reason="would_reject_permissive",
+            internal_policy_accept=True,
+            would_reject=True,
+            would_reject_reason=strict_decision.reason,
         )
 
     def _local_agent_supports_execution_context(self) -> bool:
@@ -1087,7 +1262,7 @@ class Agent:
         base_decision: ExecutionGateDecision,
     ) -> ExecutionGateDecision:
         """严格模式下要求本地 agent 显式支持 execution_context，否则拒绝执行。"""
-        if not getattr(self, "strict_execution_gate", False):
+        if _agent_enforcement_mode(self) is not EnforcementMode.STRICT:
             return base_decision
         if self._local_agent_supports_execution_context():
             return base_decision
@@ -1110,6 +1285,23 @@ class Agent:
         logger.log("AUDIT", json.dumps(audit_record, sort_keys=True))
         append_execution_gate_audit_record(getattr(self, "workdir", None), audit_record)
         logger.error(f"{log_message} Reason: {decision.reason}. Ending conversation...")
+
+    def _record_execution_gate_would_reject(
+        self,
+        *,
+        request: ExecutionGateRequest,
+        decision: ExecutionGateDecision,
+        log_message: str,
+    ) -> None:
+        """记录 permissive/disabled 模式下 strict 会拒绝的请求，不阻断执行。"""
+        if not decision.would_reject:
+            return
+        audit_record = build_execution_gate_audit_record(request, decision)
+        logger.log("AUDIT", json.dumps(audit_record, sort_keys=True))
+        append_execution_gate_audit_record(getattr(self, "workdir", None), audit_record)
+        logger.warning(
+            f"{log_message} Would reject reason: {decision.would_reject_reason}."
+        )
 
     def _build_conversation_payload(
         self,
@@ -1331,6 +1523,16 @@ class Agent:
                 )
                 self.monitor.stop("agent:communication_conv_init")
                 return False
+            response_request = self._build_execution_gate_request(
+                sender_aid=r_aid,
+                token=token,
+                message_dict=response,
+            )
+            self._record_execution_gate_would_reject(
+                request=response_request,
+                decision=response_decision,
+                log_message="Execution gate permissive inbound response decision.",
+            )
 
             response_execution_context = self._build_local_execution_context(
                 sender_aid=r_aid,
@@ -1355,6 +1557,11 @@ class Agent:
                 )
                 self.monitor.stop("agent:communication_conv_init")
                 return False
+            self._record_execution_gate_would_reject(
+                request=response_request,
+                decision=response_prompt_decision,
+                log_message="Execution gate permissive inbound response prompt decision.",
+            )
 
             response_local_agent_decision = self._evaluate_local_agent_context_support(
                 response_prompt_decision
@@ -1372,6 +1579,11 @@ class Agent:
                 )
                 self.monitor.stop("agent:communication_conv_init")
                 return False
+            self._record_execution_gate_would_reject(
+                request=response_request,
+                decision=response_local_agent_decision,
+                log_message="Execution gate permissive inbound response local-agent decision.",
+            )
 
             # Process response:
             received_message = str(response.get("msg", self.local_agent.task_finished_token))
@@ -1488,6 +1700,16 @@ class Agent:
                 )
                 self.monitor.stop("agent:communication_conv_recv")
                 return True
+            execution_request = self._build_execution_gate_request(
+                sender_aid=sender_aid,
+                token=token,
+                message_dict=message_dict,
+            )
+            self._record_execution_gate_would_reject(
+                request=execution_request,
+                decision=execution_decision,
+                log_message="Execution gate permissive incoming request decision.",
+            )
 
             execution_context = self._build_local_execution_context(
                 sender_aid=sender_aid,
@@ -1512,6 +1734,11 @@ class Agent:
                 )
                 self.monitor.stop("agent:communication_conv_recv")
                 return True
+            self._record_execution_gate_would_reject(
+                request=execution_request,
+                decision=prompt_decision,
+                log_message="Execution gate permissive prompt surface decision.",
+            )
 
             local_agent_decision = self._evaluate_local_agent_context_support(prompt_decision)
             if not local_agent_decision.allowed:
@@ -1527,6 +1754,11 @@ class Agent:
                 )
                 self.monitor.stop("agent:communication_conv_recv")
                 return True
+            self._record_execution_gate_would_reject(
+                request=execution_request,
+                decision=local_agent_decision,
+                log_message="Execution gate permissive local-agent decision.",
+            )
 
             # Get agent response:
             self.monitor.stop("agent:communication_conv_recv")

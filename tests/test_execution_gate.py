@@ -16,6 +16,7 @@ from neural import CAN, CompiledToyLWEVerifier
 from pq import ToyLWESignatureScheme
 from saga.execution_gate import (
     append_execution_gate_audit_record,
+    EnforcementMode,
     ExecutionAuthorizationError,
     ExecutionGateDecision,
     ExecutionGateRequest,
@@ -188,6 +189,12 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 "internal_policy_accept": None,
             },
         )
+
+    def test_enforcement_mode_values_are_stable_for_audit(self) -> None:
+        """执行强制模式需要稳定的小写值，供配置和审计 JSON 复用。"""
+        self.assertEqual(EnforcementMode.STRICT.value, "strict")
+        self.assertEqual(EnforcementMode.PERMISSIVE.value, "permissive")
+        self.assertEqual(EnforcementMode.DISABLED.value, "disabled")
 
     def test_authorize_accepts_delegated_child_capability_when_attenuated(self) -> None:
         """合法委托子 capability 绑定父摘要且 scope 不扩大时应通过。"""
@@ -998,12 +1005,21 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 request_envelope=request.request_envelope,
                 pq_signature=request.pq_signature,
             )
+        ).with_formula_values(
+            enforcement_mode="permissive",
+            downgrade_reason="integration smoke only",
+            would_reject=True,
+            would_reject_reason="message_digest_mismatch",
         )
 
         record = build_execution_gate_audit_record(request, decision)
 
         self.assertFalse(record["allowed"])
         self.assertEqual(record["reason"], "message_digest_mismatch")
+        self.assertEqual(record["enforcement_mode"], "permissive")
+        self.assertEqual(record["downgrade_reason"], "integration smoke only")
+        self.assertTrue(record["would_reject"])
+        self.assertEqual(record["would_reject_reason"], "message_digest_mismatch")
         self.assertEqual(
             record["authorization_formula"],
             {

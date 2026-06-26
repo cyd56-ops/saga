@@ -485,7 +485,11 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
 - 当前 `saga/config.py` 已新增可选 research-only 配置块：
   - `ToyRuntimeAuthConfig`
   - `AgentConfig.toy_runtime_auth`
-  - `ToyRuntimeAuthConfig.strict_execution_gate` 默认启用；PQ-CAN runtime auth 路径缺失 gate/context 时 fail-closed
+  - `ToyRuntimeAuthConfig.enforcement_mode` 已替代旧 `strict_execution_gate` 成为推荐配置字段：
+    - `strict` 是 runtime-auth 安全默认模式，缺失 gate/context 时 fail-closed
+    - `permissive` 只在显式配置 `downgrade_reason` 时允许 would-reject 后继续执行，并写入 audit
+    - `disabled` 仅用于离线消融 / 测试，必须带 `downgrade_reason`，不属于 strict-kernel security claim
+  - 旧 `strict_execution_gate` 仍作为兼容字段保留；`False` 会规范化为 `permissive` 且必须提供降级原因
   - `ToyRuntimeAuthConfig.mode` 现在显式区分：
     - `toy_compiled_research`
     - `toy_wrapper`
@@ -508,6 +512,12 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `experiments/schedule_meeting.py`
   - `experiments/expense_report.py`
   - `experiments/create_blogpost.py`
+- 当前 execution-gate audit 记录已带第一版 enforcement 语义：
+  - `enforcement_mode`
+  - `downgrade_reason`
+  - `would_reject`
+  - `would_reject_reason`
+  显式 permissive / disabled 降级路径会被审计；普通历史兼容路径仍不扩大为安全 claim。
 - 当前 checked-in agent API 配置已统一迁移到 Codexi OpenAI-compatible endpoint：
   - `agent_backend/config.py` 中 `DEFAULT_OPENAI_API_BASE = "https://oai.codexi.eu.cc/v1"`
   - 所有 `user_configs/*.yaml` 的 `api_base` 均已设置为该 endpoint
@@ -1816,7 +1826,7 @@ protected sinks 至少覆盖：
 ### J. 后续执行访问控制扩展
 
 - J0. 确认旧主线是否还有 blocker：`已完成`（2026-06-26 只读复核后判断：旧主线第一阶段已收束，无必须补完的主线 blocker）
-- J1. 将 `strict_execution_gate` 演进为 `EnforcementMode`，默认 strict，非 strict 必须带降级原因并审计：`未开始`
+- J1. 将 `strict_execution_gate` 演进为 `EnforcementMode`，默认 strict，非 strict 必须带降级原因并审计：`已完成`（第一阶段：`strict/permissive/disabled` mode、配置迁移、would-reject audit 与兼容测试已落地）
 - J2. 设计参数级 / 受约束 scope schema，并纳入 canonical envelope digest：`未开始`
 - J3. 实现确定性 predicate evaluator 与 fail-closed 参数校验测试：`未开始`
 - J4. 定义 delegation constraint attenuation 规则，证明子 capability 只能收窄参数空间：`未开始`
@@ -1989,20 +1999,16 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 从 J1 开始实现默认 strict + 显式可审计降级：
-   - 先设计 `EnforcementMode` 与配置迁移路径。
-   - 保持 strict 为默认；`PERMISSIVE` 只记录 would-reject；`DISABLED` 只用于离线测试。
-   - 审计记录新增 `enforcement_mode`、`downgrade_reason` 与 would-reject 语义。
-2. 接着推进 J2/J3 参数级 scope：
+1. 从 J2/J3 开始推进参数级 / 受约束 scope：
    - 先定义 canonical schema 和 deterministic predicate evaluator。
    - 只允许封闭谓词集合，不允许用户自定义 callback。
    - 所有约束必须进 envelope digest，tamper 后验签失败。
-3. 并行设计 J5 audit hash chain：
+2. 并行设计 J5 audit hash chain：
    - 当前普通 `execution_gate.jsonl` 可作为兼容输入。
    - 新链路需要稳定 `seq / prev_hash / entry_hash` 字段。
    - 防截断必须明确依赖外部 tail-hash anchor，不能只靠本地 hash chain。
-4. J6/J7 budget、J8 revocation、J9 monitor 在 J2 schema 稳定后推进。
-5. J10 IFC 后置为机密性扩展；J11 论文 threat model 可先以文档形式推进，不阻塞代码。
+3. J6/J7 budget、J8 revocation、J9 monitor 在 J2 schema 稳定后推进。
+4. J10 IFC 后置为机密性扩展；J11 论文 threat model 可先以文档形式推进，不阻塞代码。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2038,6 +2044,68 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-06-26 EnforcementMode J1 Implementation Session
+
+目标：
+
+- 继续当前工作文档的 J1，完成 `strict_execution_gate` 到显式 `EnforcementMode` 的第一阶段演进。
+- 保持 runtime-auth 安全默认 strict，同时让任何显式非 strict 降级都带原因并可审计。
+
+已做工作：
+
+- 更新 `saga/execution_gate.py`：
+  - 新增 `EnforcementMode` 与 `normalize_enforcement_mode(...)`。
+  - `ExecutionGateDecision` 新增 `enforcement_mode`、`downgrade_reason`、`would_reject`、`would_reject_reason`。
+  - `build_execution_gate_audit_record(...)` 将上述字段写入 JSON audit record。
+- 更新 `saga/config.py`：
+  - `ToyRuntimeAuthConfig` 新增 `enforcement_mode` / `downgrade_reason`。
+  - 旧 `strict_execution_gate` 保留为兼容字段；与 `enforcement_mode` 冲突时拒绝。
+  - 非 strict mode 必须提供非空 `downgrade_reason`。
+- 更新 `saga/agent.py`：
+  - `enable_toy_lwe_runtime_auth(...)` 与 config-driven helper 写入规范化 enforcement mode。
+  - `STRICT` 保持 fail-closed。
+  - 显式 `PERMISSIVE` 会记录 would-reject audit 后继续执行。
+  - `DISABLED` 仅跳过 gate 作为离线测试 / 消融路径，并带降级审计字段。
+  - 未显式设置 `enforcement_mode` 的历史兼容路径仍保持旧行为，不把已配置 gate 的拒绝改为放行。
+- 更新测试与文档：
+  - `tests/test_execution_gate.py`
+  - `tests/test_agent_runtime_auth.py`
+  - `tests/test_runtime_auth_configs.py`
+  - `tests/integration/test_baseline_agent_flow.py`
+  - `README.md`
+  - `SECURITY.md`
+
+已验证：
+
+- `.venv/bin/python -m pytest -q tests/test_execution_gate.py tests/test_agent_runtime_auth.py tests/test_runtime_auth_configs.py tests/integration/test_baseline_agent_flow.py` -> `103 passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `38 passed, 12 subtests passed`
+- `.venv/bin/python -m pytest -q` -> `415 passed, 69 subtests passed`
+- 未发现 `pyproject.toml`、`setup.cfg`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `tox.ini`，因此未运行 `ruff check .` / `mypy .`。
+
+当前 checkpoint 待提交文件范围：
+
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `README.md`
+- `SECURITY.md`
+- `saga/agent.py`
+- `saga/config.py`
+- `saga/execution_gate.py`
+- `tests/integration/test_baseline_agent_flow.py`
+- `tests/test_agent_runtime_auth.py`
+- `tests/test_execution_gate.py`
+- `tests/test_runtime_auth_configs.py`
+
+敏感文件审查：
+
+- 待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+- 本次未启动真实服务 runner 或模型 batch，未生成新的实验运行产物。
+
+GitHub / checkpoint 状态：
+
+- 待最终 `git status --short` 后形成 checkpoint。
+- 若无额外敏感文件进入范围，按仓库约定可推送到 `origin/backup/repro-local`。
 
 ### 2026-06-26 Execution Access Control Roadmap Update Session
 

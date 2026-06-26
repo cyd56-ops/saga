@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from saga.config import ReplayStoreConfig, UserConfig
+from saga.execution_gate import EnforcementMode
 
 
 class RuntimeAuthConfigExamplesTests(unittest.TestCase):
@@ -21,7 +22,10 @@ class RuntimeAuthConfigExamplesTests(unittest.TestCase):
             self.assertIsNotNone(agent.toy_runtime_auth)
             assert agent.toy_runtime_auth is not None
             self.assertTrue(agent.toy_runtime_auth.enabled)
-            self.assertTrue(agent.toy_runtime_auth.strict_execution_gate)
+            self.assertIs(
+                agent.toy_runtime_auth.resolved_enforcement_mode(),
+                EnforcementMode.STRICT,
+            )
             self.assertEqual(agent.toy_runtime_auth.verifier_flavor, "compiled")
             self.assertEqual(
                 agent.toy_runtime_auth.resolved_mode(),
@@ -38,7 +42,10 @@ class RuntimeAuthConfigExamplesTests(unittest.TestCase):
             self.assertIsNotNone(agent.toy_runtime_auth)
             assert agent.toy_runtime_auth is not None
             self.assertTrue(agent.toy_runtime_auth.enabled)
-            self.assertTrue(agent.toy_runtime_auth.strict_execution_gate)
+            self.assertIs(
+                agent.toy_runtime_auth.resolved_enforcement_mode(),
+                EnforcementMode.STRICT,
+            )
             self.assertEqual(
                 agent.toy_runtime_auth.resolved_mode(),
                 "toy_compiled_research",
