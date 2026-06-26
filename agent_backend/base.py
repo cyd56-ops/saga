@@ -162,7 +162,10 @@ class AgentWrapper(LocalAgent):
         def gated_forward(*args, **kwargs):
             """在真正调用工具前执行当前请求的动作范围检查。"""
             try:
-                self._execution_capability_facade().require_action(f"tool_call:{tool_name}")
+                self._execution_capability_facade().require_action(
+                    f"tool_call:{tool_name}",
+                    constraint_parameters=dict(kwargs),
+                )
             except PermissionError as exc:
                 raise ExecutionAuthorizationError(
                     "tool_not_authorized",

@@ -900,6 +900,124 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
         self.assertTrue(context.authorize_action("tool_call:send_email"))
         self.assertFalse(context.authorize_action("tool_call:add_calendar_event"))
 
+    def test_entry_scope_constraints_reject_out_of_bounds_parameters(self) -> None:
+        """签名约束绑定入口参数，参数越界时 gate 必须 fail-closed。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-1",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="tool_call:send_email",
+            message="send mail",
+            timestamp=self.now,
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
+        )
+        signature = self.scheme.sign(self.key_pair.secret_key, envelope.digest())
+        request = ExecutionGateRequest(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            message="send mail",
+            action_scope="tool_call:send_email",
+            request_envelope=envelope.canonical_json(),
+            pq_signature=base64.b64encode(signature).decode("utf-8"),
+            parameters={"recipient_domain": "evil.test"},
+        )
+
+        decision = self.gate.evaluate_request(request)
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "execution_scope_not_authorized")
+        self.assertFalse(decision.execution_scope_allowed)
+
+    def test_entry_scope_constraints_accept_matching_parameters(self) -> None:
+        """参数满足已签名约束时，入口 scope 才能通过。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-1",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="tool_call:send_email",
+            message="send mail",
+            timestamp=self.now,
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
+        )
+        signature = self.scheme.sign(self.key_pair.secret_key, envelope.digest())
+        request = ExecutionGateRequest(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            message="send mail",
+            action_scope="tool_call:send_email",
+            request_envelope=envelope.canonical_json(),
+            pq_signature=base64.b64encode(signature).decode("utf-8"),
+            parameters={"recipient_domain": "example.com"},
+        )
+
+        decision = self.gate.evaluate_request(request)
+
+        self.assertTrue(decision.allowed)
+        self.assertTrue(decision.execution_scope_allowed)
+
+    def test_authorize_rejects_tampered_scope_constraints(self) -> None:
+        """修改约束谓词必须改变 canonical digest 并导致签名验证失败。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-1",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="tool_call:send_email",
+            message="send mail",
+            timestamp=self.now,
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
+        )
+        signature = self.scheme.sign(self.key_pair.secret_key, envelope.digest())
+        envelope_dict = envelope.as_dict()
+        envelope_dict["scope_constraints"]["tool_call:send_email"][0]["value"] = "evil.test"
+        tampered_envelope = json.dumps(
+            envelope_dict,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        request = ExecutionGateRequest(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            message="send mail",
+            action_scope="tool_call:send_email",
+            request_envelope=tampered_envelope,
+            pq_signature=base64.b64encode(signature).decode("utf-8"),
+            parameters={"recipient_domain": "evil.test"},
+        )
+
+        self.assertFalse(self.gate.authorize(request))
+        self.assertEqual(
+            self.gate.evaluate_request(request).reason,
+            "signature_verification_failed",
+        )
+
     def test_authorize_rejects_tampered_signature_under_compiled_verifier(self) -> None:
         """The compiled verifier path should reject detached signature tampering."""
         request = self._build_request()
@@ -1138,6 +1256,38 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.reason, "unauthorized_tool_scope")
         self.assertEqual(raised.exception.action_scope, "tool_call:send_email")
+
+    def test_local_context_enforces_signed_scope_constraints(self) -> None:
+        """下游本地执行上下文也必须执行签名参数约束。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-1",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            message="draft mail",
+            timestamp=self.now,
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
+        )
+        request = self._signed_request_from_envelope(envelope, "draft mail")
+
+        context = self.gate.build_local_execution_context(request)
+
+        self.assertIsNotNone(context)
+        assert context is not None
+        context.require_tool_call("send_email", {"recipient_domain": "example.com"})
+        with self.assertRaises(ExecutionAuthorizationError) as raised:
+            context.require_tool_call("send_email", {"recipient_domain": "evil.test"})
+
+        self.assertEqual(raised.exception.reason, "unauthorized_tool_scope")
 
 
 if __name__ == "__main__":

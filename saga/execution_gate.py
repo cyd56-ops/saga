@@ -20,6 +20,7 @@ from saga.messages import (
     action_scopes_are_attenuated,
     action_scopes_allow,
     parse_request_envelope,
+    scope_constraints_allow,
     sha256_hex,
 )
 
@@ -67,6 +68,7 @@ class ExecutionGateRequest:
     action_scope: str
     request_envelope: dict | str | bytes | None = None
     pq_signature: str | bytes | None = None
+    parameters: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -201,6 +203,10 @@ def build_execution_gate_audit_record(
         record["signed_receiver_aid"] = envelope.receiver_aid
         record["signed_action_scope"] = envelope.action_scope
         record["signed_authorized_scopes"] = list(envelope.authorized_scopes)
+        record["signed_scope_constraints"] = {
+            scope: list(constraints)
+            for scope, constraints in envelope.scope_constraints.items()
+        }
         record["signed_capability_id"] = envelope.capability_id
         record["signed_parent_envelope_digest"] = envelope.parent_envelope_digest
         record["signed_parent_authorized_scopes"] = list(envelope.parent_authorized_scopes)
@@ -465,28 +471,52 @@ class LocalExecutionContext:
     request_envelope: RequestEnvelope
     pq_signature: bytes
 
-    def authorize_action(self, action_scope: str) -> bool:
+    def authorize_action(
+        self,
+        action_scope: str,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> bool:
         """Return ``True`` only when signed scopes authorize ``action_scope``.
 
         下游执行权限来自信封中的显式授权列表，而不是入口 ``action_scope`` 的隐式扩展。
         """
-        return action_scopes_allow(self.request_envelope.authorized_scopes, action_scope)
+        return action_scopes_allow(
+            self.request_envelope.authorized_scopes,
+            action_scope,
+        ) and scope_constraints_allow(
+            self.request_envelope.authorized_scopes,
+            self.request_envelope.scope_constraints,
+            action_scope,
+            parameters,
+        )
 
-    def require_action(self, action_scope: str) -> None:
+    def require_action(
+        self,
+        action_scope: str,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> None:
         """Raise ``PermissionError`` unless ``action_scope`` is authorized."""
-        if not self.authorize_action(action_scope):
+        if not self.authorize_action(action_scope, parameters):
             raise ExecutionAuthorizationError(
                 reason_for_unauthorized_scope(action_scope),
                 action_scope,
             )
 
-    def authorize_tool_call(self, tool_name: str) -> bool:
+    def authorize_tool_call(
+        self,
+        tool_name: str,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> bool:
         """Return ``True`` only when the named tool call is authorized."""
-        return self.authorize_action(f"tool_call:{tool_name}")
+        return self.authorize_action(f"tool_call:{tool_name}", parameters)
 
-    def require_tool_call(self, tool_name: str) -> None:
+    def require_tool_call(
+        self,
+        tool_name: str,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> None:
         """Raise ``PermissionError`` unless the named tool call is authorized."""
-        self.require_action(f"tool_call:{tool_name}")
+        self.require_action(f"tool_call:{tool_name}", parameters)
 
     def authorize_memory_read(self) -> bool:
         """Return ``True`` only when memory reads are authorized."""
@@ -526,20 +556,31 @@ class ExecutionCapabilityFacade:
         self._context_provider = context_provider
         self._context_required = context_required
 
-    def require_action(self, action_scope: str) -> None:
+    def require_action(
+        self,
+        action_scope: str,
+        constraint_parameters: Mapping[str, Any] | None = None,
+    ) -> None:
         """要求当前 capability 覆盖指定执行面，否则抛出稳定授权错误。"""
         context = self._current_context(action_scope)
         if context is None:
             return
-        context.require_action(action_scope)
+        context.require_action(action_scope, constraint_parameters)
 
-    def require_any_action(self, action_scopes: str | tuple[str, ...]) -> None:
+    def require_any_action(
+        self,
+        action_scopes: str | tuple[str, ...],
+        constraint_parameters: Mapping[str, Any] | None = None,
+    ) -> None:
         """要求当前 capability 至少覆盖一个候选执行面 scope。"""
         scopes = self._normalize_action_scopes(action_scopes)
         context = self._current_context(scopes[0])
         if context is None:
             return
-        if not any(context.authorize_action(action_scope) for action_scope in scopes):
+        if not any(
+            context.authorize_action(action_scope, constraint_parameters)
+            for action_scope in scopes
+        ):
             raise ExecutionAuthorizationError(
                 reason_for_unauthorized_scope(scopes[0]),
                 scopes[0],
@@ -550,10 +591,11 @@ class ExecutionCapabilityFacade:
         action_scope: str,
         operation: Callable[P, T],
         *args: P.args,
+        constraint_parameters: Mapping[str, Any] | None = None,
         **kwargs: P.kwargs,
     ) -> T:
         """在调用底层操作前检查指定执行面 capability。"""
-        self.require_action(action_scope)
+        self.require_action(action_scope, constraint_parameters)
         return operation(*args, **kwargs)
 
     def call_any_action(
@@ -561,10 +603,11 @@ class ExecutionCapabilityFacade:
         action_scopes: str | tuple[str, ...],
         operation: Callable[P, T],
         *args: P.args,
+        constraint_parameters: Mapping[str, Any] | None = None,
         **kwargs: P.kwargs,
     ) -> T:
         """在调用底层操作前检查候选 capability 集合中的任一授权。"""
-        self.require_any_action(action_scopes)
+        self.require_any_action(action_scopes, constraint_parameters)
         return operation(*args, **kwargs)
 
     def call_tool(
@@ -572,10 +615,17 @@ class ExecutionCapabilityFacade:
         tool_name: str,
         operation: Callable[P, T],
         *args: P.args,
+        constraint_parameters: Mapping[str, Any] | None = None,
         **kwargs: P.kwargs,
     ) -> T:
         """以 ``tool_call:<name>`` scope 保护一个底层工具调用。"""
-        return self.call_action(f"tool_call:{tool_name}", operation, *args, **kwargs)
+        return self.call_action(
+            f"tool_call:{tool_name}",
+            operation,
+            *args,
+            constraint_parameters=constraint_parameters,
+            **kwargs,
+        )
 
     def read_memory_steps(self, memory: object) -> tuple[Any, ...]:
         """在 ``memory_read`` capability 通过后返回不可变 memory 快照。"""
@@ -650,10 +700,13 @@ class GatedExecutionResource:
                 if callable(action_scopes)
                 else action_scopes
             )
+            # 参数级约束只读取 JSON 标量参数，不执行任意 callback 逻辑。
+            constraint_parameters = dict(kwargs)
             return self._capabilities.call_any_action(
                 resolved_scopes,
                 attribute,
                 *args,
+                constraint_parameters=constraint_parameters,
                 **kwargs,
             )
 
@@ -771,6 +824,11 @@ class SignedRequestExecutionGate:
         execution_scope_allowed = action_scopes_allow(
             envelope.authorized_scopes,
             request.action_scope,
+        ) and scope_constraints_allow(
+            envelope.authorized_scopes,
+            envelope.scope_constraints,
+            request.action_scope,
+            request.parameters,
         )
         if not execution_scope_allowed:
             return ExecutionGateDecision(

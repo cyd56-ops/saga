@@ -41,15 +41,36 @@ class _StubExecutionContext:
         self.allowed_scopes = allowed_scopes
         self.seen_scopes: list[str] = []
 
-    def authorize_action(self, action_scope: str) -> bool:
+    def authorize_action(self, action_scope: str, parameters=None) -> bool:
         """Record the request and decide whether it is allowed."""
         self.seen_scopes.append(action_scope)
         return action_scope in self.allowed_scopes
 
-    def require_action(self, action_scope: str) -> None:
+    def require_action(self, action_scope: str, parameters=None) -> None:
         """Raise when the requested action scope is not allowed."""
         self.seen_scopes.append(action_scope)
         if action_scope not in self.allowed_scopes:
+            raise ExecutionAuthorizationError(
+                reason_for_unauthorized_scope(action_scope),
+                action_scope,
+            )
+
+
+class _ParameterConstrainedExecutionContext(_StubExecutionContext):
+    """Stub context that rejects calls when constrained kwargs do not match."""
+
+    def authorize_action(self, action_scope: str, parameters=None) -> bool:
+        """Return True only when scope and recipient_domain parameter match."""
+        self.seen_scopes.append(action_scope)
+        return (
+            action_scope in self.allowed_scopes
+            and parameters is not None
+            and parameters.get("recipient_domain") == "example.com"
+        )
+
+    def require_action(self, action_scope: str, parameters=None) -> None:
+        """Require matching scope and recipient_domain parameter."""
+        if not self.authorize_action(action_scope, parameters):
             raise ExecutionAuthorizationError(
                 reason_for_unauthorized_scope(action_scope),
                 action_scope,
@@ -141,6 +162,30 @@ class AgentWrapperExecutionGateTests(unittest.TestCase):
             gated_tool()
 
         self.assertEqual(wrapper._execution_context.seen_scopes, ["tool_call:fail_tool"])
+
+    def test_gated_backend_passes_keyword_parameters_to_constraint_check(self) -> None:
+        """Backend method wrappers should pass kwargs into parameter-level constraints."""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = _ParameterConstrainedExecutionContext({"tool_call:send_email"})
+        backend = _DirectBackendStub()
+        gated_backend = wrapper._gated_tool_resource(
+            backend,
+            {"send_email": "tool_call:send_email"},
+        )
+
+        self.assertTrue(
+            gated_backend.send_email(
+                recipient_domain="example.com",
+                subject="ok",
+            )
+        )
+        with self.assertRaisesRegex(ExecutionAuthorizationError, "unauthorized_tool_scope"):
+            gated_backend.send_email(
+                recipient_domain="evil.test",
+                subject="blocked",
+            )
+
+        self.assertEqual(len(backend.calls), 1)
 
     def test_memory_read_helper_requires_matching_scope(self) -> None:
         """Reading agent memory should require the explicit memory_read scope."""

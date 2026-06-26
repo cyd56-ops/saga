@@ -190,6 +190,72 @@ class AgentRuntimeAuthTests(unittest.TestCase):
         self.assertFalse(context.authorize_action("memory_write"))
         self.assertFalse(context.authorize_action("delegation"))
 
+    def test_conversation_payload_signs_scope_constraints(self) -> None:
+        """Conversation payloads should bind parameter constraints into the signed envelope."""
+        alice_aid = "alice@example.com:calendar_agent"
+        bob_aid = "bob@example.com:calendar_agent"
+        alice = self._make_agent(alice_aid)
+        bob = self._make_agent(bob_aid)
+
+        enable_toy_lwe_runtime_auth(
+            alice,
+            scheme=self.scheme,
+            key_pair=self.alice_keys,
+            trusted_public_keys={bob_aid: self.bob_keys.public_key},
+            now_fn=lambda: self.now,
+        )
+        enable_toy_lwe_runtime_auth(
+            bob,
+            scheme=self.scheme,
+            key_pair=self.bob_keys,
+            trusted_public_keys={alice_aid: self.alice_keys.public_key},
+            now_fn=lambda: self.now,
+        )
+
+        payload = alice._build_conversation_payload(
+            receiver_aid=bob_aid,
+            token="enc-token",
+            message="send constrained mail",
+            action_scope="llm_prompt",
+            authorized_scopes=("tool_call:send_email",),
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
+            turn_index=0,
+            token_dict={
+                "issue_timestamp": self.now.isoformat(),
+                "expiration_timestamp": self.now.isoformat(),
+            },
+        )
+        envelope = parse_request_envelope(payload["request_envelope"])
+        request = ExecutionGateRequest(
+            sender_aid=alice_aid,
+            receiver_aid=bob_aid,
+            token="enc-token",
+            message="send constrained mail",
+            action_scope="llm_prompt",
+            request_envelope=payload["request_envelope"],
+            pq_signature=payload["pq_signature"],
+        )
+
+        self.assertEqual(
+            envelope.scope_constraints,
+            {
+                "tool_call:send_email": (
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"},
+                )
+            },
+        )
+        assert bob.execution_gate is not None
+        context = bob.execution_gate.build_local_execution_context(request)
+        self.assertIsNotNone(context)
+        assert context is not None
+        context.require_tool_call("send_email", {"recipient_domain": "example.com"})
+        with self.assertRaisesRegex(PermissionError, "unauthorized_tool_scope"):
+            context.require_tool_call("send_email", {"recipient_domain": "evil.test"})
+
     def test_conversation_payload_rejects_unsigned_tool_scope_injection(self) -> None:
         """Adding tool scopes to the envelope after signing must fail verification."""
         alice_aid = "alice@example.com:calendar_agent"

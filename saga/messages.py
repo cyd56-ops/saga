@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import re
 from typing import Any
 
@@ -24,6 +25,9 @@ BASE_ACTION_SCOPES = frozenset(
         "delegation",
     }
 )
+SUPPORTED_SCOPE_CONSTRAINT_OPS = frozenset({"eq", "in", "lte", "gte", "max_length"})
+CONSTRAINT_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+MISSING_CONSTRAINT_VALUE = object()
 ACTION_SCOPE_RE = re.compile(
     r"^(?P<base>llm_prompt|memory_read|memory_write|tool_call|delegation)"
     r"(?::(?P<detail>[A-Za-z0-9_.-]+))?$"
@@ -97,6 +101,53 @@ def action_scopes_allow(granted_scopes: Iterable[str], requested_scope: str) -> 
     return any(action_scope_allows(granted_scope, requested_scope) for granted_scope in granted_scopes)
 
 
+def normalize_scope_constraints(
+    scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None,
+) -> dict[str, tuple[dict[str, Any], ...]]:
+    """规范化 scope 参数约束，只允许封闭谓词集合进入签名信封。"""
+    if scope_constraints is None:
+        return {}
+
+    normalized: dict[str, tuple[dict[str, Any], ...]] = {}
+    for scope, constraints in scope_constraints.items():
+        if not isinstance(scope, str):
+            raise TypeError("scope_constraints keys must be action-scope strings")
+        parse_action_scope(scope)
+        normalized_constraints = tuple(
+            sorted(
+                (_normalize_scope_constraint(constraint) for constraint in constraints),
+                key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+            )
+        )
+        if normalized_constraints:
+            normalized[scope] = normalized_constraints
+    return dict(sorted(normalized.items()))
+
+
+def scope_constraints_allow(
+    granted_scopes: Iterable[str],
+    scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None,
+    requested_scope: str,
+    parameters: Mapping[str, Any] | None = None,
+) -> bool:
+    """判断请求参数是否满足匹配 signed scope 上绑定的所有封闭约束。"""
+    parse_action_scope(requested_scope)
+    normalized_constraints = normalize_scope_constraints(scope_constraints)
+    granted_scope_tuple = tuple(granted_scopes)
+    matching_constraints: list[Mapping[str, Any]] = []
+    for constrained_scope, constraints in normalized_constraints.items():
+        if action_scopes_allow(granted_scope_tuple, constrained_scope) and action_scope_allows(
+            constrained_scope,
+            requested_scope,
+        ):
+            matching_constraints.extend(constraints)
+    if not matching_constraints:
+        return True
+    if parameters is None:
+        return False
+    return all(_scope_constraint_allows(constraint, parameters) for constraint in matching_constraints)
+
+
 def action_scopes_are_attenuated(
     parent_scopes: Iterable[str],
     child_scopes: Iterable[str],
@@ -107,6 +158,108 @@ def action_scopes_are_attenuated(
     """
     parent_scope_tuple = tuple(parent_scopes)
     return all(action_scopes_allow(parent_scope_tuple, child_scope) for child_scope in child_scopes)
+
+
+def _normalize_scope_constraint(constraint: Mapping[str, Any]) -> dict[str, Any]:
+    """规范化单条参数约束，拒绝 callback 或任意表达式。"""
+    if not isinstance(constraint, Mapping):
+        raise TypeError("scope constraint entries must be mappings")
+    field = constraint.get("field")
+    op = constraint.get("op")
+    if not isinstance(field, str) or not CONSTRAINT_FIELD_RE.fullmatch(field):
+        raise ValueError("scope constraint field must be a simple dotted identifier")
+    if not isinstance(op, str) or op not in SUPPORTED_SCOPE_CONSTRAINT_OPS:
+        raise ValueError("unsupported scope constraint op")
+    if op == "in":
+        values = constraint.get("values")
+        if not isinstance(values, list | tuple) or not values:
+            raise ValueError("in constraint requires non-empty values")
+        normalized_values = tuple(
+            sorted(
+                (_normalize_constraint_value(value) for value in values),
+                key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+            )
+        )
+        return {"field": field, "op": op, "values": list(normalized_values)}
+    value = constraint.get("value")
+    normalized_value = _normalize_constraint_value(value)
+    if op in {"lte", "gte"} and not _is_number(normalized_value):
+        raise ValueError(f"{op} constraint requires a numeric value")
+    if op == "max_length":
+        if not isinstance(normalized_value, int) or normalized_value < 0:
+            raise ValueError("max_length constraint requires a non-negative integer")
+    return {"field": field, "op": op, "value": normalized_value}
+
+
+def _normalize_constraint_value(value: Any) -> str | int | float | bool | None:
+    """只允许 JSON 标量作为约束值，避免执行任意对象逻辑。"""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("scope constraint numbers must be finite JSON numbers")
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    raise TypeError("scope constraint values must be JSON scalars")
+
+
+def _scope_constraint_allows(
+    constraint: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+) -> bool:
+    """执行单条封闭谓词检查；字段缺失或类型不匹配一律拒绝。"""
+    field_value = _normalize_runtime_constraint_value(
+        _extract_constraint_field(parameters, str(constraint["field"]))
+    )
+    if field_value is MISSING_CONSTRAINT_VALUE:
+        return False
+    op = constraint["op"]
+    if op == "eq":
+        return _json_scalar_equal(field_value, constraint["value"])
+    if op == "in":
+        return any(_json_scalar_equal(field_value, value) for value in constraint["values"])
+    if op == "lte":
+        return _is_number(field_value) and field_value <= constraint["value"]
+    if op == "gte":
+        return _is_number(field_value) and field_value >= constraint["value"]
+    if op == "max_length":
+        return isinstance(field_value, str) and len(field_value) <= constraint["value"]
+    return False
+
+
+def _extract_constraint_field(parameters: Mapping[str, Any], field: str) -> Any:
+    """按点分路径从参数映射中读取字段；缺失字段 fail-closed。"""
+    current: Any = parameters
+    for part in field.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return MISSING_CONSTRAINT_VALUE
+        current = current[part]
+    return current
+
+
+def _normalize_runtime_constraint_value(value: Any) -> str | int | float | bool | None | object:
+    """把运行时参数收窄为 JSON 标量；对象参数不参与比较以避免执行自定义逻辑。"""
+    if value is MISSING_CONSTRAINT_VALUE:
+        return MISSING_CONSTRAINT_VALUE
+    try:
+        return _normalize_constraint_value(value)
+    except (TypeError, ValueError):
+        return MISSING_CONSTRAINT_VALUE
+
+
+def _json_scalar_equal(left: Any, right: Any) -> bool:
+    """按 JSON 标量类型做等值比较，避免 ``True`` 被当作数字 ``1``。"""
+    if _is_number(left) and _is_number(right):
+        return left == right
+    if type(left) is not type(right):
+        return False
+    return left == right
+
+
+def _is_number(value: Any) -> bool:
+    """判断值是否为非 bool 数字，避免 True/False 被当作 1/0。"""
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and not (isinstance(value, float) and not math.isfinite(value))
+    )
 
 
 def _normalize_timestamp(value: datetime | str, field_name: str) -> str:
@@ -142,6 +295,7 @@ class RequestEnvelope:
     action_scope: str
     message_digest: str
     authorized_scopes: tuple[str, ...] | list[str] | None = None
+    scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None = None
     domain: str = DEFAULT_ENVELOPE_DOMAIN
     content_type: str = "text"
     provider_id: str = ""
@@ -162,6 +316,10 @@ class RequestEnvelope:
         if not check_aid(self.receiver_aid):
             raise ValueError("receiver_aid must be a valid AID")
         authorized_scopes = normalize_authorized_scopes(self.action_scope, self.authorized_scopes)
+        scope_constraints = normalize_scope_constraints(self.scope_constraints)
+        for constrained_scope in scope_constraints:
+            if not action_scopes_allow(authorized_scopes, constrained_scope):
+                raise ValueError("scope_constraints keys must be covered by authorized_scopes")
         parent_authorized_scopes = self._normalize_parent_authorized_scopes(
             self.parent_authorized_scopes
         )
@@ -199,6 +357,7 @@ class RequestEnvelope:
         object.__setattr__(self, "token_digest", self.token_digest.lower())
         object.__setattr__(self, "message_digest", self.message_digest.lower())
         object.__setattr__(self, "authorized_scopes", authorized_scopes)
+        object.__setattr__(self, "scope_constraints", scope_constraints)
         object.__setattr__(self, "capability_id", capability_id)
         object.__setattr__(self, "parent_envelope_digest", parent_envelope_digest)
         object.__setattr__(self, "parent_authorized_scopes", parent_authorized_scopes)
@@ -225,6 +384,10 @@ class RequestEnvelope:
             "receiver_aid": self.receiver_aid,
             "sender_aid": self.sender_aid,
             "session_id": self.session_id,
+            "scope_constraints": {
+                scope: list(constraints)
+                for scope, constraints in self.scope_constraints.items()
+            },
             "timestamp": self.timestamp,
             "token_digest": self.token_digest,
             "turn_id": self.turn_id,
@@ -237,6 +400,7 @@ class RequestEnvelope:
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
+            allow_nan=False,
         ).encode("utf-8")
 
     def canonical_json(self) -> str:
@@ -283,6 +447,7 @@ def build_request_envelope(
     expires_at: datetime | str,
     action_scope: str,
     authorized_scopes: Iterable[str] | None = None,
+    scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None = None,
     message: str | bytes,
     domain: str = DEFAULT_ENVELOPE_DOMAIN,
     content_type: str = "text",
@@ -297,7 +462,7 @@ def build_request_envelope(
 ) -> RequestEnvelope:
     """Build a request envelope by hashing the token and message payload.
 
-    调用方可传入额外 ``authorized_scopes`` 和父 capability，用于签名绑定委托衰减关系。
+    调用方可传入额外 ``authorized_scopes``、参数约束和父 capability，用于签名绑定能力边界。
     """
     token_bytes = token.encode("utf-8") if isinstance(token, str) else token
     message_bytes = message.encode("utf-8") if isinstance(message, str) else message
@@ -319,6 +484,7 @@ def build_request_envelope(
         expires_at=expires_at,
         action_scope=action_scope,
         authorized_scopes=tuple(authorized_scopes) if authorized_scopes is not None else None,
+        scope_constraints=scope_constraints,
         message_digest=sha256_hex(message_bytes),
         domain=domain,
         content_type=content_type,

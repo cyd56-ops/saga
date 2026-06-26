@@ -518,6 +518,13 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `would_reject`
   - `would_reject_reason`
   显式 permissive / disabled 降级路径会被审计；普通历史兼容路径仍不扩大为安全 claim。
+- 当前 canonical request envelope 已支持第一版参数级 / 受约束 scope：
+  - `saga/messages.py` 新增 `scope_constraints`，并把约束写入 canonical envelope digest。
+  - 约束 schema 只允许封闭谓词集合：`eq`、`in`、`lte`、`gte`、`max_length`；不允许 callback、regex 或任意表达式。
+  - 约束值只允许可移植 JSON 标量，非有限数字如 `NaN` / `Infinity` 会 fail-closed。
+  - `scope_constraints_allow(...)` 会按“约束 scope 被 signed scope 覆盖，且约束 scope 覆盖请求 scope”收集约束，支持 `tool_call` 泛化授权下的 `tool_call:<name>` 窄约束。
+  - `ExecutionGateRequest.parameters`、`LocalExecutionContext.require_*`、`ExecutionCapabilityFacade`、`GatedExecutionResource` 与 smolagents tool wrapper 已能把运行时参数传入确定性约束检查。
+  - execution-gate audit 记录新增 `signed_scope_constraints`，便于后续审计链和策略排障引用。
 - 当前 checked-in agent API 配置已统一迁移到 Codexi OpenAI-compatible endpoint：
   - `agent_backend/config.py` 中 `DEFAULT_OPENAI_API_BASE = "https://oai.codexi.eu.cc/v1"`
   - 所有 `user_configs/*.yaml` 的 `api_base` 均已设置为该 endpoint
@@ -878,7 +885,7 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
 - SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
-- 后续执行访问控制扩展：`未开始`（新主线：默认 strict、参数级 scope、预算、撤销、审计链、在线 monitor、IFC 与不可信推理平台论证）
+- 后续执行访问控制扩展：`进行中`（J1-J3 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator 与 fail-closed 测试已落地；下一步为 delegation constraint attenuation 与 hash-chained audit）
 
 ### 3.4 阻塞 / 风险
 
@@ -892,6 +899,13 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `.venv/bin/python -m pytest -q`
   - `.venv/bin/python -m pytest -q tests/security`
   - `.venv/bin/python -m pytest -q tests/integration`
+- 已于 `2026-06-26` 重新确认 J2/J3 参数级 constrained scope 后测试结果：
+  - `.venv/bin/python -m py_compile saga/messages.py saga/execution_gate.py saga/agent.py agent_backend/base.py experiments/mutation_evidence_runner.py` -> success
+  - `.venv/bin/python -m pytest -q tests/test_encoding.py tests/test_execution_gate.py tests/test_agent_runtime_auth.py tests/test_agent_wrapper_gate.py tests/test_mutation_evidence_runner.py` -> `121 passed, 8 subtests passed`
+  - `.venv/bin/python -m pytest -q` -> `427 passed, 69 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `38 passed, 12 subtests passed`
+  - 未发现 `pyproject.toml`、`setup.cfg`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `tox.ini`，因此未运行 `ruff check .` / `mypy .`。
 - 已于 `2026-05-27` 重新确认测试结果：
   - `.venv/bin/python -m pytest -q` -> `192 passed, 21 subtests passed`
   - `.venv/bin/python -m pytest -q tests/security` -> `18 passed`
@@ -1827,8 +1841,8 @@ protected sinks 至少覆盖：
 
 - J0. 确认旧主线是否还有 blocker：`已完成`（2026-06-26 只读复核后判断：旧主线第一阶段已收束，无必须补完的主线 blocker）
 - J1. 将 `strict_execution_gate` 演进为 `EnforcementMode`，默认 strict，非 strict 必须带降级原因并审计：`已完成`（第一阶段：`strict/permissive/disabled` mode、配置迁移、would-reject audit 与兼容测试已落地）
-- J2. 设计参数级 / 受约束 scope schema，并纳入 canonical envelope digest：`未开始`
-- J3. 实现确定性 predicate evaluator 与 fail-closed 参数校验测试：`未开始`
+- J2. 设计参数级 / 受约束 scope schema，并纳入 canonical envelope digest：`已完成`（第一阶段：`scope_constraints` 已进入 signed envelope；封闭谓词 schema 与 canonical normalization 已落地）
+- J3. 实现确定性 predicate evaluator 与 fail-closed 参数校验测试：`已完成`（第一阶段：runtime parameters 已传入 gate/context/facade；约束缺参、篡改、越界、未知 op、非有限数字均 fail-closed）
 - J4. 定义 delegation constraint attenuation 规则，证明子 capability 只能收窄参数空间：`未开始`
 - J5. 将 execution-gate audit JSONL 升级为 hash-chained tamper-evident log：`未开始`
 - J6. 设计 `CapabilityStateStore` 与 capability budget 原子消费接口：`未开始`
@@ -1844,7 +1858,8 @@ protected sinks 至少覆盖：
 
 0. 当前默认主线调整为 `Execution access control extensions for signed intent capabilities`：
    - 旧的 proof-hardening / sink-centric signed intent execution gate 主线已经完成第一阶段闭环，不再有必须补完的旧主线 blocker。
-   - 下一步默认从 J 组任务开始：`EnforcementMode` 默认 strict、参数级 constrained scope、hash-chained audit、capability budget、revocation / short TTL、online invariant monitor、IFC 与不可信推理平台论文论证。
+   - J1-J3 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator 与 fail-closed 参数校验已接入 runtime gate。
+   - 下一步默认继续 J4/J5：delegation constraint attenuation、hash-chained audit；随后再推进 capability budget、revocation / short TTL、online invariant monitor、IFC 与不可信推理平台论文论证。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
    - ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
 
@@ -1881,7 +1896,7 @@ protected sinks 至少覆盖：
    - 当前 legacy 无 execution gate 路径仍保留兼容放行；PQ-CAN strict 模式下缺 gate/context 已改为 fail-closed
 8. strict execution-gate safety mode 已完成第一版接入：
    - `enable_toy_lwe_runtime_auth(...)` 默认设置 `agent.strict_execution_gate=True`
-   - `ToyRuntimeAuthConfig.strict_execution_gate` 默认 `True`，可显式设为 `False` 做兼容模式测试
+   - `ToyRuntimeAuthConfig.enforcement_mode` 默认 `strict`；旧 `strict_execution_gate=False` 只作为兼容字段保留，并会规范化为必须带 `downgrade_reason` 的 permissive 降级
    - strict 模式下缺失 `execution_gate` -> `missing_execution_gate`
    - strict 模式下缺失 `LocalExecutionContext` -> `missing_local_execution_context`
 9. initiating-side inbound response 验签已完成第一版接入：
@@ -1999,10 +2014,10 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 从 J2/J3 开始推进参数级 / 受约束 scope：
-   - 先定义 canonical schema 和 deterministic predicate evaluator。
-   - 只允许封闭谓词集合，不允许用户自定义 callback。
-   - 所有约束必须进 envelope digest，tamper 后验签失败。
+1. 从 J4 开始推进 delegation constraint attenuation：
+   - 父 capability 上的 `scope_constraints` 必须随 parent digest 一起成为 delegation fact source。
+   - 子 capability 只能保留或收窄父约束，不能删除、放宽或移动到更宽 scope。
+   - 需要补父窄约束被子 capability 放宽 / 删除时 fail-closed 的测试。
 2. 并行设计 J5 audit hash chain：
    - 当前普通 `execution_gate.jsonl` 可作为兼容输入。
    - 新链路需要稳定 `seq / prev_hash / entry_hash` 字段。
@@ -2044,6 +2059,75 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-06-26 Parameter-Constrained Scope J2/J3 Implementation Session
+
+目标：
+
+- 继续 J2/J3，把 signed intent capability 从纯 action scope 扩展为 action scope + deterministic parameter constraints。
+- 保证参数级约束进入 canonical envelope digest，运行时由接收侧 deterministic evaluator fail-closed 执行。
+- 不引入用户自定义 callback、regex 或任意表达式，不改变 toy LWE / PQ-CAN 的非生产密码学边界。
+
+已做工作：
+
+- `saga/messages.py` 新增 `scope_constraints` canonical field：
+  - 支持 `eq`、`in`、`lte`、`gte`、`max_length` 五类封闭谓词。
+  - 约束 key 必须是合法 action scope，且必须被 signed `authorized_scopes` 覆盖。
+  - 约束值只允许 JSON scalar；`NaN` / `Infinity` 等非有限数字会拒绝。
+  - canonical JSON / digest 覆盖 `scope_constraints`，tamper 后 detached signature 验证失败。
+- `scope_constraints_allow(...)` 新增确定性 evaluator：
+  - 对匹配请求 scope 的约束执行全部检查。
+  - 缺少运行时参数、字段缺失、类型不匹配、越界和未知 op 均 fail-closed。
+  - 修正泛化授权 `tool_call` 下窄约束 `tool_call:<name>` 必须对具体工具调用生效的匹配语义。
+- `saga/execution_gate.py` 扩展 runtime 参数传递：
+  - `ExecutionGateRequest.parameters` 进入 entry gate scope 检查。
+  - `LocalExecutionContext.require_action(...)` / `require_tool_call(...)` 接受参数映射。
+  - `ExecutionCapabilityFacade` 与 `GatedExecutionResource` 在受保护调用前把 kwargs 传入约束检查。
+  - audit record 新增 `signed_scope_constraints`。
+- `saga/agent.py` 与 `agent_backend/base.py` 接入参数级 gate：
+  - conversation payload 可携带 signed `scope_constraints`。
+  - transport message 中的 `parameters` 会进入 `ExecutionGateRequest`。
+  - smolagents tool wrapper 会把工具 kwargs 传入当前 capability facade。
+- `experiments/mutation_evidence_runner.py` 同步 `LocalExecutionContext.require_action(...)` 的 mutation needle，保持 P4 mutation evidence runner 可精确命中当前源码。
+- 新增 / 更新测试覆盖：
+  - canonical constraint normalization 与签名覆盖。
+  - 参数匹配 / 越界 / 缺参拒绝。
+  - 未知 op、未覆盖 scope、非有限数字拒绝。
+  - 泛化 `tool_call` 授权下的具体工具约束。
+  - envelope 约束篡改后验签拒绝。
+  - local context、entry gate、Agent payload、tool/backend wrapper 的参数透传。
+
+测试：
+
+- `.venv/bin/python -m py_compile saga/messages.py saga/execution_gate.py saga/agent.py agent_backend/base.py experiments/mutation_evidence_runner.py` -> success
+- `.venv/bin/python -m pytest -q tests/test_encoding.py tests/test_execution_gate.py tests/test_agent_runtime_auth.py tests/test_agent_wrapper_gate.py tests/test_mutation_evidence_runner.py` -> `121 passed, 8 subtests passed`
+- `.venv/bin/python -m pytest -q` -> `427 passed, 69 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `38 passed, 12 subtests passed`
+- 未发现 `pyproject.toml`、`setup.cfg`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `tox.ini`，因此未运行 `ruff check .` / `mypy .`。
+
+安全边界：
+
+- 本轮没有实现生产级密码算法；toy LWE / compiled verifier 边界不变。
+- 参数级约束只使用 signed envelope 中的静态 JSON 数据与运行时参数映射，不执行任意代码。
+- J4 尚未完成：delegated child capability 当前仍只校验 action scope attenuation，参数约束的父子收窄规则需要下一步补齐。
+- J5 尚未完成：当前 audit 仍是普通 JSONL + 新增 signed constraints 字段，tamper-evident hash chain 需要下一步实现。
+
+待提交文件：
+
+- `agent_backend/base.py`
+- `experiments/mutation_evidence_runner.py`
+- `saga/agent.py`
+- `saga/execution_gate.py`
+- `saga/messages.py`
+- `tests/test_agent_runtime_auth.py`
+- `tests/test_agent_wrapper_gate.py`
+- `tests/test_encoding.py`
+- `tests/test_execution_gate.py`
+- `SAGA_PQ_CAN_WORKLOG.md`
+
+本轮待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+Git checkpoint 将在本轮结束前形成并推送到 `origin/backup/repro-local`；完成后补记具体提交结果。
 
 ### 2026-06-26 EnforcementMode J1 Implementation Session
 

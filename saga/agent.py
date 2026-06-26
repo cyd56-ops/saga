@@ -1154,6 +1154,7 @@ class Agent:
             action_scope=str(message_dict.get("action_scope", "llm_prompt")),
             request_envelope=message_dict.get("request_envelope"),
             pq_signature=message_dict.get("pq_signature"),
+            parameters=message_dict.get("parameters"),
         )
 
     def _evaluate_prompt_surface_request(
@@ -1313,6 +1314,7 @@ class Agent:
         turn_index: int,
         token_dict: dict | None,
         authorized_scopes: list[str] | tuple[str, ...] | None = None,
+        scope_constraints: dict[str, list[dict]] | None = None,
         parent_envelope: RequestEnvelope | None = None,
         parent_envelope_digest: str = "",
         parent_authorized_scopes: list[str] | tuple[str, ...] | None = None,
@@ -1320,13 +1322,15 @@ class Agent:
     ) -> dict:
         """Build a transport payload and attach a signed request envelope when configured.
 
-        入口动作、额外授权 scope 和可选父 capability 一起进入签名信封。
+        入口动作、额外授权 scope、参数约束和可选父 capability 一起进入签名信封。
         """
         payload = {
             "msg": message,
             "token": token,
             "action_scope": action_scope,
         }
+        if scope_constraints:
+            payload["scope_constraints"] = scope_constraints
 
         signature_scheme = getattr(self, "pq_signature_scheme", None)
         secret_key = getattr(self, "pq_secret_key", None)
@@ -1351,6 +1355,7 @@ class Agent:
             expires_at=expires_at,
             action_scope=action_scope,
             authorized_scopes=authorized_scopes,
+            scope_constraints=scope_constraints,
             message=message,
             provider_id=getattr(self, "provider_id", ""),
             timestamp=now,

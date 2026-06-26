@@ -117,7 +117,7 @@ def mutation_specs() -> tuple[MutationSpec, ...]:
                 MutationPatch(
                     relative_path="saga/execution_gate.py",
                     needle=(
-                        "        if not self.authorize_action(action_scope):\n"
+                        "        if not self.authorize_action(action_scope, parameters):\n"
                         "            raise ExecutionAuthorizationError(\n"
                         "                reason_for_unauthorized_scope(action_scope),\n"
                         "                action_scope,\n"
