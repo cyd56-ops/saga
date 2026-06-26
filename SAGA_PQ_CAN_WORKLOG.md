@@ -272,9 +272,45 @@ AND internal_policy_accept
 
 当前不再把“继续追加 live 实验样本”作为默认主线；旧 SAGA 复现任务和真实实验统计保留为支撑材料。优先补强方向改为：sink-centric audit、静态 drift 检查、mutation / no-side-effect 证据、轻量形式化模型与 Python 实现 refinement 对照。
 
+### 2.6 后续主线：执行访问控制扩展
+
+截至 `2026-06-26`，上一阶段 `Agent-native signed intent execution gate`
+已经完成第一阶段主线闭环：strict runtime-auth kernel、protected sinks、
+replay、delegation attenuation、negative evidence、mutation evidence、
+TLA+ / Python 轻量模型与 refinement 对照均已有可引用证据。
+
+当前不再有必须补完的旧主线 blocker。后续主要工作转为：
+
+```text
+Execution access control extensions for signed intent capabilities
+```
+
+该后续路线来自 `D:\SAGA\paper\execution_access_control_design_drafts.md`
+的设计草案，并按当前代码状态调整为工程可落地顺序。统一原则是：
+
+- 接收侧强制点必须保持 deterministic 与 fail-closed。
+- LLM / policy-aware agent 只能在发起侧提出 intent / scope proposal。
+- 任何“智能”建议都不能直接扩大接收侧 capability。
+- 新增授权能力必须进入 canonical envelope digest，并受 detached signature 覆盖。
+- 所有降级、拒绝、预算耗尽、撤销与不变式违例都必须可审计。
+
+后续优先级：
+
+1. `EnforcementMode`：默认 strict，显式、带原因、可审计降级。
+2. 参数级 / 受约束 scope：把 action scope 从动作名扩展为动作 + 确定性谓词约束。
+3. 防篡改审计链：把普通 JSONL audit 升级为 hash-chained evidence log。
+4. 执行预算：为 capability 绑定 per-sink / total budget，并用原子状态后端扣减。
+5. capability 撤销 + 短 TTL：支持 capability_id / parent digest 撤销和短时效续签。
+6. 在线不变式监控：在 sink wrapper / capability facade 上持续断言核心安全不变式。
+7. 跨 sink IFC / 污点传播：作为机密性扩展后置推进，避免阻塞授权主线。
+8. 论文论证：明确验签神经元只在“不可信推理平台 / 控制流不可信”部署模型下有必要；可信基座下可退化为普通确定性验签 gate。
+
+ML-DSA / Dilithium external backend 仍是 production-facing 路线，但不应阻塞上述
+execution access control 原型扩展；toy LWE research path 可以继续用于结构验证。
+
 ## 3. 当前状态面板
 
-最后更新日期：`2026-06-14`
+最后更新日期：`2026-06-26`
 
 ### 3.1 代码实际状态
 
@@ -830,6 +866,9 @@ AND internal_policy_accept
 - compiled DNN verifier：`已完成`（第一阶段：toy LWE 公开矩阵投影与 deterministic preprocessing 边界固定；更细粒度算术 gadget 神经化属于后续增强）
 - CNN + Ring/Module-LWE verifier：`未开始`（明确后置增强方向，不是当前 strict runtime-auth proof closure 的前置条件）
 - SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
+- Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
+- 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
+- 后续执行访问控制扩展：`未开始`（新主线：默认 strict、参数级 scope、预算、撤销、审计链、在线 monitor、IFC 与不可信推理平台论证）
 
 ### 3.4 阻塞 / 风险
 
@@ -1119,7 +1158,7 @@ PQ-CAN 当前优先做的是来源、上下文、执行面、二进制输入合�
 
 - 主链路在“允许 / 拒绝”两侧都有自动化覆盖
 
-状态：`进行中`
+状态：`已完成`（第一阶段：主代码路径 contact policy、token 并发消费、AID-bound OTK、lookup shim 边界与内核范围均已收束；更多历史 attack model 副本清理不属于当前 strict runtime-auth 主线 blocker）
 
 ## Phase 3：签名接口与 canonical context
 
@@ -1162,7 +1201,7 @@ PQ-CAN 当前优先做的是来源、上下文、执行面、二进制输入合�
 - 同一消息不能脱离原 `token / agent pair / task / time window / action scope` 被复用
 - 所有 public API 具备类型标注与 docstring
 
-状态：`进行中`
+状态：`已完成`（第一阶段：签名抽象、toy LWE research backend、fail-closed ML-DSA external adapter 与 canonical signed envelope 均已落地；真实 ML-DSA backend 接线后置）
 
 ## Phase 4：Shamir 层与 Compiled DNN CAN
 
@@ -1203,7 +1242,7 @@ PQ-CAN 当前优先做的是来源、上下文、执行面、二进制输入合�
 - 新增/补强测试能递归检查 verifier / CAN 中所有固定子模块均不可训练
 - LLM 建议的 scope 只能作为 envelope / policy 输入，不能绕过固定 verifier 与 runtime gate
 
-状态：`进行中`
+状态：`已完成`（第一阶段：Shamir STEP/RECT/MASK、CAN、compiled toy verifier、real-valued rejection 与 fixed-circuit freeze audit 均已落地；CNN + Ring/Module-LWE 后置）
 
 ## Phase 5：SAGA 执行层集成
 
@@ -1244,7 +1283,7 @@ PQ-CAN 当前优先做的是来源、上下文、执行面、二进制输入合�
 - gate reject 后不会触发 LLM、memory、tool 或 delegation 副作用。
 - LLM 提出的 scope escalation 只会产生 `policy_reject` / `scope_not_authorized` 等审计结果，不会扩大 envelope 中已签名的授权范围。
 
-状态：`进行中`
+状态：`已完成`（第一阶段：strict prompt/tool/memory/delegation/replay protected sinks、signed intent capability、policy compiler、scope attenuation 与 no-side-effect evidence 均已落地）
 
 ## Phase 6：实验、文档与验收
 
@@ -1279,7 +1318,62 @@ PQ-CAN 当前优先做的是来源、上下文、执行面、二进制输入合�
 - 每类失败都证明无下游副作用。
 - runtime auth enabled 的真实任务成功率和开销有统计。
 
-状态：`进行中`
+状态：`已完成`（第一阶段：SECURITY、README、positive/negative runners、artifact validation、paper tables、proof-hardening evidence 与 completion test matrix 均已落地；更多 live sample 后置）
+
+## Phase X：后续执行访问控制扩展
+
+目标：
+
+- 在已完成的 signed intent capability gate 上继续增强执行访问控制能力。
+- 把 capability 从“可进入哪些执行面”扩展为“可用哪些参数、可消费多少额度、是否已撤销、是否允许信息流出、审计链是否可验证”。
+- 保持接收侧强制点 deterministic、fail-closed、可测试、可审计。
+
+优先项：
+
+1. 默认 strict + 显式可审计降级：
+   - 将 `strict_execution_gate: bool` 演进为 `EnforcementMode`。
+   - 默认 `STRICT`；`PERMISSIVE` 仅审计 would-reject；`DISABLED` 只允许离线测试。
+   - 非 strict 必须带 `downgrade_reason`，并写入 audit。
+2. 参数级 / 受约束 scope：
+   - 新增 `ScopeConstraint` / `Predicate` 或等价 schema。
+   - 支持封闭、确定、可 canonical 序列化的谓词集合，例如 `prefix / in_set / regex / le / eq / ro`。
+   - 谓词和约束必须进入 envelope digest，被 detached signature 覆盖。
+   - delegation 子 capability 的约束只能更严，不能放大。
+3. 防篡改审计链：
+   - 将 `execution_gate.jsonl` 从普通 append log 升级为 hash chain。
+   - 记录 `prev_hash / entry_hash / seq / authorization_formula / enforcement_mode`。
+   - 明确本地 hash chain 只能检测中间删改；防截断需要外部 tail-hash anchor。
+4. capability budget：
+   - 在 envelope 中绑定 `ExecutionBudget`。
+   - 通过 `CapabilityStateStore` 原子扣减 `per_sink` 与 `total`。
+   - 优先使用 SQLite contract；文件 marker 后端不作为并发预算主路径。
+5. capability 撤销 + 短 TTL：
+   - 新增 revocation store，支持 `capability_id` 和 `parent_envelope_digest` 撤销。
+   - 撤销检查放在 PQ/CAN 验签后、`LocalExecutionContext` 构造前。
+   - 默认 TTL 收紧到分钟级；epoch / 单调计数器作为强一致场景后续选项。
+6. 在线不变式监控：
+   - 在 `ExecutionCapabilityFacade` / sink wrapper 上挂 `InvariantMonitor`。
+   - 优先覆盖 `INV-1` 缺 context 不得触发 sink、`INV-2` reject 无副作用、`INV-3` scope / predicate 通过。
+   - `INV-4` 依赖 budget，`INV-5` 依赖 IFC。
+7. IFC / 污点传播：
+   - 建立 `Label` / `FlowPolicy` / source-transform-egress sink 分类。
+   - 默认污点只增不减；降密必须通过显式、签名授权、可审计的 `declassify` scope。
+   - 作为机密性扩展后置推进，避免阻塞授权主线。
+8. 不可信推理平台论证：
+   - 论文中明确 CAN gate 的必要性来自控制流 / 浮点判定不可信的部署模型。
+   - 可信基座下，CAN gate 可退化为普通 deterministic verifier。
+   - 不能把 Shamir-secured verifier 表述为通用更安全签名方案；它是场景化 hardening。
+
+完成标准：
+
+- 每个新增 envelope 字段都有 canonical encoding 测试。
+- 每个新增授权谓词都有 allow / deny / tamper / missing-field fail-closed 测试。
+- 每个状态型能力都有并发 / 重启 / backend failure 测试。
+- 每个审计或监控新增字段都有稳定 JSON shape 测试。
+- `SECURITY.md` 与 proof/evidence 文档同步更新新增安全不变量和残余限制。
+- toy cryptography 仍明确标注非生产用途；生产路线只能通过 vetted ML-DSA/Dilithium backend adapter。
+
+状态：`未开始`
 
 ## Phase U0：定义安全内核边界
 
@@ -1719,15 +1813,30 @@ protected sinks 至少覆盖：
 - P7. 建立 optional proof-hardening 验收入口，统一 focused proof tests、mutation runner 和 artifact validation：`已完成`（第一阶段：`experiments/proof_hardening_check.py` 已落地，默认跑全量 mutation evidence 并校验产物；`--skip-mutations` 支持快速 proof-test-only 检查；`proofs/strict_runtime_auth_evidence.md` 已作为论文 / PR 可引用证据摘要落地，并由 `tests/test_strict_runtime_auth_evidence_summary.py` 锁定与 security-kernel 事实来源一致）
 - P8. 将 proof-hardening 验收入口接入可选 CI：`已完成`（第一阶段：`.github/workflows/proof-hardening.yml` 只通过 `workflow_dispatch` 手动触发，默认跑完整 proof-hardening，也可通过 `skip_mutations=true` 快速只跑 proof tests；`tests/test_proof_hardening_workflow.py` 锁定该 workflow 不进入默认 push / PR 路径）
 
+### J. 后续执行访问控制扩展
+
+- J0. 确认旧主线是否还有 blocker：`已完成`（2026-06-26 只读复核后判断：旧主线第一阶段已收束，无必须补完的主线 blocker）
+- J1. 将 `strict_execution_gate` 演进为 `EnforcementMode`，默认 strict，非 strict 必须带降级原因并审计：`未开始`
+- J2. 设计参数级 / 受约束 scope schema，并纳入 canonical envelope digest：`未开始`
+- J3. 实现确定性 predicate evaluator 与 fail-closed 参数校验测试：`未开始`
+- J4. 定义 delegation constraint attenuation 规则，证明子 capability 只能收窄参数空间：`未开始`
+- J5. 将 execution-gate audit JSONL 升级为 hash-chained tamper-evident log：`未开始`
+- J6. 设计 `CapabilityStateStore` 与 capability budget 原子消费接口：`未开始`
+- J7. 实现 SQLite budget contract 测试，并明确 file-marker 不作为并发预算主后端：`未开始`
+- J8. 设计 revocation store、短 TTL 默认值与 parent capability 级联撤销语义：`未开始`
+- J9. 在 capability facade / sink wrapper 上加入第一版 online invariant monitor：`未开始`
+- J10. 设计轻量 IFC 标签、flow policy、source/transform/egress sink 分类和显式 declassify scope：`未开始`
+- J11. 更新论文 threat model，明确验签神经元的价值来自“不可信推理平台 / 控制流不可信”部署模型：`未开始`
+
 ## 7. 当前工作焦点
 
 当前建议优先顺序：
 
-0. 当前主线从“继续追加 live 实验样本”调整为 `Proof-hardening for agent-native signed intent execution gate`：
-   - 核心对象是 runtime 内部确定性验签神经元 / 固定神经电路 `N_verify(pk, signed_intent_envelope, sig) -> {0,1}`。
-   - 论文 claim 只覆盖 strict runtime-auth security kernel 内明确列出的 protected sinks，不覆盖全仓库任意 Python 代码或未接入安全模式的 legacy / experiments / attack_models / demo harness 路径。
-   - 当前已有证据是 sink-centric 清单 + 静态 drift 检查 + no-side-effect oracle + executable mutation evidence runner + 负向测试 + audit + 轻量形式化模型 + TLA+ per-surface / pair smoke / layered model checking + Python refinement 对照 + manual-only proof-hardening workflow。
-   - ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 均暂后置，除非用户重新指定这些方向。
+0. 当前默认主线调整为 `Execution access control extensions for signed intent capabilities`：
+   - 旧的 proof-hardening / sink-centric signed intent execution gate 主线已经完成第一阶段闭环，不再有必须补完的旧主线 blocker。
+   - 下一步默认从 J 组任务开始：`EnforcementMode` 默认 strict、参数级 constrained scope、hash-chained audit、capability budget、revocation / short TTL、online invariant monitor、IFC 与不可信推理平台论文论证。
+   - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
+   - ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
 
 1. `baseline` 与 `PQ-CAN` 正向三任务已于 `2026-05-27` 重新采集端到端统计并全部通过：
    - baseline 运行目录：`experiments/runs/20260527T114103Z-schedule_meeting-expense_report-create_blogpost/`
@@ -1880,75 +1989,27 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 远端分支重排已完成：
-   - 旧 `origin/main` 已归档为 `origin/archive/original-main-20260608`。
-   - 新 `origin/main` 来自旧 `origin/repro-local` 的 sanitized 版本，并已由 GitHub documentation workflow 追加 `20b87f5 Update documentation`。
-   - 新 `origin/repro-local` 来自旧 `origin/backup/repro-local` 的 sanitized 版本。
-   - GitHub default branch 已由用户切换为 `repro-local`；本地 `origin/HEAD` 已同步为 `origin/repro-local`。
-   - `origin/backup/repro-local` 将同步到当前默认分支状态，用于恢复后续“先 backup、确认后再同步默认主分支”的工作流。
-   - `provider.key.bak` / `provider.crt.bak` / `provider.pub.bak` 与本地配置备份未进入新的 `main` / `repro-local`。
-2. 本轮已生成本地 proof-hardening 归档 artifact，可作为等待远端 Actions artifact 前的本地证据包：
-   - 快速 proof-test-only 输出目录：
-     `/tmp/saga-proof-archive-fast-20260608/`
-   - 完整 proof + mutation 输出目录：
-     `/tmp/saga-proof-archive-full-20260608-abs/`
-   - 打包文件：
-     `/tmp/saga-proof-archive-20260608-local.tgz`
-   - SHA-256：
-     `a61af217e39e24c2d1891830deec21fb855885a9edd9f7846f2eb680832127e2`
-   - 完整归档验证结果：`passed=true`，proof tests `71 passed, 17 subtests passed`，mutation evidence `8/8` detected。
-   - 第一次完整运行曾因传入相对 `python_executable=.venv/bin/python` 导致临时 mutation workspace 找不到解释器；已用绝对路径 `/home/kali/saga/.venv/bin/python` 重跑通过。
-3. GitHub UI 首次触发 `Optional proof-hardening` 后发现 CI 导入路径问题，本轮已修复：
-   - 失败位置：`experiments/proof_hardening_check.py` line 14。
-   - 失败原因：workflow 以脚本路径运行 `python experiments/proof_hardening_check.py` 时，GitHub runner 的 `sys.path` 未稳定包含仓库根目录，导致 `from experiments import ...` 报 `ModuleNotFoundError`。
-   - 修复：
-     - workflow 改为 `python -m experiments.proof_hardening_check`
-     - `experiments/proof_hardening_check.py` 增加 repo-root `sys.path` bootstrap，直接按脚本路径运行时也能导入顶层 `experiments`
-     - 新增回归测试覆盖从仓库外目录直接运行脚本 `--help`
-   - 本地验证：
-     - `/home/kali/saga/.venv/bin/python /home/kali/saga/experiments/proof_hardening_check.py --help`（`cwd=/tmp`）-> success
-     - `/home/kali/saga/.venv/bin/python -m experiments.proof_hardening_check --skip-mutations --output-dir /tmp/saga-proof-ci-import-fix-fast --proof-timeout-seconds 180 --python-executable /home/kali/saga/.venv/bin/python` -> `passed=true`
-     - `.venv/bin/python -m pytest -q` -> `385 passed, 41 subtests passed`
-   - 该修复需要推送到 GitHub 默认分支 `repro-local` 后，GitHub UI 重新触发才会使用新 workflow。
-4. GitHub-hosted 完整 proof-hardening artifact 已按 delegation/replay 子模型更新后重新归档并本地校验通过：
-   - artifact：`proof-hardening-27191142461.zip`
-   - Windows 路径：`D:\SAGA\saga\proof-hardening-27191142461.zip`
-   - WSL 路径：`/mnt/d/SAGA/saga/proof-hardening-27191142461.zip`
-   - 文件大小：`6973` bytes
-   - SHA-256：`f659a94e977ecf27ef93b1039d2914260ebf9e7b279ca5fbb0aa393505a75864`
-   - zip 内容：
-     - `proof_hardening_check_summary.json`
-     - `mutation_evidence/mutation_evidence_summary.json`
-     - `mutation_evidence/mutation_evidence.jsonl`
-   - 最新 summary：`passed=true`, `finding_count=0`, proof tests `85 passed, 37 subtests passed`
-   - mutation evidence：`detected_count=8`, `mutation_count=8`, `all_detected=true`, `undetected_count=0`
-   - 本地 artifact validator：`.venv/bin/python experiments/end_to_end_validation.py --mutation-evidence-run-dir /tmp/saga-proof-gh-27191142461/mutation_evidence` -> `passed=true`, `finding_count=0`
-   - 该 artifact 可作为远端 CI 托管的完整 proof-hardening 证据引用，并覆盖 delegation/replay refinement 子模型。
-5. 若未来继续归档新的远端 proof-hardening artifact，需要注意当前分支映射后的边界：
-   - `.github/workflows/proof-hardening.yml` 现在位于新的 `origin/repro-local`。
-   - 新 `origin/main` 按用户指定映射来自旧 `origin/repro-local`，因此仍不包含 `proof-hardening.yml`。
-   - 若 GitHub Actions 页面不显示该 workflow，需要二选一：将 GitHub 默认分支改为 `repro-local`，或把 proof-hardening workflow 及其依赖单独合入 `main`。
-   - 当前环境没有 `gh`，远端 workflow 触发仍依赖 GitHub UI 或可用 CLI/API 认证。
-6. `StrictRuntimeAuthLayered.tla` 的逐 layer refinement mapping 已完成：
-   - 五个 TLA layer 已映射到 Python protected sinks，并由 `tests/test_security_kernel.py` / `tests/test_tla_strict_runtime_auth.py` / `tests/test_strict_runtime_auth_evidence_summary.py` 锁定。
-7. delegation/replay 细化子模型已完成，并已有覆盖该子模型的 GitHub-hosted proof-hardening artifact：
-   - `proofs/strict_runtime_auth_delegation_replay_model.py` 已穷举 parent fact source、scope attenuation、depth bound 与 replay reserve 条件，并提供 parent fact-source / replay reserve 两个 mutation 反例。
-   - proof appendix 表格接入已完成第一版：`experiments/paper_tables.py` 现在可输出 proof claim、protected sinks、mutation evidence、model refinement、layer refinement 与可选 GitHub artifact summary。
-   - 当前归档输出位于 `experiments/tables/20260609-proof-hardening-appendix/`，包含 `paper_tables.json` 与 `paper_tables.md`。
-   - 分支同步流程已完成：用户确认后，`origin/repro-local` 已 fast-forward 到 `origin/backup/repro-local` 的 `4e3c146 log: archive proof-hardening artifact`。
-8. `2026-06-14` 已按审计意见完成主代码低/中风险修复：
-   - `get_agent_material(...)` 支持 `str | Path` 并使用 `Path` API 读取 `agent.json`。
-   - 主验签 / 证书验证路径裸 `except:` 已收窄到 `InvalidSignature` 与输入解码类错误；provider 主路径也已同步修复。
-   - AES-GCM token 解密已新增 base64 与 nonce/tag 最短长度校验。
-   - execution gate 中安全相关 `assert` 已改为显式 fail-closed 分支。
-   - 主代码 `logger.warn` 已迁移到 `logger.warning`，两个 Logger 实现均提供兼容别名。
-   - 连接关闭日志拼写已修复。
-   - 新增回归测试覆盖 Path material、短密文拒绝和 optimized-mode 下不依赖 assert 的 fail-closed 行为。
-9. 若切回系统工程主线，可选择 ML-DSA adapter 真实 backend 接线、Redis/PostgreSQL replay backend artifact、CNN + Ring/Module-LWE 路线评估或更多 live sample；这些方向仍暂后置，除非用户重新指定。
-10. 当前不再需要新增主线大模块即可进入 release / paper closure：
-   - 状态面板已收敛为“第一阶段已完成 + 后续增强另列”。
-   - 最终论文 claim 固定为 strict runtime-auth protected sinks 的 sink-centric 命题，不扩大到全仓库任意 Python 代码。
-   - 研究原型边界固定为：主代码路径接受 hygiene 审计；`experiments/`、`proofs/`、`saga/attack_models/` 等 evidence / harness / 历史副本路径只有显式 opt-in 时才进入具体实验或测试 claim。
+1. 从 J1 开始实现默认 strict + 显式可审计降级：
+   - 先设计 `EnforcementMode` 与配置迁移路径。
+   - 保持 strict 为默认；`PERMISSIVE` 只记录 would-reject；`DISABLED` 只用于离线测试。
+   - 审计记录新增 `enforcement_mode`、`downgrade_reason` 与 would-reject 语义。
+2. 接着推进 J2/J3 参数级 scope：
+   - 先定义 canonical schema 和 deterministic predicate evaluator。
+   - 只允许封闭谓词集合，不允许用户自定义 callback。
+   - 所有约束必须进 envelope digest，tamper 后验签失败。
+3. 并行设计 J5 audit hash chain：
+   - 当前普通 `execution_gate.jsonl` 可作为兼容输入。
+   - 新链路需要稳定 `seq / prev_hash / entry_hash` 字段。
+   - 防截断必须明确依赖外部 tail-hash anchor，不能只靠本地 hash chain。
+4. J6/J7 budget、J8 revocation、J9 monitor 在 J2 schema 稳定后推进。
+5. J10 IFC 后置为机密性扩展；J11 论文 threat model 可先以文档形式推进，不阻塞代码。
+
+历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
+
+- GitHub-hosted proof-hardening artifact `proof-hardening-27191142461.zip` 已本地校验通过，summary `passed=true`，mutation evidence `8/8` detected。
+- `StrictRuntimeAuthLayered.tla` 与 delegation/replay refinement 子模型已完成，并映射到 Python protected sinks。
+- `2026-06-14` 主代码低/中风险审计修复已完成，主线第一阶段可进入 release / paper closure。
+- 远端分支重排和 proof-hardening workflow 状态作为历史同步记录保留；后续只有在用户明确要求归档新远端 artifact 时才继续处理。
 
 API cost 目前不从价格表估算；只有模型后端诊断记录显式提供 usage/cost 字段时才会进入统计。
 
@@ -1977,6 +2038,40 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-06-26 Execution Access Control Roadmap Update Session
+
+目标：
+
+- 只读检查 `D:\SAGA\paper\execution_access_control_design_drafts.md` 的可行性，并判断当前主线是否还有必须补完事项。
+- 在不修改实现代码的前提下，将可行的后续执行访问控制扩展整理进工作文档，作为下一阶段主要工作内容。
+
+已做工作：
+
+- 只读确认草案实际路径为 `/mnt/d/SAGA/paper/execution_access_control_design_drafts.md`。
+- 对照当前代码确认：
+  - `Agent.__init__` 当前默认 `strict_execution_gate=False`，但 runtime auth helper 会启用 strict。
+  - `RequestEnvelope` 当前签名绑定字符串 `authorized_scopes`，尚未支持参数级 predicate constraint。
+  - `LocalExecutionContext` 当前只做 action-scope 授权，尚未支持预算、撤销、IFC 或在线 invariant monitor。
+  - replay store / SQLite adapter / execution-gate audit 已有基础，可支撑后续 budget、hash-chain audit 和 stateful capability 扩展。
+- 判断当前旧主线第一阶段已经收束，没有必须补完的旧 blocker；后续应转入执行访问控制扩展。
+- 更新 `SAGA_PQ_CAN_WORKLOG.md`：
+  - 新增 `2.6 后续主线：执行访问控制扩展`。
+  - 将 Phase 2-6 旧状态从 `进行中` 收束为第一阶段 `已完成`。
+  - 新增 `Phase X：后续执行访问控制扩展`。
+  - 新增任务看板 `J. 后续执行访问控制扩展`。
+  - 更新 `7. 当前工作焦点` 和 `当前下一步`，默认从 J1/J2/J5 开始。
+  - 新增 `9. 目标调整记录` 中的 `2026-06-26 Execution Access Control Extension 主线调整`。
+
+未做工作：
+
+- 未修改任何实现代码、测试代码、配置、凭据或 `paper/` 文件。
+- 未运行测试；本次仅调整工作文档，不改变 runtime 行为。
+
+当前 checkpoint 状态：
+
+- 待提交文件预计只有 `SAGA_PQ_CAN_WORKLOG.md`。
+- 本次变更不包含 secrets、生成凭据、本地 DB、模型输出或 `paper/`。
 
 ### 2026-06-14 Mainline Release-Closure Pass
 
@@ -6626,6 +6721,34 @@ GitHub / checkpoint 状态：
 - 当前工作区同时还混有敏感/生成物与此前未整理改动，因此本次只保留本地 checkpoint 摘要，不自动推送备份分支。
 
 ## 9. 目标调整记录
+
+### 2026-06-26 Execution Access Control Extension 主线调整
+
+原始状态：
+
+- `Agent-native signed intent execution gate`、proof-hardening、sink-centric protected sink audit、mutation evidence、TLA+ / Python 轻量模型与 refinement 对照已经完成第一阶段闭环。
+- 旧“当前下一步”仍保留大量分支重排、proof artifact、release closure 和历史同步事项，容易被误读为主线未完成 blocker。
+
+调整后的执行策略：
+
+- 确认当前主线没有必须补完的旧 blocker；不再默认追加 release-closure / proof-hardening 大模块。
+- 新默认主线改为 `Execution access control extensions for signed intent capabilities`。
+- 后续优先推进：
+  - 默认 strict + 显式可审计降级；
+  - 参数级 / 受约束 scope；
+  - 防篡改审计链；
+  - execution budget；
+  - capability revocation + short TTL；
+  - online invariant monitor；
+  - IFC / taint propagation；
+  - 不可信推理平台下验签神经元必要性的论文论证。
+- ML-DSA adapter 真实 backend、Redis/PostgreSQL replay artifact、CNN + Ring/Module-LWE 与更多 live sample 保留为后续增强，不作为新主线前置 blocker。
+
+调整原因：
+
+- 用户要求判断当前主线是否还有未完成事项；只读复核代码和工作文档后，判断旧主线第一阶段已收束。
+- `D:\SAGA\paper\execution_access_control_design_drafts.md` 中的模块 2-9 与当前实现自然衔接，适合作为后续主要工作内容。
+- 新路线更能扩展论文贡献：从“能否进入执行面”推进到“参数空间、预算、撤销、审计完整性、运行时不变式和信息流”。
 
 ### 2026-06-06 Proof-hardening / sink-centric 主线收紧
 
