@@ -2127,7 +2127,10 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 - `SAGA_PQ_CAN_WORKLOG.md`
 
 本轮待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
-Git checkpoint 将在本轮结束前形成并推送到 `origin/backup/repro-local`；完成后补记具体提交结果。
+已形成并推送本轮 checkpoint 到专用备份分支：
+
+- 本地提交：`3284ccb checkpoint: add constrained scope gate`
+- 备份推送：`git push origin HEAD:backup/repro-local` -> 成功，远端 `backup/repro-local` 更新到 `3284ccb`
 
 ### 2026-06-26 EnforcementMode J1 Implementation Session
 
