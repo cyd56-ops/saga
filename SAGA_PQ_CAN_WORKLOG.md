@@ -2104,8 +2104,11 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 
 GitHub / checkpoint 状态：
 
-- 待最终 `git status --short` 后形成 checkpoint。
-- 若无额外敏感文件进入范围，按仓库约定可推送到 `origin/backup/repro-local`。
+- 已形成本地 checkpoint commit：
+  - `a701a91 checkpoint: add enforcement mode audit`
+- 已推送到备份分支：
+  - `origin/backup/repro-local`
+- 推送范围仅包含上述源码、测试与文档文件。
 
 ### 2026-06-26 Execution Access Control Roadmap Update Session
 
