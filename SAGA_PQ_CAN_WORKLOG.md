@@ -2801,7 +2801,9 @@ GitHub / checkpoint 状态：
 
 GitHub / checkpoint 状态：
 
-- 当前工作区改动尚未形成 checkpoint commit；需在完整测试通过后执行最终 git 状态检查。
+- 已创建本地 checkpoint commit：
+  - `a36e131 checkpoint: add capability revocation and ttl`
+- 仍需把 checkpoint 同步到 `origin/backup/repro-local`，不得推送到主开发分支。
 
 ### 2026-06-09 Default Branch Proof-Hardening Sync Session
 
