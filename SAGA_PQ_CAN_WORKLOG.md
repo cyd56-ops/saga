@@ -2806,7 +2806,7 @@ GitHub / checkpoint 状态：
 - 已创建工作日志同步 commit：
   - `af04031 docs: record j8 checkpoint status`
 - 已推送到专用备份分支：
-  - `origin/backup/repro-local` 已更新到 `af04031`
+  - J8 checkpoint 与后续工作日志同步已更新到 `origin/backup/repro-local`
 - 未推送到主开发分支 `origin/repro-local`。
 
 ### 2026-06-09 Default Branch Proof-Hardening Sync Session
