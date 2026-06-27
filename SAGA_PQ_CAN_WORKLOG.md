@@ -2152,6 +2152,7 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 
 - 本地提交：`8a9f7a3 checkpoint: add delegation constraint attenuation`
 - 备份推送：`git push origin HEAD:backup/repro-local` -> 成功，远端 `backup/repro-local` 更新到 `8a9f7a3`
+- 追加工作日志同步记录后也推送到同一备份分支；最终备份分支以本地当前 `HEAD` 为准。
 
 ### 2026-06-26 Parameter-Constrained Scope J2/J3 Implementation Session
 
