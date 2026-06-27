@@ -18,6 +18,7 @@ from saga.execution_gate import (
     ActionScopeSpec,
     ExecutionAuthorizationError,
     ExecutionCapabilityFacade,
+    ExecutionInvariantMonitor,
     GatedExecutionResource,
 )
 from saga.local_agent import LocalAgent
@@ -64,9 +65,11 @@ class AgentWrapper(LocalAgent):
         self.prompt_filename = prompt_filename
         self._execution_context = None
         self._strict_execution_capabilities = False
+        self._execution_invariant_monitor: ExecutionInvariantMonitor | None = None
         self._execution_capabilities = ExecutionCapabilityFacade(
             lambda: self._execution_context,
             context_required=lambda: getattr(self, "_strict_execution_capabilities", False),
+            invariant_monitor=self._execution_invariant_monitor,
         )
         self._delegation_handler: Callable[..., Any] | None = None
 
@@ -188,6 +191,7 @@ class AgentWrapper(LocalAgent):
             facade = ExecutionCapabilityFacade(
                 lambda: getattr(self, "_execution_context", None),
                 context_required=lambda: getattr(self, "_strict_execution_capabilities", False),
+                invariant_monitor=getattr(self, "_execution_invariant_monitor", None),
             )
             self._execution_capabilities = facade
         return facade
@@ -227,6 +231,16 @@ class AgentWrapper(LocalAgent):
     def set_strict_execution_capabilities(self, enabled: bool) -> None:
         """配置底层 capability facade 是否在缺少 execution context 时拒绝。"""
         self._strict_execution_capabilities = bool(enabled)
+
+    def set_execution_invariant_monitor(
+        self,
+        monitor: ExecutionInvariantMonitor | None,
+    ) -> None:
+        """安装在线不变式 monitor，用于记录 sink-level 授权路径。"""
+        self._execution_invariant_monitor = monitor
+        facade = getattr(self, "_execution_capabilities", None)
+        if facade is not None:
+            facade.set_invariant_monitor(monitor)
 
     def delegate_to_agent(self, target_aid: str, message: str, **kwargs) -> Any:
         """Delegate a task to another agent after execution-gate authorization."""

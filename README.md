@@ -411,6 +411,10 @@ Runtime-auth signed capabilities default to a 300-second TTL capped by the SAGA
 token expiry. A revocation backend such as `SQLiteRevocationStore` can revoke a
 single `capability_id` or cascade-revoke children that name a revoked
 `parent_envelope_digest`.
+The local capability facade can attach an online invariant monitor for protected
+sinks. The checked-in monitor implementations record authorized or violated
+sink checks without storing tool argument values, and monitor backend failure is
+treated as a local fail-closed authorization error.
 
 The experiment entrypoints also append a task-level structured result row under
 `experiments/results/<task-name>.jsonl`, including the run mode, peer AID,

@@ -18,10 +18,13 @@ from saga.execution_gate import (
     append_execution_gate_audit_record,
     EnforcementMode,
     ExecutionAuthorizationError,
+    ExecutionCapabilityFacade,
     ExecutionGateDecision,
     ExecutionGateRequest,
     FileReplayStateStore,
+    InMemoryExecutionInvariantMonitor,
     InMemoryRevocationStore,
+    JSONLExecutionInvariantMonitor,
     RedisReplayStateStore,
     SignedRequestExecutionGate,
     SQLiteCapabilityStateStore,
@@ -1999,6 +2002,162 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             context.require_tool_call("send_email", {"recipient_domain": "evil.test"})
 
         self.assertEqual(raised.exception.reason, "unauthorized_tool_scope")
+
+    def test_execution_invariant_monitor_records_authorized_and_rejected_sink(self) -> None:
+        """capability facade 应把 sink 授权通过和不变式违例记录到 monitor。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-monitor",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            message="draft mail",
+            timestamp=self.now,
+            capability_id="cap-monitor",
+        )
+        request = self._signed_request_from_envelope(envelope, "draft mail")
+        context = self.gate.build_local_execution_context(request)
+        assert context is not None
+        monitor = InMemoryExecutionInvariantMonitor()
+        facade = ExecutionCapabilityFacade(
+            lambda: context,
+            invariant_monitor=monitor,
+        )
+
+        facade.require_action(
+            "tool_call:send_email",
+            {"recipient_domain": "example.com", "body": "not logged"},
+        )
+        with self.assertRaises(ExecutionAuthorizationError):
+            facade.require_action("tool_call:add_calendar_event")
+
+        events = monitor.events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].status, "authorized")
+        self.assertEqual(events[0].reason, "authorized")
+        self.assertEqual(events[0].capability_id, "cap-monitor")
+        self.assertEqual(events[0].action_scope, "tool_call:send_email")
+        self.assertEqual(
+            events[0].constraint_parameter_keys,
+            ("body", "recipient_domain"),
+        )
+        self.assertEqual(events[1].status, "violation")
+        self.assertEqual(events[1].reason, "unauthorized_tool_scope")
+        self.assertEqual(events[1].action_scope, "tool_call:add_calendar_event")
+
+    def test_execution_invariant_monitor_records_missing_context_violation(self) -> None:
+        """严格 facade 缺少 LocalExecutionContext 时应记录 violation 并 fail-closed。"""
+        monitor = InMemoryExecutionInvariantMonitor()
+        facade = ExecutionCapabilityFacade(
+            lambda: None,
+            context_required=True,
+            invariant_monitor=monitor,
+        )
+
+        with self.assertRaisesRegex(
+            ExecutionAuthorizationError,
+            "missing_local_execution_context",
+        ):
+            facade.require_action("tool_call:send_email")
+
+        events = monitor.events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].status, "violation")
+        self.assertEqual(events[0].reason, "missing_local_execution_context")
+        self.assertEqual(events[0].action_scope, "tool_call:send_email")
+
+    def test_jsonl_execution_invariant_monitor_omits_parameter_values(self) -> None:
+        """JSONL monitor 只能记录参数键名，不能写入工具参数值。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-jsonl-monitor",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["delegation"],
+            message="delegate",
+            timestamp=self.now,
+        )
+        facade_context = self.gate.build_local_execution_context(
+            self._signed_request_from_envelope(envelope, "delegate")
+        )
+        assert facade_context is not None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            facade = ExecutionCapabilityFacade(
+                lambda: facade_context,
+                invariant_monitor=JSONLExecutionInvariantMonitor(tmpdir),
+            )
+            facade.require_action("delegation", {"secret": "do-not-log"})
+            audit_path = Path(tmpdir) / "audit" / "execution_invariants.jsonl"
+            rows = [
+                json.loads(line)
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(rows[-1]["status"], "authorized")
+        self.assertEqual(rows[-1]["constraint_parameter_keys"], ["secret"])
+        self.assertNotIn("do-not-log", json.dumps(rows[-1], sort_keys=True))
+
+    def test_require_any_action_consumes_budget_for_selected_scope(self) -> None:
+        """候选 scope 授权路径也必须在 protected sink 前消费 signed budget。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-any-budget",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:submit_expense_report"],
+            execution_budget={"total": 1},
+            message="budgeted",
+            timestamp=self.now,
+            capability_id="cap-any-budget",
+        )
+        request = self._signed_request_from_envelope(envelope, "budgeted")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gate = SignedRequestExecutionGate(
+                CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+                {"alice@example.com:calendar_agent": self.key_pair.public_key},
+                now_fn=lambda: self.now,
+                capability_state_store=SQLiteCapabilityStateStore(
+                    Path(tmpdir) / "capability.sqlite3"
+                ),
+            )
+            context = gate.build_local_execution_context(request)
+            assert context is not None
+            monitor = InMemoryExecutionInvariantMonitor()
+            facade = ExecutionCapabilityFacade(
+                lambda: context,
+                invariant_monitor=monitor,
+            )
+
+            facade.require_any_action(
+                ("tool_call:send_email", "tool_call:submit_expense_report")
+            )
+            with self.assertRaisesRegex(
+                ExecutionAuthorizationError,
+                "capability_budget_exhausted",
+            ):
+                facade.require_any_action(
+                    ("tool_call:send_email", "tool_call:submit_expense_report")
+                )
+
+        events = monitor.events()
+        self.assertEqual(events[0].status, "authorized")
+        self.assertEqual(events[0].action_scope, "tool_call:submit_expense_report")
+        self.assertEqual(events[1].status, "violation")
+        self.assertEqual(events[1].reason, "capability_budget_exhausted")
 
 
 if __name__ == "__main__":

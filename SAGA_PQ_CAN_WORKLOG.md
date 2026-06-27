@@ -541,6 +541,13 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - 撤销检查位于 envelope/time/scope/PQ/CAN 验证之后、`LocalExecutionContext` 构造之前；撤销不能替代验签，只能在验签后收紧授权
   - runtime-auth signed capability 默认 TTL 已收紧为 300 秒，并由 SAGA token 过期时间封顶
   - `ToyRuntimeAuthConfig.capability_ttl_seconds` 支持显式覆盖，但只接受正整数
+- 当前 protected sink 已支持第一版 online invariant monitor：
+  - `saga/execution_gate.py` 新增 `ExecutionInvariantEvent`、`ExecutionInvariantMonitor`、`InMemoryExecutionInvariantMonitor` 与 `JSONLExecutionInvariantMonitor`
+  - `ExecutionCapabilityFacade` 会在 tool / memory / delegation sink 前记录授权通过或 violation 事件
+  - monitor event 绑定公开的 `capability_id`、request envelope digest、sender/receiver AID 与 action scope，但只记录参数键名，不记录参数值
+  - strict capability 路径缺少 `LocalExecutionContext`、scope 未授权、budget store 缺失/故障/耗尽、monitor 后端故障都会在 protected sink 执行前 fail-closed
+  - `GatedExecutionResource` 的候选 scope 路径现在会对选中的授权 scope 消费 signed budget，避免 backend proxy 绕过预算扣减
+  - `AgentWrapper` 支持安装 monitor；带 workdir 的真实 `Agent` runtime hook 会安装本地 JSONL invariant audit adapter
 - 当前 canonical request envelope 已支持第一版参数级 / 受约束 scope：
   - `saga/messages.py` 新增 `scope_constraints`，并把约束写入 canonical envelope digest。
   - 约束 schema 只允许封闭谓词集合：`eq`、`in`、`lte`、`gte`、`max_length`；不允许 callback、regex 或任意表达式。
@@ -914,7 +921,7 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
 - SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
-- 后续执行访问控制扩展：`进行中`（J1-J8 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store 与短 TTL 已落地；下一步为 online invariant monitor）
+- 后续执行访问控制扩展：`进行中`（J1-J9 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL 与 online invariant monitor 已落地；下一步为轻量 IFC）
 
 ### 3.4 阻塞 / 风险
 
@@ -1912,7 +1919,7 @@ protected sinks 至少覆盖：
 - J6. 设计 `CapabilityStateStore` 与 capability budget 原子消费接口：`已完成`（第一阶段：signed `execution_budget`、`CapabilityStateStore.consume_budget(...)`、缺 store / store failure / budget exhausted fail-closed 已落地）
 - J7. 实现 SQLite budget contract 测试，并明确 file-marker 不作为并发预算主后端：`已完成`（第一阶段：`SQLiteCapabilityStateStore` 用事务原子消费 `total` 与 per-scope budget，并发消费不超过 signed limit；file-marker replay store 不作为预算后端）
 - J8. 设计 revocation store、短 TTL 默认值与 parent capability 级联撤销语义：`已完成`（第一阶段：`RevocationStore`、`InMemoryRevocationStore`、`SQLiteRevocationStore`、`capability_id` 精确撤销、`parent_envelope_digest` 级联撤销、后端不可用 fail-closed 与默认 300 秒 capability TTL 已落地）
-- J9. 在 capability facade / sink wrapper 上加入第一版 online invariant monitor：`未开始`
+- J9. 在 capability facade / sink wrapper 上加入第一版 online invariant monitor：`已完成`（第一阶段：`ExecutionInvariantMonitor`、内存/JSONL monitor、facade sink event、strict 缺 context violation、参数键名审计、monitor 后端故障 fail-closed 与候选 scope budget 消费已落地）
 - J10. 设计轻量 IFC 标签、flow policy、source/transform/egress sink 分类和显式 declassify scope：`未开始`
 - J11. 更新论文 threat model，明确验签神经元的价值来自“不可信推理平台 / 控制流不可信”部署模型：`未开始`
 
@@ -1922,8 +1929,8 @@ protected sinks 至少覆盖：
 
 0. 当前默认主线调整为 `Execution access control extensions for signed intent capabilities`：
    - 旧的 proof-hardening / sink-centric signed intent execution gate 主线已经完成第一阶段闭环，不再有必须补完的旧主线 blocker。
-   - J1-J8 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store 与短 TTL 已接入 runtime gate。
-   - 下一步默认继续 J9：在 capability facade / sink wrapper 上加入第一版 online invariant monitor；随后再推进 IFC 与不可信推理平台论文论证。
+   - J1-J9 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL 与 online invariant monitor 已接入 runtime gate。
+   - 下一步默认继续 J10：设计轻量 IFC 标签、flow policy、source/transform/egress sink 分类和显式 declassify scope；随后再推进不可信推理平台论文论证。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
    - ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
 
@@ -2808,6 +2815,74 @@ GitHub / checkpoint 状态：
 - 已推送到专用备份分支：
   - J8 checkpoint 与后续工作日志同步已更新到 `origin/backup/repro-local`
 - 未推送到主开发分支 `origin/repro-local`。
+
+### 2026-06-27 Online Invariant Monitor J9 Implementation Session
+
+目标：
+
+- 完成 J9：在 capability facade / sink wrapper 上加入第一版 deterministic online invariant monitor。
+
+已做工作：
+
+- 更新 `saga/execution_gate.py`：
+  - 新增 `ExecutionInvariantEvent`
+  - 新增 `ExecutionInvariantMonitor` 协议
+  - 新增 `InMemoryExecutionInvariantMonitor` 测试/本地调试实现
+  - 新增 `JSONLExecutionInvariantMonitor` 本地 JSONL audit adapter
+  - `ExecutionCapabilityFacade` 支持安装 monitor，并在 sink 前记录 authorized / violation 事件
+  - strict capability 路径缺少 context 时记录 `missing_local_execution_context` violation 并 fail-closed
+  - monitor 后端不可用时以 `invariant_monitor_unavailable` fail-closed
+  - `require_any_action(...)` 对候选 scope 选中的授权 scope 补做 signed budget 消费，避免 backend proxy 绕过预算扣减
+- 更新 `agent_backend/base.py`：
+  - `AgentWrapper` 支持 `set_execution_invariant_monitor(...)`
+  - 惰性创建的 `ExecutionCapabilityFacade` 也会继承当前 monitor
+- 更新 `saga/agent.py`：
+  - `_bind_local_agent_runtime_hooks(...)` 会在 local agent 支持时安装 `JSONLExecutionInvariantMonitor(workdir)`
+- 更新测试：
+  - 覆盖 facade 授权事件和 violation 事件
+  - 覆盖 strict 缺 context violation
+  - 覆盖 JSONL monitor 只记录参数键名、不记录参数值
+  - 覆盖候选 scope 路径会消费 signed budget
+  - 覆盖 `AgentWrapper` tool wrapper 能产生 monitor event
+  - 覆盖 `Agent._bind_local_agent_runtime_hooks(...)` 会安装 JSONL monitor
+- 更新文档：
+  - `README.md` 记录 online invariant monitor 能力
+  - `SECURITY.md` 记录 monitor 边界、隐私约束和 fail-closed 语义
+  - 本工作文档将 J9 标记为 `已完成`，当前下一步切换到 J10 轻量 IFC
+
+已验证：
+
+- `.venv/bin/python -m py_compile saga/execution_gate.py saga/agent.py agent_backend/base.py tests/test_execution_gate.py tests/test_agent_wrapper_gate.py` -> success
+- `.venv/bin/python -m pytest -q tests/test_execution_gate.py` -> `72 passed`
+- `.venv/bin/python -m pytest -q tests/test_agent_wrapper_gate.py` -> `20 passed`
+- `.venv/bin/python -m pytest -q tests/test_execution_gate.py tests/test_agent_wrapper_gate.py` -> `92 passed`
+- `.venv/bin/python -m pytest -q tests/integration/test_baseline_agent_flow.py` -> `35 passed`
+- `.venv/bin/python -m pytest -q` -> `460 passed, 69 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `git diff --check` -> success
+- 未发现 `ruff` / `mypy` 配置文件，因此未运行 `ruff check .` 或 `mypy .`。
+
+当前 checkpoint 待提交文件范围：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `agent_backend/base.py`
+- `saga/agent.py`
+- `saga/execution_gate.py`
+- `tests/integration/test_baseline_agent_flow.py`
+- `tests/test_agent_wrapper_gate.py`
+- `tests/test_execution_gate.py`
+
+敏感文件审查：
+
+- 待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+- `JSONLExecutionInvariantMonitor` 只记录参数键名，不记录工具参数值。
+
+GitHub / checkpoint 状态：
+
+- 当前工作区改动尚未形成 checkpoint commit；需在完整测试通过后执行最终 git 状态检查。
 
 ### 2026-06-09 Default Branch Proof-Hardening Sync Session
 

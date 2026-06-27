@@ -35,6 +35,7 @@ P = ParamSpec("P")
 T = TypeVar("T")
 ActionScopeSpec = str | tuple[str, ...] | Callable[..., str | tuple[str, ...]]
 AUDIT_CHAIN_GENESIS_HASH = "0" * 64
+ExecutionInvariantStatus = Literal["authorized", "violation"]
 
 
 class EnforcementMode(str, Enum):
@@ -171,6 +172,86 @@ class ExecutionAuthorizationError(PermissionError):
         self.reason = reason
         self.action_scope = action_scope
         super().__init__(f"{reason}: {action_scope}")
+
+
+@dataclass(frozen=True)
+class ExecutionInvariantEvent:
+    """记录一次受保护 sink 的在线不变式检查结果。"""
+
+    sink: str
+    action_scope: str
+    status: ExecutionInvariantStatus
+    reason: str
+    capability_id: str | None = None
+    request_envelope_digest: str | None = None
+    sender_aid: str | None = None
+    receiver_aid: str | None = None
+    constraint_parameter_keys: tuple[str, ...] = ()
+
+    def as_audit_record(self) -> dict[str, object]:
+        """导出不含业务参数值的稳定审计记录。"""
+        return {
+            "sink": self.sink,
+            "action_scope": self.action_scope,
+            "status": self.status,
+            "reason": self.reason,
+            "capability_id": self.capability_id,
+            "request_envelope_digest": self.request_envelope_digest,
+            "sender_aid": self.sender_aid,
+            "receiver_aid": self.receiver_aid,
+            "constraint_parameter_keys": list(self.constraint_parameter_keys),
+        }
+
+
+class ExecutionInvariantMonitor(Protocol):
+    """接收 capability facade / sink wrapper 的在线不变式事件。"""
+
+    def record(self, event: ExecutionInvariantEvent) -> None:
+        """记录一次不变式事件；后端故障应抛出 ``OSError``。"""
+
+
+class InMemoryExecutionInvariantMonitor:
+    """进程内不变式事件收集器，适用于测试和显式本地调试。"""
+
+    def __init__(self) -> None:
+        """初始化空事件列表。"""
+        self._events: list[ExecutionInvariantEvent] = []
+
+    def record(self, event: ExecutionInvariantEvent) -> None:
+        """保存一次不变式事件。"""
+        self._events.append(event)
+
+    def events(self) -> tuple[ExecutionInvariantEvent, ...]:
+        """返回当前已记录事件的不可变快照。"""
+        return tuple(self._events)
+
+    def clear(self) -> None:
+        """清空已记录事件，便于测试分阶段断言。"""
+        self._events.clear()
+
+
+class JSONLExecutionInvariantMonitor:
+    """把在线不变式事件追加到本地 JSONL 审计文件。"""
+
+    def __init__(self, workdir: str | Path, *, filename: str = "execution_invariants.jsonl") -> None:
+        """绑定本地 workdir；事件将写入 ``audit/<filename>``。"""
+        if not filename:
+            raise ValueError("filename must be non-empty")
+        self.workdir = Path(workdir)
+        self.filename = filename
+
+    def record(self, event: ExecutionInvariantEvent) -> None:
+        """以稳定 JSONL 形式追加一次不变式事件。"""
+        audit_dir = self.workdir / "audit"
+        audit_path = audit_dir / self.filename
+        payload = event.as_audit_record()
+        payload["recorded_at"] = datetime.now(tz=timezone.utc).isoformat()
+        try:
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            with audit_path.open("a", encoding="utf-8") as handle:
+                handle.write(_canonical_execution_gate_audit_json(payload) + "\n")
+        except OSError as exc:
+            raise OSError("execution invariant audit log is unavailable") from exc
 
 
 @dataclass(frozen=True)
@@ -1101,6 +1182,61 @@ class LocalExecutionContext:
         self.require_action("delegation")
 
 
+def _authorization_error_reason(exc: PermissionError, action_scope: str) -> str:
+    """把 sink 授权异常收敛为稳定 reason，供 monitor 审计复用。"""
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, str) and reason:
+        return reason
+    return reason_for_unauthorized_scope(action_scope)
+
+
+def _constraint_parameter_keys(
+    constraint_parameters: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
+    """只提取参数键名，避免在线审计记录业务参数值。"""
+    if constraint_parameters is None:
+        return ()
+    return tuple(sorted(str(key) for key in constraint_parameters))
+
+
+def _build_execution_invariant_event(
+    context: object | None,
+    *,
+    sink: str,
+    action_scope: str,
+    status: ExecutionInvariantStatus,
+    reason: str,
+    constraint_parameters: Mapping[str, Any] | None,
+) -> ExecutionInvariantEvent:
+    """从当前执行上下文构造不含敏感参数值的在线不变式事件。"""
+    envelope = getattr(context, "request_envelope", None)
+    envelope_digest: str | None = None
+    if envelope is not None and hasattr(envelope, "hex_digest"):
+        try:
+            envelope_digest = envelope.hex_digest()
+        except (TypeError, ValueError):
+            envelope_digest = None
+    return ExecutionInvariantEvent(
+        sink=sink,
+        action_scope=action_scope,
+        status=status,
+        reason=reason,
+        capability_id=getattr(envelope, "capability_id", None),
+        request_envelope_digest=envelope_digest,
+        sender_aid=getattr(context, "sender_aid", None)
+        or getattr(envelope, "sender_aid", None),
+        receiver_aid=getattr(context, "receiver_aid", None)
+        or getattr(envelope, "receiver_aid", None),
+        constraint_parameter_keys=_constraint_parameter_keys(constraint_parameters),
+    )
+
+
+def _consume_budget_for_authorized_action(context: object, action_scope: str) -> None:
+    """候选 scope 已授权后，只在真实本地上下文中补做预算扣减。"""
+    if isinstance(context, LocalExecutionContext):
+        context._consume_budget(action_scope)
+
+
 class ExecutionCapabilityFacade:
     """用本地执行上下文保护 tool、memory 和 delegation 的统一能力 facade。"""
 
@@ -1109,10 +1245,21 @@ class ExecutionCapabilityFacade:
         context_provider: Callable[[], LocalExecutionContext | None],
         *,
         context_required: Callable[[], bool] | bool = False,
+        invariant_monitor: ExecutionInvariantMonitor | None = None,
+        sink: str = "capability_facade",
     ) -> None:
-        """保存动态上下文提供者；严格模式下缺少上下文会 fail-closed。"""
+        """保存动态上下文提供者，并可选接入在线不变式 monitor。"""
         self._context_provider = context_provider
         self._context_required = context_required
+        self._invariant_monitor = invariant_monitor
+        self._invariant_sink = sink
+
+    def set_invariant_monitor(
+        self,
+        invariant_monitor: ExecutionInvariantMonitor | None,
+    ) -> None:
+        """运行时替换在线不变式 monitor，便于 Agent 绑定 workdir 审计。"""
+        self._invariant_monitor = invariant_monitor
 
     def require_action(
         self,
@@ -1123,7 +1270,24 @@ class ExecutionCapabilityFacade:
         context = self._current_context(action_scope)
         if context is None:
             return
-        context.require_action(action_scope, constraint_parameters)
+        try:
+            context.require_action(action_scope, constraint_parameters)
+        except PermissionError as exc:
+            self._record_invariant_event(
+                context,
+                action_scope,
+                "violation",
+                _authorization_error_reason(exc, action_scope),
+                constraint_parameters,
+            )
+            raise
+        self._record_invariant_event(
+            context,
+            action_scope,
+            "authorized",
+            "authorized",
+            constraint_parameters,
+        )
 
     def require_any_action(
         self,
@@ -1135,14 +1299,39 @@ class ExecutionCapabilityFacade:
         context = self._current_context(scopes[0])
         if context is None:
             return
-        if not any(
-            context.authorize_action(action_scope, constraint_parameters)
-            for action_scope in scopes
-        ):
-            raise ExecutionAuthorizationError(
-                reason_for_unauthorized_scope(scopes[0]),
-                scopes[0],
-            )
+        if len(scopes) == 1:
+            self.require_action(scopes[0], constraint_parameters)
+            return
+        for action_scope in scopes:
+            if context.authorize_action(action_scope, constraint_parameters):
+                try:
+                    _consume_budget_for_authorized_action(context, action_scope)
+                except PermissionError as exc:
+                    self._record_invariant_event(
+                        context,
+                        action_scope,
+                        "violation",
+                        _authorization_error_reason(exc, action_scope),
+                        constraint_parameters,
+                    )
+                    raise
+                self._record_invariant_event(
+                    context,
+                    action_scope,
+                    "authorized",
+                    "authorized",
+                    constraint_parameters,
+                )
+                return
+        reason = reason_for_unauthorized_scope(scopes[0])
+        self._record_invariant_event(
+            context,
+            scopes[0],
+            "violation",
+            reason,
+            constraint_parameters,
+        )
+        raise ExecutionAuthorizationError(reason, scopes[0])
 
     def call_action(
         self,
@@ -1217,6 +1406,13 @@ class ExecutionCapabilityFacade:
         """读取当前上下文；严格 capability 路径缺失上下文时拒绝执行。"""
         context = self._context_provider()
         if context is None and self._context_required_now():
+            self._record_invariant_event(
+                None,
+                action_scope,
+                "violation",
+                "missing_local_execution_context",
+                None,
+            )
             raise ExecutionAuthorizationError(
                 "missing_local_execution_context",
                 action_scope,
@@ -1228,6 +1424,33 @@ class ExecutionCapabilityFacade:
         if callable(self._context_required):
             return bool(self._context_required())
         return bool(self._context_required)
+
+    def _record_invariant_event(
+        self,
+        context: object | None,
+        action_scope: str,
+        status: ExecutionInvariantStatus,
+        reason: str,
+        constraint_parameters: Mapping[str, Any] | None,
+    ) -> None:
+        """向 monitor 记录 sink 不变式事件；monitor 故障时 fail-closed。"""
+        if self._invariant_monitor is None:
+            return
+        event = _build_execution_invariant_event(
+            context,
+            sink=self._invariant_sink,
+            action_scope=action_scope,
+            status=status,
+            reason=reason,
+            constraint_parameters=constraint_parameters,
+        )
+        try:
+            self._invariant_monitor.record(event)
+        except OSError as exc:
+            raise ExecutionAuthorizationError(
+                "invariant_monitor_unavailable",
+                action_scope,
+            ) from exc
 
 
 class GatedExecutionResource:

@@ -34,6 +34,7 @@ from saga.execution_gate import (
     ExecutionGateDecision,
     ExecutionGate,
     ExecutionGateRequest,
+    JSONLExecutionInvariantMonitor,
     LocalExecutionContext,
     ReplayStateStore,
     RevocationStore,
@@ -533,6 +534,10 @@ class Agent:
         """Install optional runtime callbacks into the local agent wrapper."""
         if hasattr(self.local_agent, "set_delegation_handler"):
             self.local_agent.set_delegation_handler(self._delegate_to_agent)
+        if hasattr(self.local_agent, "set_execution_invariant_monitor"):
+            workdir = getattr(self, "workdir", None)
+            monitor = JSONLExecutionInvariantMonitor(workdir) if workdir is not None else None
+            self.local_agent.set_execution_invariant_monitor(monitor)
 
     def _sync_local_agent_execution_capability_mode(self) -> None:
         """把外层 strict runtime-auth 模式同步给本地 capability facade。"""

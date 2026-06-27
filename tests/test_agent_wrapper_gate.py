@@ -9,7 +9,11 @@ from smolagents import tool
 from smolagents.memory import TaskStep
 
 from agent_backend.base import AgentWrapper, CodeAgentWrapper
-from saga.execution_gate import ExecutionAuthorizationError, reason_for_unauthorized_scope
+from saga.execution_gate import (
+    ExecutionAuthorizationError,
+    InMemoryExecutionInvariantMonitor,
+    reason_for_unauthorized_scope,
+)
 
 
 def _make_echo_tool():
@@ -128,6 +132,22 @@ class AgentWrapperExecutionGateTests(unittest.TestCase):
 
         self.assertEqual(result, "hello")
         self.assertEqual(wrapper._execution_context.seen_scopes, ["tool_call:echo"])
+
+    def test_tool_wrapper_records_execution_invariant_event(self) -> None:
+        """Wrapper 安装 monitor 后，工具 sink 授权路径应产生在线事件。"""
+        wrapper = _TestAgentWrapper.__new__(_TestAgentWrapper)
+        wrapper._execution_context = _StubExecutionContext({"tool_call:echo"})
+        monitor = InMemoryExecutionInvariantMonitor()
+        wrapper.set_execution_invariant_monitor(monitor)
+        gated_tool = wrapper._wrap_tool_with_execution_gate(_make_echo_tool())
+
+        self.assertEqual(gated_tool(text="hello"), "hello")
+
+        events = monitor.events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].status, "authorized")
+        self.assertEqual(events[0].action_scope, "tool_call:echo")
+        self.assertEqual(events[0].constraint_parameter_keys, ("text",))
 
     def test_tool_call_is_rejected_when_scope_mismatches(self) -> None:
         """A mismatched tool scope must fail closed before execution."""

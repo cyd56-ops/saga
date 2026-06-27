@@ -267,6 +267,14 @@ by the tests and paper tables.
   Configured revocation-store lookup failure fails closed as
   `revocation_store_unavailable`; revoked entries fail closed as
   `capability_revoked` or `parent_capability_revoked`.
+- The first online invariant monitor sits at `ExecutionCapabilityFacade` and
+  the protected sink wrappers. It records whether a sink action was authorized
+  or violated, binds the event to the public capability id and envelope digest
+  when a `LocalExecutionContext` is present, and logs only parameter key names,
+  not parameter values. Missing strict context, unauthorized scopes, budget
+  exhaustion, budget-store failures, and monitor backend failures all fail
+  closed before the protected sink runs. `JSONLExecutionInvariantMonitor` is a
+  local audit adapter, not a distributed monitor.
 - Tool permission failures after prompt entry are local execution-surface
   failures, not PQ-CAN signature-gate rejects. Wrapped tool calls expose
   `tool_not_authorized`; capability-facade failures expose

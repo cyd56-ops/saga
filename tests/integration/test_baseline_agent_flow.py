@@ -17,6 +17,7 @@ from saga.execution_gate import (
     ExecutionAuthorizationError,
     ExecutionGateDecision,
     ExecutionGateRequest,
+    JSONLExecutionInvariantMonitor,
     SignedRequestExecutionGate,
 )
 from saga.local_agent import LocalAgent
@@ -168,9 +169,13 @@ class BaselineAgentFlowTests(unittest.TestCase):
 
         def __init__(self) -> None:
             self.delegation_handler = None
+            self.execution_invariant_monitor = None
 
         def set_delegation_handler(self, handler) -> None:
             self.delegation_handler = handler
+
+        def set_execution_invariant_monitor(self, monitor) -> None:
+            self.execution_invariant_monitor = monitor
 
     class _StrictCapabilityAwareLocalAgent:
         """Local agent stub that records strict capability mode updates."""
@@ -1673,6 +1678,21 @@ class BaselineAgentFlowTests(unittest.TestCase):
         self.assertEqual(
             delegated_calls,
             [("alice@example.com:calendar_agent", "hello")],
+        )
+
+    def test_bind_local_agent_runtime_hooks_installs_invariant_monitor(self) -> None:
+        """带 workdir 的 Agent 应给本地 wrapper 安装 JSONL invariant monitor。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = Agent.__new__(Agent)
+            local_agent = self._DelegationAwareLocalAgent()
+            agent.local_agent = local_agent
+            agent.workdir = tmpdir
+
+            Agent._bind_local_agent_runtime_hooks(agent)
+
+        self.assertIsInstance(
+            local_agent.execution_invariant_monitor,
+            JSONLExecutionInvariantMonitor,
         )
 
     def test_strict_execution_gate_syncs_local_agent_capability_mode(self) -> None:
