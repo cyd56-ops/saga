@@ -2884,7 +2884,10 @@ GitHub / checkpoint 状态：
 
 - 已创建本地 checkpoint commit：
   - `73f20f7 checkpoint: add execution invariant monitor`
-- 仍需把 checkpoint 同步到 `origin/backup/repro-local`，不得推送到主开发分支。
+- 已创建工作日志同步 commit：
+  - `21f3f21 docs: record j9 checkpoint status`
+- J9 checkpoint 与后续工作日志同步已更新到 `origin/backup/repro-local`。
+- 未推送到主开发分支 `origin/repro-local`。
 
 ### 2026-06-09 Default Branch Proof-Hardening Sync Session
 
