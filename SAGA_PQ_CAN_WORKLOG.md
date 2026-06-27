@@ -2803,7 +2803,11 @@ GitHub / checkpoint 状态：
 
 - 已创建本地 checkpoint commit：
   - `a36e131 checkpoint: add capability revocation and ttl`
-- 仍需把 checkpoint 同步到 `origin/backup/repro-local`，不得推送到主开发分支。
+- 已创建工作日志同步 commit：
+  - `af04031 docs: record j8 checkpoint status`
+- 已推送到专用备份分支：
+  - `origin/backup/repro-local` 已更新到 `af04031`
+- 未推送到主开发分支 `origin/repro-local`。
 
 ### 2026-06-09 Default Branch Proof-Hardening Sync Session
 
