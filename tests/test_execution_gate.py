@@ -23,6 +23,7 @@ from saga.execution_gate import (
     FileReplayStateStore,
     RedisReplayStateStore,
     SignedRequestExecutionGate,
+    SQLiteCapabilityStateStore,
     SQLiteReplayStateStore,
     build_execution_gate_audit_record,
     validate_execution_gate_audit_chain,
@@ -69,6 +70,14 @@ class _UnavailableReplayStateStore:
     def reserve_request(self, request_id: str, envelope: RequestEnvelope) -> str:
         """模拟后端写入失败，执行路径应 fail-closed。"""
         raise OSError("replay store unavailable")
+
+
+class _UnavailableCapabilityStateStore:
+    """测试用不可用 capability state store，模拟预算后端故障。"""
+
+    def consume_budget(self, envelope: RequestEnvelope, action_scope: str) -> str:
+        """模拟后端扣减失败，执行路径应 fail-closed。"""
+        raise OSError("capability state unavailable")
 
 
 class SignedRequestExecutionGateTests(unittest.TestCase):
@@ -1082,6 +1091,180 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
         self.assertFalse(context.authorize_tool_call("get_free_time_slots"))
         self.assertFalse(context.authorize_memory_write())
         self.assertFalse(context.authorize_delegation())
+
+    def test_sqlite_capability_state_store_consumes_total_budget(self) -> None:
+        """SQLite budget store 应按 signed total budget 原子扣减执行次数。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-budget",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            execution_budget={"total": 1},
+            message="budgeted",
+            timestamp=self.now,
+            capability_id="cap-budget",
+        )
+        request = self._signed_request_from_envelope(envelope, "budgeted")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gate = SignedRequestExecutionGate(
+                CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+                {"alice@example.com:calendar_agent": self.key_pair.public_key},
+                now_fn=lambda: self.now,
+                capability_state_store=SQLiteCapabilityStateStore(
+                    Path(tmpdir) / "capability.sqlite3"
+                ),
+            )
+            context = gate.build_local_execution_context(request)
+            assert context is not None
+
+            context.require_tool_call("send_email")
+            with self.assertRaisesRegex(ExecutionAuthorizationError, "capability_budget_exhausted"):
+                context.require_tool_call("send_email")
+
+    def test_sqlite_capability_state_store_consumes_matching_scope_budget(self) -> None:
+        """更窄的 signed scope budget 只限制匹配的执行面。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-scope-budget",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email", "tool_call:add_calendar_event"],
+            execution_budget={"tool_call:send_email": 1},
+            message="budgeted",
+            timestamp=self.now,
+            capability_id="cap-scope-budget",
+        )
+        request = self._signed_request_from_envelope(envelope, "budgeted")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gate = SignedRequestExecutionGate(
+                CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+                {"alice@example.com:calendar_agent": self.key_pair.public_key},
+                now_fn=lambda: self.now,
+                capability_state_store=SQLiteCapabilityStateStore(
+                    Path(tmpdir) / "capability.sqlite3"
+                ),
+            )
+            context = gate.build_local_execution_context(request)
+            assert context is not None
+
+            context.require_tool_call("send_email")
+            with self.assertRaisesRegex(ExecutionAuthorizationError, "capability_budget_exhausted"):
+                context.require_tool_call("send_email")
+            context.require_tool_call("add_calendar_event")
+            context.require_tool_call("add_calendar_event")
+
+    def test_budgeted_context_fails_closed_without_state_store(self) -> None:
+        """带预算的 capability 缺少状态后端时必须拒绝受保护动作。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-missing-budget-store",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            execution_budget={"total": 1},
+            message="budgeted",
+            timestamp=self.now,
+        )
+        request = self._signed_request_from_envelope(envelope, "budgeted")
+
+        context = self.gate.build_local_execution_context(request)
+
+        assert context is not None
+        with self.assertRaisesRegex(ExecutionAuthorizationError, "capability_budget_store_missing"):
+            context.require_tool_call("send_email")
+
+    def test_budgeted_context_fails_closed_when_state_store_unavailable(self) -> None:
+        """预算状态后端故障时必须 fail-closed，不能放行 protected sink。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-unavailable-budget-store",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            execution_budget={"total": 1},
+            message="budgeted",
+            timestamp=self.now,
+        )
+        request = self._signed_request_from_envelope(envelope, "budgeted")
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            capability_state_store=_UnavailableCapabilityStateStore(),
+        )
+
+        context = gate.build_local_execution_context(request)
+
+        assert context is not None
+        with self.assertRaisesRegex(
+            ExecutionAuthorizationError,
+            "capability_budget_store_unavailable",
+        ):
+            context.require_tool_call("send_email")
+
+    def test_sqlite_capability_state_store_allows_only_budgeted_concurrent_consumers(self) -> None:
+        """并发消费同一 capability 时，通过次数不得超过 signed total budget。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-concurrent-budget",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            execution_budget={"total": 2},
+            message="budgeted",
+            timestamp=self.now,
+            capability_id="cap-concurrent-budget",
+        )
+        request = self._signed_request_from_envelope(envelope, "budgeted")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gate = SignedRequestExecutionGate(
+                CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+                {"alice@example.com:calendar_agent": self.key_pair.public_key},
+                now_fn=lambda: self.now,
+                capability_state_store=SQLiteCapabilityStateStore(
+                    Path(tmpdir) / "capability.sqlite3",
+                    timeout_seconds=10.0,
+                ),
+            )
+
+            def consume_once() -> str:
+                context = gate.build_local_execution_context(request)
+                assert context is not None
+                try:
+                    context.require_tool_call("send_email")
+                except ExecutionAuthorizationError as exc:
+                    return exc.reason
+                return "consumed"
+
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                reasons = list(executor.map(lambda _: consume_once(), range(4)))
+
+            self.assertEqual(reasons.count("consumed"), 2)
+            self.assertEqual(reasons.count("capability_budget_exhausted"), 2)
 
     def test_authorize_rejects_tampered_authorized_scopes(self) -> None:
         """Changing the signed extra scope list must invalidate the signature."""

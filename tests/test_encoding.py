@@ -14,6 +14,7 @@ from saga.messages import (
     action_scopes_allow,
     build_request_envelope,
     normalize_authorized_scopes,
+    normalize_execution_budget,
     normalize_scope_constraints,
     parse_action_scope,
     parse_request_envelope,
@@ -249,6 +250,48 @@ class RequestEnvelopeTests(unittest.TestCase):
         self.assertIn("\"scope_constraints\"", envelope.canonical_json())
         parsed = parse_request_envelope(envelope.canonical_json())
         self.assertEqual(parsed.as_dict(), envelope.as_dict())
+
+    def test_execution_budget_is_canonicalized_and_signed(self) -> None:
+        """执行预算应规范化后进入 canonical envelope digest。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="token-1",
+            session_id="session-1",
+            turn_id="turn-1",
+            issued_at=datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 5, 7, 14, 0, 0, tzinfo=timezone.utc),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            execution_budget={"tool_call:send_email": 1, "total": 2},
+            message="hello",
+        )
+
+        self.assertEqual(
+            envelope.execution_budget,
+            {"tool_call:send_email": 1, "total": 2},
+        )
+        self.assertIn("\"execution_budget\"", envelope.canonical_json())
+        parsed = parse_request_envelope(envelope.canonical_json())
+        self.assertEqual(parsed.as_dict(), envelope.as_dict())
+
+    def test_execution_budget_rejects_unknown_scope_or_non_integer_limit(self) -> None:
+        """预算 key 必须是 total 或已授权执行面，预算值必须是非负整数。"""
+        with self.assertRaisesRegex(ValueError, "covered by authorized_scopes"):
+            build_request_envelope(
+                sender_aid="alice@example.com:calendar_agent",
+                receiver_aid="bob@example.com:email_agent",
+                token="token-1",
+                session_id="session-1",
+                turn_id="turn-1",
+                issued_at=datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc),
+                expires_at=datetime(2026, 5, 7, 14, 0, 0, tzinfo=timezone.utc),
+                action_scope="llm_prompt",
+                execution_budget={"tool_call:send_email": 1},
+                message="hello",
+            )
+        with self.assertRaisesRegex(ValueError, "non-negative integers"):
+            normalize_execution_budget({"total": True})
 
     def test_scope_constraint_evaluator_accepts_and_rejects_parameters(self) -> None:
         """封闭 predicate evaluator 应按签名约束检查运行时参数。"""

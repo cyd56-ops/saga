@@ -525,6 +525,15 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `entry_hash` 基于稳定 canonical JSON 计算，且不把 `entry_hash` 自身纳入被哈希内容
   - 旧普通 JSONL 行可作为 legacy prefix，被第一条 chained record 的 `prev_hash` 锚定
   - 本地 hash chain 可检测中间删改；末尾截断检测必须依赖外部 tail-hash anchor 或 checkpoint
+- 当前 signed capability 已支持第一版 execution budget：
+  - `saga/messages.py` 新增 `execution_budget` canonical envelope field，并写入 signed canonical JSON / digest
+  - `execution_budget` key 只允许 `total` 或已授权 action scope，例如 `tool_call:send_email`
+  - 预算值只允许非负整数；`0` 表示已耗尽，缺省 `{}` 表示无限制
+  - `saga/execution_gate.py` 新增 `CapabilityStateStore` 协议
+  - `saga/execution_gate.py` 新增 `SQLiteCapabilityStateStore`，用 SQLite 事务原子扣减 `total` 与所有匹配 per-scope budget
+  - `LocalExecutionContext.require_action(...)` 会在授权通过后、protected sink 执行前消费预算
+  - 带预算的 capability 缺少状态后端、状态后端不可用、预算冲突或预算耗尽时 fail-closed
+  - file-marker replay store 不作为并发预算主后端；当前预算 contract 只落地 SQLite 本地 research/test adapter
 - 当前 canonical request envelope 已支持第一版参数级 / 受约束 scope：
   - `saga/messages.py` 新增 `scope_constraints`，并把约束写入 canonical envelope digest。
   - 约束 schema 只允许封闭谓词集合：`eq`、`in`、`lte`、`gte`、`max_length`；不允许 callback、regex 或任意表达式。
@@ -898,7 +907,7 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
 - SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
-- 后续执行访问控制扩展：`进行中`（J1-J5 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit 与 fail-closed / tamper-evidence 测试已落地；下一步为 capability budget）
+- 后续执行访问控制扩展：`进行中`（J1-J7 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget 与 SQLite contract 已落地；下一步为 revocation / short TTL）
 
 ### 3.4 阻塞 / 风险
 
@@ -912,6 +921,17 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `.venv/bin/python -m pytest -q`
   - `.venv/bin/python -m pytest -q tests/security`
   - `.venv/bin/python -m pytest -q tests/integration`
+- 已于 `2026-06-27` 重新确认 J6/J7 capability budget 与 SQLite contract 后测试结果：
+  - `.venv/bin/python -m py_compile saga/messages.py saga/execution_gate.py tests/test_encoding.py tests/test_execution_gate.py` -> success
+  - `.venv/bin/python -m pytest -q tests/test_encoding.py tests/test_execution_gate.py` -> `90 passed`
+  - `.venv/bin/python -m pytest -q tests/integration/test_baseline_agent_flow.py` -> `34 passed`
+  - `.venv/bin/python -m pytest -q tests/test_agent_wrapper_gate.py tests/test_security_kernel.py tests/test_strict_runtime_auth_evidence_summary.py` -> `50 passed, 10 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/test_negative_injection_runner.py tests/test_real_negative_runner.py tests/test_end_to_end_validation.py` -> `33 passed, 3 subtests passed`
+  - `.venv/bin/python -m pytest -q` -> `446 passed, 69 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `38 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 `pyproject.toml`、`setup.cfg`、`tox.ini`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `pyrightconfig.json`，因此未运行 `ruff check .` / `mypy .`。
 - 已于 `2026-06-27` 重新确认 J5 hash-chained audit 后测试结果：
   - `.venv/bin/python -m py_compile saga/execution_gate.py tests/test_execution_gate.py` -> success
   - `.venv/bin/python -m pytest -q tests/test_execution_gate.py` -> `59 passed`
@@ -1876,8 +1896,8 @@ protected sinks 至少覆盖：
 - J3. 实现确定性 predicate evaluator 与 fail-closed 参数校验测试：`已完成`（第一阶段：runtime parameters 已传入 gate/context/facade；约束缺参、篡改、越界、未知 op、非有限数字均 fail-closed）
 - J4. 定义 delegation constraint attenuation 规则，证明子 capability 只能收窄参数空间：`已完成`（第一阶段：父 `scope_constraints` 已进入 child envelope 的 `parent_scope_constraints`，parent fact source 支持 scopes+constraints，子 capability 删除、放宽或移动到更宽 scope 均 fail-closed）
 - J5. 将 execution-gate audit JSONL 升级为 hash-chained tamper-evident log：`已完成`（第一阶段：`seq / prev_hash / entry_hash`、legacy JSONL prefix anchoring、tamper detection 与外部 tail-hash anchor 截断检测入口已落地）
-- J6. 设计 `CapabilityStateStore` 与 capability budget 原子消费接口：`未开始`
-- J7. 实现 SQLite budget contract 测试，并明确 file-marker 不作为并发预算主后端：`未开始`
+- J6. 设计 `CapabilityStateStore` 与 capability budget 原子消费接口：`已完成`（第一阶段：signed `execution_budget`、`CapabilityStateStore.consume_budget(...)`、缺 store / store failure / budget exhausted fail-closed 已落地）
+- J7. 实现 SQLite budget contract 测试，并明确 file-marker 不作为并发预算主后端：`已完成`（第一阶段：`SQLiteCapabilityStateStore` 用事务原子消费 `total` 与 per-scope budget，并发消费不超过 signed limit；file-marker replay store 不作为预算后端）
 - J8. 设计 revocation store、短 TTL 默认值与 parent capability 级联撤销语义：`未开始`
 - J9. 在 capability facade / sink wrapper 上加入第一版 online invariant monitor：`未开始`
 - J10. 设计轻量 IFC 标签、flow policy、source/transform/egress sink 分类和显式 declassify scope：`未开始`
@@ -1889,8 +1909,8 @@ protected sinks 至少覆盖：
 
 0. 当前默认主线调整为 `Execution access control extensions for signed intent capabilities`：
    - 旧的 proof-hardening / sink-centric signed intent execution gate 主线已经完成第一阶段闭环，不再有必须补完的旧主线 blocker。
-   - J1-J5 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit 与 fail-closed / tamper-evidence 测试已接入 runtime gate。
-   - 下一步默认继续 J6/J7：capability budget 与 SQLite contract；随后再推进 revocation / short TTL、online invariant monitor、IFC 与不可信推理平台论文论证。
+   - J1-J7 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget 与 SQLite contract 已接入 runtime gate。
+   - 下一步默认继续 J8：revocation store、短 TTL 默认值与 parent capability 级联撤销语义；随后再推进 online invariant monitor、IFC 与不可信推理平台论文论证。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
    - ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
 
@@ -2045,11 +2065,11 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 从 J6/J7 开始推进 capability budget：
-   - 设计 `CapabilityStateStore` 与原子消费接口。
-   - 优先实现 SQLite budget contract 测试。
-   - 明确 file-marker 后端不作为并发预算主后端。
-2. J8 revocation、J9 monitor 在 budget 状态接口稳定后推进。
+1. 从 J8 开始推进 revocation / short TTL：
+   - 设计 `RevocationStore`，支持 `capability_id` 与 `parent_envelope_digest` 撤销。
+   - 撤销检查应位于 PQ/CAN 验签后、`LocalExecutionContext` 构造前。
+   - 明确短 TTL 默认值与续签 / epoch / 单调计数器的后续边界。
+2. J9 monitor 在 revocation 状态接口稳定后推进。
 3. J10 IFC 后置为机密性扩展；J11 论文 threat model 可先以文档形式推进，不阻塞代码。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
@@ -2086,6 +2106,87 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-06-27 Capability Budget J6/J7 Implementation Session
+
+目标：
+
+- 完成 J6/J7：设计 `CapabilityStateStore` 与 capability budget 原子消费接口。
+- 将 budget 纳入 signed canonical request envelope。
+- 实现 SQLite budget contract，并明确 file-marker replay store 不作为并发预算主后端。
+
+已做工作：
+
+- `saga/messages.py`
+  - 新增 `EXECUTION_BUDGET_TOTAL_KEY = "total"`。
+  - 新增 `normalize_execution_budget(...)`。
+  - `RequestEnvelope` 新增 `execution_budget` 字段，并进入 `as_dict()` / canonical JSON / digest。
+  - `execution_budget` key 只允许：
+    - `total`
+    - 已被 `authorized_scopes` 覆盖的 action scope，例如 `tool_call:send_email`
+  - 预算值只允许非负整数；bool、负数、浮点数和未知 scope 均 fail-closed。
+- `saga/execution_gate.py`
+  - 新增 `CapabilityStateStore` protocol。
+  - 新增 `SQLiteCapabilityStateStore`。
+  - SQLite budget store 用 `(capability_id, envelope_digest, budget_scope)` 复合主键记录预算上限与已消费次数。
+  - `consume_budget(...)` 在单个 SQLite transaction 中同时扣减 `total` 与所有匹配 per-scope budget。
+  - `LocalExecutionContext` 新增可选 `capability_state_store`。
+  - `LocalExecutionContext.require_action(...)` 在 scope / predicate 授权通过后、protected sink 执行前消费预算。
+  - 带预算 capability 缺少 state store 时以 `capability_budget_store_missing` fail-closed。
+  - state store 不可用时以 `capability_budget_store_unavailable` fail-closed。
+  - 预算耗尽时以 `capability_budget_exhausted` fail-closed。
+  - `SignedRequestExecutionGate` 支持注入 `capability_state_store` 并传入下游 `LocalExecutionContext`。
+- `tests/test_encoding.py`
+  - 覆盖 `execution_budget` 规范化、签名覆盖、未知 scope 拒绝和非整数预算拒绝。
+- `tests/test_execution_gate.py`
+  - 覆盖 SQLite `total` budget 消费与耗尽。
+  - 覆盖 per-scope budget 只限制匹配执行面。
+  - 覆盖带预算 context 缺 state store fail-closed。
+  - 覆盖 state store 不可用 fail-closed。
+  - 覆盖并发消费同一 capability 时通过次数不超过 signed total budget。
+- `README.md` / `SECURITY.md`
+  - 记录 signed `execution_budget` schema、SQLite local contract、file-marker 非预算后端和 fail-closed 语义。
+- 本工作文档：
+  - J6/J7 标记为 `已完成`。
+  - 当前下一步切换到 J8 revocation / short TTL。
+
+已验证：
+
+- `.venv/bin/python -m py_compile saga/messages.py saga/execution_gate.py tests/test_encoding.py tests/test_execution_gate.py` -> success
+- `.venv/bin/python -m pytest -q tests/test_encoding.py tests/test_execution_gate.py` -> `90 passed`
+- `.venv/bin/python -m pytest -q tests/integration/test_baseline_agent_flow.py` -> `34 passed`
+- `.venv/bin/python -m pytest -q tests/test_agent_wrapper_gate.py tests/test_security_kernel.py tests/test_strict_runtime_auth_evidence_summary.py` -> `50 passed, 10 subtests passed`
+- `.venv/bin/python -m pytest -q tests/test_negative_injection_runner.py tests/test_real_negative_runner.py tests/test_end_to_end_validation.py` -> `33 passed, 3 subtests passed`
+- `.venv/bin/python -m pytest -q` -> `446 passed, 69 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `38 passed, 12 subtests passed`
+- `git diff --check` -> no output
+- 未发现 `pyproject.toml`、`setup.cfg`、`tox.ini`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `pyrightconfig.json`，因此未运行 `ruff check .` / `mypy .`。
+
+安全边界：
+
+- 本轮没有实现生产级密码算法；toy LWE / compiled verifier 边界不变。
+- `SQLiteCapabilityStateStore` 是本地 research/test SQL-style contract proof，不声称分布式一致性。
+- file-marker replay store 只用于 replay marker，不作为 capability budget 后端。
+- 当前预算消费覆盖 `LocalExecutionContext.require_action(...)` 路径，因此 tool / memory / delegation facade protected sinks 会在副作用前消费预算。
+- 当前 prompt surface 授权仍使用只读 `authorize_action("llm_prompt")`；如果后续需要 prompt budget，应将 prompt gate 改为 consume/require 语义并补无副作用测试。
+- 当前不实现 parent/child capability budget attenuation；delegated child 的 budget 作为子 capability 自身 signed budget 处理。若后续要限制委托链总体预算，应扩展 parent fact source 与 J8/J9 状态接口。
+
+待提交文件：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `saga/messages.py`
+- `saga/execution_gate.py`
+- `tests/test_encoding.py`
+- `tests/test_execution_gate.py`
+
+本轮待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+
+GitHub / checkpoint 状态：
+
+- 待最终 checkpoint 后补充本地提交与备份推送结果。
 
 ### 2026-06-27 Hash-Chained Audit J5 Implementation Session
 

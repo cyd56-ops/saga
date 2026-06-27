@@ -26,6 +26,7 @@ BASE_ACTION_SCOPES = frozenset(
     }
 )
 SUPPORTED_SCOPE_CONSTRAINT_OPS = frozenset({"eq", "in", "lte", "gte", "max_length"})
+EXECUTION_BUDGET_TOTAL_KEY = "total"
 CONSTRAINT_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 MISSING_CONSTRAINT_VALUE = object()
 ACTION_SCOPE_RE = re.compile(
@@ -121,6 +122,26 @@ def normalize_scope_constraints(
         )
         if normalized_constraints:
             normalized[scope] = normalized_constraints
+    return dict(sorted(normalized.items()))
+
+
+def normalize_execution_budget(
+    execution_budget: Mapping[str, Any] | None,
+) -> dict[str, int]:
+    """规范化 signed capability 执行预算；缺省表示无限制。"""
+    if execution_budget is None:
+        return {}
+    if not isinstance(execution_budget, Mapping):
+        raise TypeError("execution_budget must be a mapping")
+    normalized: dict[str, int] = {}
+    for scope, limit in execution_budget.items():
+        if not isinstance(scope, str):
+            raise TypeError("execution_budget keys must be strings")
+        if scope != EXECUTION_BUDGET_TOTAL_KEY:
+            parse_action_scope(scope)
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
+            raise ValueError("execution_budget values must be non-negative integers")
+        normalized[scope] = limit
     return dict(sorted(normalized.items()))
 
 
@@ -413,6 +434,7 @@ class RequestEnvelope:
     message_digest: str
     authorized_scopes: tuple[str, ...] | list[str] | None = None
     scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None = None
+    execution_budget: Mapping[str, Any] | None = None
     domain: str = DEFAULT_ENVELOPE_DOMAIN
     content_type: str = "text"
     provider_id: str = ""
@@ -435,9 +457,16 @@ class RequestEnvelope:
             raise ValueError("receiver_aid must be a valid AID")
         authorized_scopes = normalize_authorized_scopes(self.action_scope, self.authorized_scopes)
         scope_constraints = normalize_scope_constraints(self.scope_constraints)
+        execution_budget = normalize_execution_budget(self.execution_budget)
         for constrained_scope in scope_constraints:
             if not action_scopes_allow(authorized_scopes, constrained_scope):
                 raise ValueError("scope_constraints keys must be covered by authorized_scopes")
+        for budget_scope in execution_budget:
+            if budget_scope != EXECUTION_BUDGET_TOTAL_KEY and not action_scopes_allow(
+                authorized_scopes,
+                budget_scope,
+            ):
+                raise ValueError("execution_budget keys must be covered by authorized_scopes")
         parent_authorized_scopes = self._normalize_parent_authorized_scopes(
             self.parent_authorized_scopes
         )
@@ -482,6 +511,7 @@ class RequestEnvelope:
         object.__setattr__(self, "message_digest", self.message_digest.lower())
         object.__setattr__(self, "authorized_scopes", authorized_scopes)
         object.__setattr__(self, "scope_constraints", scope_constraints)
+        object.__setattr__(self, "execution_budget", execution_budget)
         object.__setattr__(self, "capability_id", capability_id)
         object.__setattr__(self, "parent_envelope_digest", parent_envelope_digest)
         object.__setattr__(self, "parent_authorized_scopes", parent_authorized_scopes)
@@ -499,6 +529,7 @@ class RequestEnvelope:
             "content_type": self.content_type,
             "delegation_depth": self.delegation_depth,
             "domain": self.domain,
+            "execution_budget": dict(self.execution_budget),
             "expires_at": self.expires_at,
             "issued_at": self.issued_at,
             "max_delegation_depth": self.max_delegation_depth,
@@ -577,6 +608,7 @@ def build_request_envelope(
     action_scope: str,
     authorized_scopes: Iterable[str] | None = None,
     scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None = None,
+    execution_budget: Mapping[str, Any] | None = None,
     message: str | bytes,
     domain: str = DEFAULT_ENVELOPE_DOMAIN,
     content_type: str = "text",
@@ -617,6 +649,7 @@ def build_request_envelope(
         action_scope=action_scope,
         authorized_scopes=tuple(authorized_scopes) if authorized_scopes is not None else None,
         scope_constraints=scope_constraints,
+        execution_budget=execution_budget,
         message_digest=sha256_hex(message_bytes),
         domain=domain,
         content_type=content_type,

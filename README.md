@@ -400,10 +400,13 @@ research security boundary and non-production cryptography status.
 
 The signed request envelope is the runtime capability object. Its canonical
 bytes bind `capability_id`, `authorized_scopes`, optional
-`parent_envelope_digest`, parent scope metadata, and delegation depth. Delegated
+`parent_envelope_digest`, parent scope metadata, delegation depth, and optional
+`execution_budget`. Budget keys are `total` or action scopes such as
+`tool_call:send_email`; values are non-negative integer use limits. Delegated
 child envelopes must reference a known parent digest and may only attenuate the
 parent scope set; they cannot add new tool, memory, prompt, or delegation
-authority.
+authority. Budgeted capabilities require an injected state backend such as
+`SQLiteCapabilityStateStore`; missing or unavailable budget state fails closed.
 
 The experiment entrypoints also append a task-level structured result row under
 `experiments/results/<task-name>.jsonl`, including the run mode, peer AID,

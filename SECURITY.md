@@ -234,14 +234,26 @@ by the tests and paper tables.
 - Signed request envelopes are treated as signed intent capabilities. The
   canonical payload includes `capability_id`, `parent_envelope_digest`,
   `parent_authorized_scopes`, `parent_scope_constraints`,
-  `delegation_depth`, and `max_delegation_depth`. A delegated child capability
-  must bind a known parent envelope digest, the parent scopes and parameter
-  constraints must match the local parent-capability fact source, every child
-  `authorized_scope` must be attenuated from the parent scope set, and every
-  parent parameter constraint that applies to the child capability must be
-  preserved or narrowed. Deleting a parent constraint, relaxing a predicate, or
-  moving a narrow parent constraint to a wider child scope fails closed before
-  local execution.
+  `delegation_depth`, `max_delegation_depth`, and optional
+  `execution_budget`. A delegated child capability must bind a known parent
+  envelope digest, the parent scopes and parameter constraints must match the
+  local parent-capability fact source, every child `authorized_scope` must be
+  attenuated from the parent scope set, and every parent parameter constraint
+  that applies to the child capability must be preserved or narrowed. Deleting
+  a parent constraint, relaxing a predicate, or moving a narrow parent
+  constraint to a wider child scope fails closed before local execution.
+- `execution_budget` is a signed JSON object whose keys are `total` or action
+  scopes such as `tool_call:send_email`; values are non-negative integer use
+  limits. `LocalExecutionContext.require_action(...)` consumes matching budgets
+  before protected tool, memory, and delegation side effects. A
+  `CapabilityStateStore` backend must atomically debit the global `total`
+  budget and all matching per-scope budgets. The checked-in
+  `SQLiteCapabilityStateStore` is the first local SQL-style contract proof. It
+  uses SQLite transactions and a compound key of `capability_id`,
+  `envelope_digest`, and budget scope; it does not claim distributed
+  consistency. File-marker replay stores are not budget backends. Missing,
+  unavailable, conflicting, or exhausted budget state fails closed before the
+  protected action runs.
 - Tool permission failures after prompt entry are local execution-surface
   failures, not PQ-CAN signature-gate rejects. Wrapped tool calls expose
   `tool_not_authorized`; capability-facade failures expose

@@ -16,9 +16,12 @@ import threading
 from typing import Any, Literal, ParamSpec, Protocol, TypeVar
 
 from saga.messages import (
+    EXECUTION_BUDGET_TOTAL_KEY,
     RequestEnvelope,
     action_scopes_are_attenuated,
     action_scopes_allow,
+    action_scope_allows,
+    normalize_execution_budget,
     normalize_scope_constraints,
     parse_action_scope,
     parse_request_envelope,
@@ -668,6 +671,148 @@ class RedisReplayStateStore:
         return f"{self.key_prefix}{request_id}"
 
 
+class CapabilityStateStore(Protocol):
+    """原子消费 signed capability 执行预算的状态后端。"""
+
+    def consume_budget(
+        self,
+        envelope: RequestEnvelope,
+        action_scope: str,
+    ) -> Literal["consumed", "exhausted"]:
+        """为指定执行面原子扣减预算；预算耗尽时返回 exhausted。"""
+
+
+class SQLiteCapabilityStateStore:
+    """使用 SQLite 事务实现 capability budget 的本地 SQL-style 状态后端。"""
+
+    def __init__(self, database_path: str | Path, *, timeout_seconds: float = 5.0) -> None:
+        """初始化 SQLite budget store，并创建预算消费表。"""
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        self.database_path = Path(database_path)
+        if self.database_path.parent != Path("."):
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.timeout_seconds = timeout_seconds
+        self._ensure_schema()
+
+    def consume_budget(
+        self,
+        envelope: RequestEnvelope,
+        action_scope: str,
+    ) -> Literal["consumed", "exhausted"]:
+        """在单个 SQLite 事务中扣减 total 与匹配执行面预算。"""
+        budget = normalize_execution_budget(envelope.execution_budget)
+        budget_scopes = _budget_scopes_for_action(budget, action_scope)
+        if not budget_scopes:
+            return "consumed"
+        rows = [
+            (
+                envelope.capability_id,
+                envelope.hex_digest(),
+                budget_scope,
+                budget[budget_scope],
+            )
+            for budget_scope in budget_scopes
+        ]
+        try:
+            with closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                for capability_id, envelope_digest, budget_scope, limit in rows:
+                    row = connection.execute(
+                        """
+                        SELECT budget_limit, consumed_count
+                        FROM saga_capability_budgets
+                        WHERE capability_id = ?
+                          AND envelope_digest = ?
+                          AND budget_scope = ?
+                        """,
+                        (capability_id, envelope_digest, budget_scope),
+                    ).fetchone()
+                    if row is None:
+                        connection.execute(
+                            """
+                            INSERT INTO saga_capability_budgets (
+                                capability_id,
+                                envelope_digest,
+                                budget_scope,
+                                budget_limit,
+                                consumed_count,
+                                updated_at
+                            )
+                            VALUES (?, ?, ?, ?, 0, ?)
+                            """,
+                            (
+                                capability_id,
+                                envelope_digest,
+                                budget_scope,
+                                limit,
+                                datetime.now(tz=timezone.utc).isoformat(),
+                            ),
+                        )
+                        consumed_count = 0
+                    else:
+                        stored_limit, consumed_count = row
+                        if stored_limit != limit:
+                            connection.rollback()
+                            raise OSError("sqlite capability budget limit mismatch")
+                    if consumed_count >= limit:
+                        connection.rollback()
+                        return "exhausted"
+
+                for capability_id, envelope_digest, budget_scope, _limit in rows:
+                    connection.execute(
+                        """
+                        UPDATE saga_capability_budgets
+                        SET consumed_count = consumed_count + 1,
+                            updated_at = ?
+                        WHERE capability_id = ?
+                          AND envelope_digest = ?
+                          AND budget_scope = ?
+                        """,
+                        (
+                            datetime.now(tz=timezone.utc).isoformat(),
+                            capability_id,
+                            envelope_digest,
+                            budget_scope,
+                        ),
+                    )
+                connection.commit()
+        except sqlite3.Error as exc:
+            raise OSError("sqlite capability state database is unavailable") from exc
+        return "consumed"
+
+    def _connect(self) -> sqlite3.Connection:
+        """打开短生命周期连接，避免跨线程共享 SQLite connection 状态。"""
+        connection = sqlite3.connect(self.database_path, timeout=self.timeout_seconds)
+        connection.execute(f"PRAGMA busy_timeout = {int(self.timeout_seconds * 1000)}")
+        return connection
+
+    def _ensure_schema(self) -> None:
+        """创建 capability budget 表；复合主键绑定信封与预算 scope。"""
+        try:
+            with closing(self._connect()) as connection:
+                with connection:
+                    connection.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS saga_capability_budgets (
+                            capability_id TEXT NOT NULL,
+                            envelope_digest TEXT NOT NULL,
+                            budget_scope TEXT NOT NULL,
+                            budget_limit INTEGER NOT NULL,
+                            consumed_count INTEGER NOT NULL,
+                            updated_at TEXT NOT NULL,
+                            PRIMARY KEY (
+                                capability_id,
+                                envelope_digest,
+                                budget_scope
+                            )
+                        )
+                        """
+                    )
+        except sqlite3.Error as exc:
+            raise RuntimeError("sqlite capability state database is unavailable") from exc
+
+
 @dataclass(frozen=True)
 class LocalExecutionContext:
     """Execution context propagated into local prompt/tool execution."""
@@ -676,6 +821,7 @@ class LocalExecutionContext:
     receiver_aid: str
     request_envelope: RequestEnvelope
     pq_signature: bytes
+    capability_state_store: CapabilityStateStore | None = None
 
     def authorize_action(
         self,
@@ -701,10 +847,36 @@ class LocalExecutionContext:
         action_scope: str,
         parameters: Mapping[str, Any] | None = None,
     ) -> None:
-        """Raise ``PermissionError`` unless ``action_scope`` is authorized."""
+        """Raise ``PermissionError`` unless ``action_scope`` is authorized and funded."""
         if not self.authorize_action(action_scope, parameters):
             raise ExecutionAuthorizationError(
                 reason_for_unauthorized_scope(action_scope),
+                action_scope,
+            )
+        self._consume_budget(action_scope)
+
+    def _consume_budget(self, action_scope: str) -> None:
+        """按 signed execution budget 原子扣减本次受保护动作。"""
+        if not self.request_envelope.execution_budget:
+            return
+        if self.capability_state_store is None:
+            raise ExecutionAuthorizationError(
+                "capability_budget_store_missing",
+                action_scope,
+            )
+        try:
+            result = self.capability_state_store.consume_budget(
+                self.request_envelope,
+                action_scope,
+            )
+        except OSError as exc:
+            raise ExecutionAuthorizationError(
+                "capability_budget_store_unavailable",
+                action_scope,
+            ) from exc
+        if result == "exhausted":
+            raise ExecutionAuthorizationError(
+                "capability_budget_exhausted",
                 action_scope,
             )
 
@@ -934,6 +1106,23 @@ def reason_for_unauthorized_scope(action_scope: str) -> str:
     return "execution_scope_not_authorized"
 
 
+def _budget_scopes_for_action(
+    execution_budget: Mapping[str, int],
+    action_scope: str,
+) -> tuple[str, ...]:
+    """返回本次动作需要同时扣减的 total 与匹配 scope 预算。"""
+    parse_action_scope(action_scope)
+    budget_scopes: list[str] = []
+    if EXECUTION_BUDGET_TOTAL_KEY in execution_budget:
+        budget_scopes.append(EXECUTION_BUDGET_TOTAL_KEY)
+    for budget_scope in execution_budget:
+        if budget_scope == EXECUTION_BUDGET_TOTAL_KEY:
+            continue
+        if action_scope_allows(budget_scope, action_scope):
+            budget_scopes.append(budget_scope)
+    return tuple(budget_scopes)
+
+
 @dataclass(frozen=True)
 class ParentCapabilityFacts:
     """本地已接受父 capability 的事实源，用于校验委托子 capability 收窄关系。"""
@@ -1029,6 +1218,7 @@ class SignedRequestExecutionGate:
         now_fn: Callable[[], datetime] | None = None,
         replay_state_dir: str | Path | None = None,
         replay_state_store: ReplayStateStore | None = None,
+        capability_state_store: CapabilityStateStore | None = None,
         parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None = None,
     ) -> None:
         """Store a CAN gate, trusted public keys, and optional shared replay state."""
@@ -1036,6 +1226,7 @@ class SignedRequestExecutionGate:
             raise ValueError("configure either replay_state_dir or replay_state_store, not both")
         self.can_gate = can_gate
         self.trusted_public_keys = dict(trusted_public_keys)
+        self.capability_state_store = capability_state_store
         self.parent_capability_store = _normalize_parent_capability_store(parent_capability_store)
         self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
         self._seen_request_ids: set[str] = set()
@@ -1288,6 +1479,7 @@ class SignedRequestExecutionGate:
             receiver_aid=request.receiver_aid,
             request_envelope=decision.request_envelope,
             pq_signature=decision.pq_signature,
+            capability_state_store=self.capability_state_store,
         )
 
     def build_local_execution_context(
