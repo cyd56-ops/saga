@@ -223,12 +223,15 @@ by the tests and paper tables.
   separate execution surface checked before `local_agent.run()`.
 - Signed request envelopes are treated as signed intent capabilities. The
   canonical payload includes `capability_id`, `parent_envelope_digest`,
-  `parent_authorized_scopes`, `delegation_depth`, and
-  `max_delegation_depth`. A delegated child capability must bind a known parent
-  envelope digest, the parent scopes must match the local parent-capability fact
-  source, and every child `authorized_scope` must be attenuated from the parent
-  scope set. Missing/unknown parent digest, parent-scope mismatch, scope
-  expansion, or depth overflow must fail closed before local execution.
+  `parent_authorized_scopes`, `parent_scope_constraints`,
+  `delegation_depth`, and `max_delegation_depth`. A delegated child capability
+  must bind a known parent envelope digest, the parent scopes and parameter
+  constraints must match the local parent-capability fact source, every child
+  `authorized_scope` must be attenuated from the parent scope set, and every
+  parent parameter constraint that applies to the child capability must be
+  preserved or narrowed. Deleting a parent constraint, relaxing a predicate, or
+  moving a narrow parent constraint to a wider child scope fails closed before
+  local execution.
 - Tool permission failures after prompt entry are local execution-surface
   failures, not PQ-CAN signature-gate rejects. Wrapped tool calls expose
   `tool_not_authorized`; capability-facade failures expose

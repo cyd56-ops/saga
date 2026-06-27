@@ -160,6 +160,123 @@ def action_scopes_are_attenuated(
     return all(action_scopes_allow(parent_scope_tuple, child_scope) for child_scope in child_scopes)
 
 
+def scope_constraints_are_attenuated(
+    parent_scopes: Iterable[str],
+    parent_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None,
+    child_scopes: Iterable[str],
+    child_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None,
+) -> bool:
+    """判断委托子 capability 的参数约束是否只保留或收窄父 capability。
+
+    父约束适用于子授权面时，子 capability 必须提供同字段且能蕴含父谓词的约束；
+    子约束可以放到更窄 scope 上，但不能移到更宽 scope 或直接删除。
+    """
+    parent_scope_tuple = tuple(parent_scopes)
+    child_scope_tuple = tuple(child_scopes)
+    if not action_scopes_are_attenuated(parent_scope_tuple, child_scope_tuple):
+        return False
+
+    normalized_parent = normalize_scope_constraints(parent_constraints)
+    normalized_child = normalize_scope_constraints(child_constraints)
+    for parent_scope, constraints in normalized_parent.items():
+        for child_scope in child_scope_tuple:
+            obligation_scope = _constraint_obligation_scope(parent_scope, child_scope)
+            if obligation_scope is None:
+                continue
+            for parent_constraint in constraints:
+                if not _has_attenuating_child_constraint(
+                    parent_scope,
+                    obligation_scope,
+                    parent_constraint,
+                    normalized_child,
+                ):
+                    return False
+    return True
+
+
+def _constraint_obligation_scope(
+    parent_constrained_scope: str,
+    child_authorized_scope: str,
+) -> str | None:
+    """计算父约束和子授权 scope 的交集代表；无交集时返回 None。"""
+    if action_scope_allows(parent_constrained_scope, child_authorized_scope):
+        return child_authorized_scope
+    if action_scope_allows(child_authorized_scope, parent_constrained_scope):
+        return parent_constrained_scope
+    return None
+
+
+def _has_attenuating_child_constraint(
+    parent_constrained_scope: str,
+    obligation_scope: str,
+    parent_constraint: Mapping[str, Any],
+    child_constraints: Mapping[str, Iterable[Mapping[str, Any]]],
+) -> bool:
+    """查找一个不宽于父 scope 且蕴含父谓词的子约束。"""
+    for child_constrained_scope, constraints in child_constraints.items():
+        if not action_scope_allows(parent_constrained_scope, child_constrained_scope):
+            continue
+        if not action_scope_allows(child_constrained_scope, obligation_scope):
+            continue
+        if any(
+            _scope_constraint_implies(child_constraint, parent_constraint)
+            for child_constraint in constraints
+        ):
+            return True
+    return False
+
+
+def _scope_constraint_implies(
+    child_constraint: Mapping[str, Any],
+    parent_constraint: Mapping[str, Any],
+) -> bool:
+    """判断单条子谓词是否确定性蕴含父谓词。"""
+    if child_constraint["field"] != parent_constraint["field"]:
+        return False
+
+    child_op = child_constraint["op"]
+    parent_op = parent_constraint["op"]
+    if child_op == "eq":
+        return _constraint_value_satisfies_parent(
+            child_constraint["value"],
+            parent_constraint,
+        )
+    if child_op == "in":
+        return all(
+            _constraint_value_satisfies_parent(value, parent_constraint)
+            for value in child_constraint["values"]
+        )
+    if child_op == "lte":
+        return parent_op == "lte" and child_constraint["value"] <= parent_constraint["value"]
+    if child_op == "gte":
+        return parent_op == "gte" and child_constraint["value"] >= parent_constraint["value"]
+    if child_op == "max_length":
+        return (
+            parent_op == "max_length"
+            and child_constraint["value"] <= parent_constraint["value"]
+        )
+    return False
+
+
+def _constraint_value_satisfies_parent(
+    value: str | int | float | bool | None,
+    parent_constraint: Mapping[str, Any],
+) -> bool:
+    """判断一个具体 JSON 标量值是否满足父约束谓词。"""
+    parent_op = parent_constraint["op"]
+    if parent_op == "eq":
+        return _json_scalar_equal(value, parent_constraint["value"])
+    if parent_op == "in":
+        return any(_json_scalar_equal(value, candidate) for candidate in parent_constraint["values"])
+    if parent_op == "lte":
+        return _is_number(value) and value <= parent_constraint["value"]
+    if parent_op == "gte":
+        return _is_number(value) and value >= parent_constraint["value"]
+    if parent_op == "max_length":
+        return isinstance(value, str) and len(value) <= parent_constraint["value"]
+    return False
+
+
 def _normalize_scope_constraint(constraint: Mapping[str, Any]) -> dict[str, Any]:
     """规范化单条参数约束，拒绝 callback 或任意表达式。"""
     if not isinstance(constraint, Mapping):
@@ -303,6 +420,7 @@ class RequestEnvelope:
     capability_id: str = ""
     parent_envelope_digest: str = ""
     parent_authorized_scopes: tuple[str, ...] | list[str] | None = None
+    parent_scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None = None
     delegation_depth: int = 0
     max_delegation_depth: int = DEFAULT_MAX_DELEGATION_DEPTH
 
@@ -323,6 +441,12 @@ class RequestEnvelope:
         parent_authorized_scopes = self._normalize_parent_authorized_scopes(
             self.parent_authorized_scopes
         )
+        parent_scope_constraints = normalize_scope_constraints(self.parent_scope_constraints)
+        for constrained_scope in parent_scope_constraints:
+            if not action_scopes_allow(parent_authorized_scopes, constrained_scope):
+                raise ValueError(
+                    "parent_scope_constraints keys must be covered by parent_authorized_scopes"
+                )
         if not self.domain:
             raise ValueError("domain must be non-empty")
         if not self.session_id:
@@ -361,6 +485,7 @@ class RequestEnvelope:
         object.__setattr__(self, "capability_id", capability_id)
         object.__setattr__(self, "parent_envelope_digest", parent_envelope_digest)
         object.__setattr__(self, "parent_authorized_scopes", parent_authorized_scopes)
+        object.__setattr__(self, "parent_scope_constraints", parent_scope_constraints)
 
     def as_dict(self) -> dict[str, Any]:
         """Return the canonical dictionary representation of the envelope.
@@ -380,6 +505,10 @@ class RequestEnvelope:
             "message_digest": self.message_digest,
             "parent_authorized_scopes": list(self.parent_authorized_scopes),
             "parent_envelope_digest": self.parent_envelope_digest,
+            "parent_scope_constraints": {
+                scope: list(constraints)
+                for scope, constraints in self.parent_scope_constraints.items()
+            },
             "provider_id": self.provider_id,
             "receiver_aid": self.receiver_aid,
             "sender_aid": self.sender_aid,
@@ -457,6 +586,7 @@ def build_request_envelope(
     parent_envelope: RequestEnvelope | None = None,
     parent_envelope_digest: str = "",
     parent_authorized_scopes: Iterable[str] | None = None,
+    parent_scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None = None,
     delegation_depth: int = 0,
     max_delegation_depth: int = DEFAULT_MAX_DELEGATION_DEPTH,
 ) -> RequestEnvelope:
@@ -468,10 +598,12 @@ def build_request_envelope(
     message_bytes = message.encode("utf-8") if isinstance(message, str) else message
     effective_parent_digest = parent_envelope_digest
     effective_parent_scopes = parent_authorized_scopes
+    effective_parent_constraints = parent_scope_constraints
     effective_delegation_depth = delegation_depth
     if parent_envelope is not None:
         effective_parent_digest = parent_envelope.hex_digest()
         effective_parent_scopes = parent_envelope.authorized_scopes
+        effective_parent_constraints = parent_envelope.scope_constraints
         effective_delegation_depth = parent_envelope.delegation_depth + 1
 
     return RequestEnvelope(
@@ -497,6 +629,7 @@ def build_request_envelope(
             if effective_parent_scopes is not None
             else None
         ),
+        parent_scope_constraints=effective_parent_constraints,
         delegation_depth=effective_delegation_depth,
         max_delegation_depth=max_delegation_depth,
     )

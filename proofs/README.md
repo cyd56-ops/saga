@@ -26,8 +26,11 @@ by `saga.security_kernel.model_refinement_mappings()`.
 the delegation and replay protected sinks. It expands `delegation_ok` and
 `replay_ok` into parent digest presence, known parent fact source, parent scope
 matching, child scope attenuation, delegation depth bounds, and replay reserve
-outcomes. It also includes mutation counterexamples for skipping the parent
-fact-source check or skipping replay reserve:
+outcomes. The Python implementation refinement additionally checks delegated
+child `scope_constraints` against the parent capability fact source, so child
+capabilities can only preserve or narrow parent parameter predicates. It also
+includes mutation counterexamples for skipping the parent fact-source check or
+skipping replay reserve:
 
 ```bash
 python -m pytest -q tests/test_strict_runtime_auth_delegation_replay_model.py

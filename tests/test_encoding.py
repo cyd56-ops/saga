@@ -18,6 +18,7 @@ from saga.messages import (
     parse_action_scope,
     parse_request_envelope,
     scope_constraints_allow,
+    scope_constraints_are_attenuated,
     sha256_hex,
 )
 
@@ -428,6 +429,7 @@ class RequestEnvelopeTests(unittest.TestCase):
         self.assertEqual(payload["capability_id"], "cap-root")
         self.assertEqual(payload["parent_envelope_digest"], "")
         self.assertEqual(payload["parent_authorized_scopes"], [])
+        self.assertEqual(payload["parent_scope_constraints"], {})
         self.assertEqual(payload["delegation_depth"], 0)
         self.assertEqual(payload["max_delegation_depth"], DEFAULT_MAX_DELEGATION_DEPTH)
         self.assertIn("\"capability_id\":\"cap-root\"", envelope.canonical_json())
@@ -444,6 +446,11 @@ class RequestEnvelopeTests(unittest.TestCase):
             expires_at=datetime(2026, 5, 7, 14, 0, 0, tzinfo=timezone.utc),
             action_scope="llm_prompt",
             authorized_scopes=["delegation", "tool_call:send_email"],
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
             message="parent",
             capability_id="cap-parent",
         )
@@ -464,11 +471,98 @@ class RequestEnvelopeTests(unittest.TestCase):
 
         self.assertEqual(child.parent_envelope_digest, parent.hex_digest())
         self.assertEqual(child.parent_authorized_scopes, parent.authorized_scopes)
+        self.assertEqual(child.parent_scope_constraints, parent.scope_constraints)
         self.assertEqual(child.delegation_depth, 1)
         self.assertTrue(
             action_scopes_are_attenuated(
                 child.parent_authorized_scopes,
                 child.authorized_scopes,
+            )
+        )
+
+    def test_scope_constraints_are_attenuated_requires_child_to_preserve_parent_predicates(self) -> None:
+        """委托子 capability 必须保留或收窄适用于自身授权面的父参数约束。"""
+        parent_constraints = normalize_scope_constraints(
+            {
+                "tool_call:send_email": [
+                    {
+                        "field": "recipient_domain",
+                        "op": "in",
+                        "values": ["example.com", "corp.test"],
+                    },
+                    {"field": "body", "op": "max_length", "value": 200},
+                ]
+            }
+        )
+        narrowed_child = normalize_scope_constraints(
+            {
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"},
+                    {"field": "body", "op": "max_length", "value": 120},
+                ]
+            }
+        )
+        relaxed_child = normalize_scope_constraints(
+            {
+                "tool_call:send_email": [
+                    {
+                        "field": "recipient_domain",
+                        "op": "in",
+                        "values": ["example.com", "evil.test"],
+                    },
+                    {"field": "body", "op": "max_length", "value": 300},
+                ]
+            }
+        )
+
+        self.assertTrue(
+            scope_constraints_are_attenuated(
+                ("delegation", "tool_call:send_email"),
+                parent_constraints,
+                ("tool_call:send_email",),
+                narrowed_child,
+            )
+        )
+        self.assertFalse(
+            scope_constraints_are_attenuated(
+                ("delegation", "tool_call:send_email"),
+                parent_constraints,
+                ("tool_call:send_email",),
+                {},
+            )
+        )
+        self.assertFalse(
+            scope_constraints_are_attenuated(
+                ("delegation", "tool_call:send_email"),
+                parent_constraints,
+                ("tool_call:send_email",),
+                relaxed_child,
+            )
+        )
+
+    def test_scope_constraints_are_attenuated_rejects_moving_parent_constraint_wider(self) -> None:
+        """子 capability 不能把父 narrow scope 约束移动到更宽 scope 上。"""
+        parent_constraints = normalize_scope_constraints(
+            {
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            }
+        )
+        moved_wider_child = normalize_scope_constraints(
+            {
+                "tool_call": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            }
+        )
+
+        self.assertFalse(
+            scope_constraints_are_attenuated(
+                ("delegation", "tool_call"),
+                parent_constraints,
+                ("tool_call",),
+                moved_wider_child,
             )
         )
 

@@ -366,9 +366,10 @@ SECURITY_KERNEL_ENTRIES: tuple[SecurityKernelEntry, ...] = (
         ),
         gate_mechanism=(
             "Signed envelopes include capability_id, parent_envelope_digest, "
-            "parent_authorized_scopes, delegation_depth, and max_delegation_depth; "
-            "delegated child capabilities require a known parent digest and cannot "
-            "expand parent scopes"
+            "parent_authorized_scopes, parent_scope_constraints, delegation_depth, "
+            "and max_delegation_depth; delegated child capabilities require a known "
+            "parent digest and cannot expand parent scopes or relax parent parameter "
+            "constraints"
         ),
         evidence_tests=(
             "tests/test_encoding.py",
@@ -971,24 +972,29 @@ MODEL_REFINEMENT_MAPPINGS: tuple[ModelRefinementMapping, ...] = (
         model_term="delegation_ok",
         abstract_predicate=(
             "Delegated child capabilities bind a known parent digest, match parent scopes, "
-            "attenuate child scopes, and respect depth bounds."
+            "attenuate child scopes and parameter constraints, and respect depth bounds."
         ),
         python_symbols=(
             "saga.messages.RequestEnvelope",
             "saga.messages.action_scopes_are_attenuated",
+            "saga.messages.scope_constraints_are_attenuated",
             "saga.execution_gate.SignedRequestExecutionGate._evaluate_delegation_capability",
             "saga.execution_gate.ExecutionCapabilityFacade.delegate",
             "saga.agent.Agent._delegate_to_agent",
         ),
         evidence_tests=(
             "tests/test_execution_gate.py::test_authorize_accepts_delegated_child_capability_when_attenuated",
+            "tests/test_execution_gate.py::test_authorize_accepts_delegated_child_when_constraints_are_narrowed",
             "tests/test_execution_gate.py::test_authorize_rejects_delegated_child_without_known_parent_digest",
             "tests/test_execution_gate.py::test_authorize_rejects_delegated_child_scope_escalation",
+            "tests/test_execution_gate.py::test_authorize_rejects_delegated_child_constraint_deletion",
+            "tests/test_execution_gate.py::test_authorize_rejects_delegated_child_constraint_relaxation",
             "tests/test_execution_gate.py::test_authorize_rejects_delegation_depth_exceeded",
             "tests/integration/test_baseline_agent_flow.py::test_conversation_payload_binds_parent_capability_for_delegation_child",
         ),
         tcb_assumptions=(
-            "parent_capability_store is populated from trusted accepted parent capabilities",
+            "parent_capability_store is populated from trusted accepted parent capabilities "
+            "including signed scope constraints",
             "delegation entry points use ExecutionCapabilityFacade.delegate before Agent.connect",
         ),
         excluded_paths=(
@@ -996,8 +1002,9 @@ MODEL_REFINEMENT_MAPPINGS: tuple[ModelRefinementMapping, ...] = (
             "future delegation-chain storage not wired through the parent capability fact source",
         ),
         residual_risk=(
-            "The first-stage refinement covers parent digest and attenuation checks; "
-            "full live multi-hop delegation storage remains future wiring."
+            "The refinement covers parent digest, action-scope attenuation, and "
+            "parameter-constraint attenuation checks; full live multi-hop delegation "
+            "storage remains future wiring."
         ),
         linked_sink_ids=("delegation_handler",),
     ),

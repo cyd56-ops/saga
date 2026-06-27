@@ -19,7 +19,10 @@ from saga.messages import (
     RequestEnvelope,
     action_scopes_are_attenuated,
     action_scopes_allow,
+    normalize_scope_constraints,
+    parse_action_scope,
     parse_request_envelope,
+    scope_constraints_are_attenuated,
     scope_constraints_allow,
     sha256_hex,
 )
@@ -210,6 +213,10 @@ def build_execution_gate_audit_record(
         record["signed_capability_id"] = envelope.capability_id
         record["signed_parent_envelope_digest"] = envelope.parent_envelope_digest
         record["signed_parent_authorized_scopes"] = list(envelope.parent_authorized_scopes)
+        record["signed_parent_scope_constraints"] = {
+            scope: list(constraints)
+            for scope, constraints in envelope.parent_scope_constraints.items()
+        }
         record["signed_delegation_depth"] = envelope.delegation_depth
         record["signed_max_delegation_depth"] = envelope.max_delegation_depth
     return record
@@ -728,6 +735,85 @@ def reason_for_unauthorized_scope(action_scope: str) -> str:
     return "execution_scope_not_authorized"
 
 
+@dataclass(frozen=True)
+class ParentCapabilityFacts:
+    """本地已接受父 capability 的事实源，用于校验委托子 capability 收窄关系。"""
+
+    authorized_scopes: tuple[str, ...]
+    scope_constraints: dict[str, tuple[dict[str, Any], ...]]
+
+
+ParentCapabilityStoreValue = (
+    ParentCapabilityFacts
+    | RequestEnvelope
+    | Mapping[str, Any]
+    | Iterable[str]
+)
+
+
+def _normalize_parent_capability_store(
+    parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None,
+) -> dict[str, ParentCapabilityFacts]:
+    """规范化本地父 capability 事实源，兼容旧的 digest -> scopes 映射。"""
+    normalized: dict[str, ParentCapabilityFacts] = {}
+    for digest, facts in (parent_capability_store or {}).items():
+        normalized[digest.lower()] = _normalize_parent_capability_facts(facts)
+    return normalized
+
+
+def _normalize_parent_capability_facts(
+    facts: ParentCapabilityStoreValue,
+) -> ParentCapabilityFacts:
+    """把 RequestEnvelope、结构化映射或旧 scope 列表收敛成父 capability facts。"""
+    if isinstance(facts, ParentCapabilityFacts):
+        return _build_parent_capability_facts(
+            facts.authorized_scopes,
+            facts.scope_constraints,
+        )
+    if isinstance(facts, RequestEnvelope):
+        return _build_parent_capability_facts(
+            facts.authorized_scopes,
+            facts.scope_constraints,
+        )
+    if isinstance(facts, Mapping):
+        if "authorized_scopes" not in facts:
+            raise ValueError("parent capability facts require authorized_scopes")
+        return _build_parent_capability_facts(
+            facts["authorized_scopes"],
+            facts.get("scope_constraints"),
+        )
+    return _build_parent_capability_facts(facts, None)
+
+
+def _build_parent_capability_facts(
+    authorized_scopes: Iterable[str],
+    scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None,
+) -> ParentCapabilityFacts:
+    """构造规范化父 capability facts，并拒绝未被父 scope 覆盖的约束。"""
+    normalized_scopes = _normalize_scope_list(authorized_scopes)
+    normalized_constraints = normalize_scope_constraints(scope_constraints)
+    for constrained_scope in normalized_constraints:
+        if not action_scopes_allow(normalized_scopes, constrained_scope):
+            raise ValueError("parent scope_constraints keys must be covered by authorized_scopes")
+    return ParentCapabilityFacts(
+        authorized_scopes=normalized_scopes,
+        scope_constraints=normalized_constraints,
+    )
+
+
+def _normalize_scope_list(scopes: Iterable[str]) -> tuple[str, ...]:
+    """规范化父 capability scope 列表，避免事实源中出现未知执行面。"""
+    if isinstance(scopes, str):
+        raise TypeError("authorized_scopes must be an iterable of action-scope strings")
+    normalized: set[str] = set()
+    for scope in scopes:
+        if not isinstance(scope, str):
+            raise TypeError("authorized_scopes entries must be strings")
+        parse_action_scope(scope)
+        normalized.add(scope)
+    return tuple(sorted(normalized))
+
+
 class SignedRequestExecutionGate:
     """Verify signed request envelopes before local execution.
 
@@ -744,17 +830,14 @@ class SignedRequestExecutionGate:
         now_fn: Callable[[], datetime] | None = None,
         replay_state_dir: str | Path | None = None,
         replay_state_store: ReplayStateStore | None = None,
-        parent_capability_store: Mapping[str, Iterable[str]] | None = None,
+        parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None = None,
     ) -> None:
         """Store a CAN gate, trusted public keys, and optional shared replay state."""
         if replay_state_dir is not None and replay_state_store is not None:
             raise ValueError("configure either replay_state_dir or replay_state_store, not both")
         self.can_gate = can_gate
         self.trusted_public_keys = dict(trusted_public_keys)
-        self.parent_capability_store = {
-            digest.lower(): tuple(scopes)
-            for digest, scopes in (parent_capability_store or {}).items()
-        }
+        self.parent_capability_store = _normalize_parent_capability_store(parent_capability_store)
         self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
         self._seen_request_ids: set[str] = set()
         self._replay_lock = threading.Lock()
@@ -888,8 +971,8 @@ class SignedRequestExecutionGate:
                 request_envelope_valid=True,
                 request_envelope=envelope,
             )
-        parent_scopes = self.parent_capability_store.get(envelope.parent_envelope_digest)
-        if parent_scopes is None:
+        parent_facts = self.parent_capability_store.get(envelope.parent_envelope_digest)
+        if parent_facts is None:
             return ExecutionGateDecision(
                 False,
                 "unknown_parent_envelope_digest",
@@ -903,10 +986,18 @@ class SignedRequestExecutionGate:
                 request_envelope_valid=True,
                 request_envelope=envelope,
             )
+        parent_scopes = parent_facts.authorized_scopes
         if tuple(envelope.parent_authorized_scopes) != tuple(parent_scopes):
             return ExecutionGateDecision(
                 False,
                 "parent_authorized_scopes_mismatch",
+                request_envelope_valid=True,
+                request_envelope=envelope,
+            )
+        if envelope.parent_scope_constraints != parent_facts.scope_constraints:
+            return ExecutionGateDecision(
+                False,
+                "parent_scope_constraints_mismatch",
                 request_envelope_valid=True,
                 request_envelope=envelope,
             )
@@ -931,6 +1022,19 @@ class SignedRequestExecutionGate:
             return ExecutionGateDecision(
                 False,
                 "delegation_scope_escalation",
+                request_envelope_valid=True,
+                execution_scope_allowed=False,
+                request_envelope=envelope,
+            )
+        if not scope_constraints_are_attenuated(
+            parent_scopes,
+            parent_facts.scope_constraints,
+            envelope.authorized_scopes,
+            envelope.scope_constraints,
+        ):
+            return ExecutionGateDecision(
+                False,
+                "delegation_constraint_escalation",
                 request_envelope_valid=True,
                 execution_scope_allowed=False,
                 request_envelope=envelope,
@@ -1026,7 +1130,7 @@ def build_toy_lwe_execution_gate(
     now_fn: Callable[[], datetime] | None = None,
     replay_state_dir: str | Path | None = None,
     replay_state_store: ReplayStateStore | None = None,
-    parent_capability_store: Mapping[str, Iterable[str]] | None = None,
+    parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None = None,
 ) -> SignedRequestExecutionGate:
     """Build a signed execution gate for the research-only toy LWE scheme.
 

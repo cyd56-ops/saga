@@ -128,12 +128,15 @@ evidence without claiming whole-repository non-bypassability.
 The delegation/replay refinement submodel checks the more detailed claim:
 
 ```text
-DelegateExecute => N_verify=1 AND scope_ok AND policy_ok AND parent_digest_present AND parent_digest_known AND parent_authorized_scopes_present AND parent_authorized_scopes_match AND child_scopes_attenuated AND delegation_depth_ok AND replay_reserved_once
+DelegateExecute => N_verify=1 AND scope_ok AND policy_ok AND parent_digest_present AND parent_digest_known AND parent_authorized_scopes_present AND parent_authorized_scopes_match AND child_scopes_attenuated AND child_constraints_attenuated AND delegation_depth_ok AND replay_reserved_once
 ```
 
-It also includes mutation counterexamples for skipping the parent capability
-fact source and skipping replay reserve. Those counterexamples are expected to
-trigger an execution side effect while violating the detailed claim.
+The executable Python refinement now also checks that delegated child
+capabilities bind the parent's signed `scope_constraints` and only preserve or
+narrow those parameter predicates. The submodel still includes mutation
+counterexamples for skipping the parent capability fact source and skipping
+replay reserve. Those counterexamples are expected to trigger an execution side
+effect while violating the detailed claim.
 
 ## Layered TLA Refinement Mapping
 

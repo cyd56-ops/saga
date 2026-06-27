@@ -1318,11 +1318,12 @@ class Agent:
         parent_envelope: RequestEnvelope | None = None,
         parent_envelope_digest: str = "",
         parent_authorized_scopes: list[str] | tuple[str, ...] | None = None,
+        parent_scope_constraints: dict[str, list[dict]] | None = None,
         delegation_depth: int = 0,
     ) -> dict:
         """Build a transport payload and attach a signed request envelope when configured.
 
-        入口动作、额外授权 scope、参数约束和可选父 capability 一起进入签名信封。
+        入口动作、额外授权 scope、参数约束和可选父 capability facts 一起进入签名信封。
         """
         payload = {
             "msg": message,
@@ -1362,6 +1363,7 @@ class Agent:
             parent_envelope=parent_envelope,
             parent_envelope_digest=parent_envelope_digest,
             parent_authorized_scopes=parent_authorized_scopes,
+            parent_scope_constraints=parent_scope_constraints,
             delegation_depth=delegation_depth,
         )
         signature = signature_scheme.sign(secret_key, envelope.digest())

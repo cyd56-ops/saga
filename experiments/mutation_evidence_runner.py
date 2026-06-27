@@ -225,8 +225,8 @@ def mutation_specs() -> tuple[MutationSpec, ...]:
                 MutationPatch(
                     relative_path="saga/execution_gate.py",
                     needle=(
-                        "        parent_scopes = self.parent_capability_store.get(envelope.parent_envelope_digest)\n"
-                        "        if parent_scopes is None:\n"
+                        "        parent_facts = self.parent_capability_store.get(envelope.parent_envelope_digest)\n"
+                        "        if parent_facts is None:\n"
                         "            return ExecutionGateDecision(\n"
                         "                False,\n"
                         '                "unknown_parent_envelope_digest",\n'
@@ -235,9 +235,12 @@ def mutation_specs() -> tuple[MutationSpec, ...]:
                         "            )\n"
                     ),
                     replacement=(
-                        "        parent_scopes = self.parent_capability_store.get(envelope.parent_envelope_digest)\n"
-                        "        if parent_scopes is None:\n"
-                        "            parent_scopes = envelope.parent_authorized_scopes\n"
+                        "        parent_facts = self.parent_capability_store.get(envelope.parent_envelope_digest)\n"
+                        "        if parent_facts is None:\n"
+                        "            parent_facts = ParentCapabilityFacts(\n"
+                        "                authorized_scopes=tuple(envelope.parent_authorized_scopes),\n"
+                        "                scope_constraints=envelope.parent_scope_constraints,\n"
+                        "            )\n"
                     ),
                 ),
             ),

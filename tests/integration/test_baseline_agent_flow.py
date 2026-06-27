@@ -1907,6 +1907,11 @@ class BaselineAgentFlowTests(unittest.TestCase):
             expires_at=now + timedelta(minutes=5),
             action_scope="llm_prompt",
             authorized_scopes=["delegation", "tool_call:send_email"],
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
             message="parent",
             capability_id="cap-parent",
         )
@@ -1926,18 +1931,29 @@ class BaselineAgentFlowTests(unittest.TestCase):
                 "issue_timestamp": now.isoformat(),
                 "expiration_timestamp": (now + timedelta(minutes=5)).isoformat(),
             },
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
             parent_envelope=parent,
         )
         envelope = parse_request_envelope(payload["request_envelope"])
 
         self.assertEqual(envelope.parent_envelope_digest, parent.hex_digest())
         self.assertEqual(envelope.parent_authorized_scopes, parent.authorized_scopes)
+        self.assertEqual(envelope.parent_scope_constraints, parent.scope_constraints)
         self.assertEqual(envelope.delegation_depth, 1)
         gate = SignedRequestExecutionGate(
             CAN(CompiledToyLWEVerifier(scheme, message_bytes=32)),
             {sender_aid: sender_keys.public_key},
             now_fn=lambda: now,
-            parent_capability_store={parent.hex_digest(): parent.authorized_scopes},
+            parent_capability_store={
+                parent.hex_digest(): {
+                    "authorized_scopes": parent.authorized_scopes,
+                    "scope_constraints": parent.scope_constraints,
+                }
+            },
         )
         request = ExecutionGateRequest(
             sender_aid=sender_aid,
@@ -1947,6 +1963,7 @@ class BaselineAgentFlowTests(unittest.TestCase):
             action_scope="tool_call:send_email",
             request_envelope=payload["request_envelope"],
             pq_signature=payload["pq_signature"],
+            parameters={"recipient_domain": "example.com"},
         )
 
         self.assertTrue(gate.evaluate_request(request).allowed)

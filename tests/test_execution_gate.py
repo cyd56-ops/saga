@@ -110,7 +110,13 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             pq_signature=base64.b64encode(signature).decode("utf-8"),
         )
 
-    def _signed_request_from_envelope(self, envelope: RequestEnvelope, message: str) -> ExecutionGateRequest:
+    def _signed_request_from_envelope(
+        self,
+        envelope: RequestEnvelope,
+        message: str,
+        *,
+        parameters: dict | None = None,
+    ) -> ExecutionGateRequest:
         """用当前测试密钥把指定信封包装成执行 gate 请求。"""
         signature = self.scheme.sign(self.key_pair.secret_key, envelope.digest())
         return ExecutionGateRequest(
@@ -121,9 +127,15 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             action_scope=envelope.action_scope,
             request_envelope=envelope.canonical_json(),
             pq_signature=base64.b64encode(signature).decode("utf-8"),
+            parameters=parameters,
         )
 
-    def _parent_capability_envelope(self) -> RequestEnvelope:
+    def _parent_capability_envelope(
+        self,
+        *,
+        authorized_scopes: list[str] | None = None,
+        scope_constraints: dict[str, list[dict]] | None = None,
+    ) -> RequestEnvelope:
         """构造允许委托和 send_email 的父 capability 信封。"""
         return build_request_envelope(
             sender_aid="alice@example.com:calendar_agent",
@@ -134,7 +146,8 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             issued_at=self.now - timedelta(minutes=1),
             expires_at=self.now + timedelta(minutes=5),
             action_scope="llm_prompt",
-            authorized_scopes=["delegation", "tool_call:send_email"],
+            authorized_scopes=authorized_scopes or ["delegation", "tool_call:send_email"],
+            scope_constraints=scope_constraints,
             message="parent",
             timestamp=self.now,
             capability_id="cap-parent",
@@ -147,6 +160,8 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
         authorized_scopes: list[str] | None = None,
         parent_digest: str | None = None,
         parent_scopes: list[str] | None = None,
+        parent_scope_constraints: dict[str, list[dict]] | None = None,
+        scope_constraints: dict[str, list[dict]] | None = None,
         delegation_depth: int = 1,
         max_delegation_depth: int = 8,
     ) -> RequestEnvelope:
@@ -161,12 +176,18 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             expires_at=self.now + timedelta(minutes=5),
             action_scope="tool_call:send_email",
             authorized_scopes=authorized_scopes,
+            scope_constraints=scope_constraints,
             message="child",
             timestamp=self.now,
             capability_id="cap-child",
             parent_envelope_digest=parent.hex_digest() if parent_digest is None else parent_digest,
             parent_authorized_scopes=(
                 parent.authorized_scopes if parent_scopes is None else parent_scopes
+            ),
+            parent_scope_constraints=(
+                parent.scope_constraints
+                if parent_scope_constraints is None
+                else parent_scope_constraints
             ),
             delegation_depth=delegation_depth,
             max_delegation_depth=max_delegation_depth,
@@ -269,6 +290,235 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
 
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.reason, "parent_authorized_scopes_mismatch")
+
+    def test_parent_capability_store_rejects_constraints_outside_parent_scopes(self) -> None:
+        """父 capability fact source 中的参数约束必须落在父 scopes 覆盖内。"""
+        with self.assertRaisesRegex(ValueError, "covered by authorized_scopes"):
+            SignedRequestExecutionGate(
+                CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+                {"alice@example.com:calendar_agent": self.key_pair.public_key},
+                now_fn=lambda: self.now,
+                parent_capability_store={
+                    "a" * 64: {
+                        "authorized_scopes": ("delegation",),
+                        "scope_constraints": {
+                            "tool_call:send_email": [
+                                {
+                                    "field": "recipient_domain",
+                                    "op": "eq",
+                                    "value": "example.com",
+                                }
+                            ]
+                        },
+                    }
+                },
+            )
+
+    def test_authorize_accepts_delegated_child_when_constraints_are_narrowed(self) -> None:
+        """子 capability 保留或收窄父参数约束时可以通过委托校验。"""
+        parent = self._parent_capability_envelope(
+            scope_constraints={
+                "tool_call:send_email": [
+                    {
+                        "field": "recipient_domain",
+                        "op": "in",
+                        "values": ["example.com", "corp.test"],
+                    },
+                    {"field": "body", "op": "max_length", "value": 200},
+                ]
+            }
+        )
+        child = self._delegated_child_envelope(
+            parent,
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"},
+                    {"field": "body", "op": "max_length", "value": 120},
+                ]
+            },
+        )
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={
+                parent.hex_digest(): {
+                    "authorized_scopes": parent.authorized_scopes,
+                    "scope_constraints": parent.scope_constraints,
+                }
+            },
+        )
+
+        decision = gate.evaluate_request(
+            self._signed_request_from_envelope(
+                child,
+                "child",
+                parameters={"recipient_domain": "example.com", "body": "short"},
+            )
+        )
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.reason, "authorized")
+
+    def test_authorize_rejects_delegated_child_missing_parent_constraints_fact(self) -> None:
+        """父 capability 有参数约束时，子信封必须绑定同一份父约束事实。"""
+        parent = self._parent_capability_envelope(
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            }
+        )
+        child = self._delegated_child_envelope(
+            parent,
+            parent_scope_constraints={},
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
+        )
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={
+                parent.hex_digest(): {
+                    "authorized_scopes": parent.authorized_scopes,
+                    "scope_constraints": parent.scope_constraints,
+                }
+            },
+        )
+
+        decision = gate.evaluate_request(
+            self._signed_request_from_envelope(
+                child,
+                "child",
+                parameters={"recipient_domain": "example.com"},
+            )
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "parent_scope_constraints_mismatch")
+
+    def test_authorize_rejects_delegated_child_constraint_deletion(self) -> None:
+        """子 capability 删除适用父约束时必须 fail-closed。"""
+        parent = self._parent_capability_envelope(
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            }
+        )
+        child = self._delegated_child_envelope(parent, scope_constraints={})
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={
+                parent.hex_digest(): {
+                    "authorized_scopes": parent.authorized_scopes,
+                    "scope_constraints": parent.scope_constraints,
+                }
+            },
+        )
+
+        decision = gate.evaluate_request(
+            self._signed_request_from_envelope(
+                child,
+                "child",
+                parameters={"recipient_domain": "example.com"},
+            )
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "delegation_constraint_escalation")
+
+    def test_authorize_rejects_delegated_child_constraint_relaxation(self) -> None:
+        """子 capability 放宽父参数约束时必须 fail-closed。"""
+        parent = self._parent_capability_envelope(
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            }
+        )
+        child = self._delegated_child_envelope(
+            parent,
+            scope_constraints={
+                "tool_call:send_email": [
+                    {
+                        "field": "recipient_domain",
+                        "op": "in",
+                        "values": ["example.com", "evil.test"],
+                    }
+                ]
+            },
+        )
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={
+                parent.hex_digest(): {
+                    "authorized_scopes": parent.authorized_scopes,
+                    "scope_constraints": parent.scope_constraints,
+                }
+            },
+        )
+
+        decision = gate.evaluate_request(
+            self._signed_request_from_envelope(
+                child,
+                "child",
+                parameters={"recipient_domain": "example.com"},
+            )
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "delegation_constraint_escalation")
+
+    def test_authorize_rejects_delegated_child_constraint_moved_to_wider_scope(self) -> None:
+        """子 capability 不能把父 narrow scope 约束移动到更宽 scope。"""
+        parent = self._parent_capability_envelope(
+            authorized_scopes=["delegation", "tool_call"],
+            scope_constraints={
+                "tool_call:send_email": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
+        )
+        child = self._delegated_child_envelope(
+            parent,
+            authorized_scopes=["tool_call"],
+            scope_constraints={
+                "tool_call": [
+                    {"field": "recipient_domain", "op": "eq", "value": "example.com"}
+                ]
+            },
+        )
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={
+                parent.hex_digest(): {
+                    "authorized_scopes": parent.authorized_scopes,
+                    "scope_constraints": parent.scope_constraints,
+                }
+            },
+        )
+
+        decision = gate.evaluate_request(
+            self._signed_request_from_envelope(
+                child,
+                "child",
+                parameters={"recipient_domain": "example.com"},
+            )
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "delegation_constraint_escalation")
 
     def test_authorize_rejects_delegation_depth_exceeded(self) -> None:
         """超过最大委托深度的子 capability 必须 fail-closed。"""
