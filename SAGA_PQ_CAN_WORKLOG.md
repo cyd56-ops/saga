@@ -2188,7 +2188,9 @@ GitHub / checkpoint 状态：
 
 - 已形成本轮本地 checkpoint：
   - `checkpoint: add capability budget store`
-- 备份推送待执行；目标仍为 `origin/backup/repro-local`，不得推送主开发分支。
+- 使用临时 `/tmp/saga_known_hosts` 与显式 `GIT_SSH_COMMAND` 只推送备份分支，已成功：
+  - `origin/backup/repro-local`
+- 未推送主开发分支。
 
 ### 2026-06-27 Hash-Chained Audit J5 Implementation Session
 
