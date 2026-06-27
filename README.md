@@ -385,7 +385,10 @@ can enable PQ-CAN runtime auth directly from YAML.
 
 When a receiving-side request is rejected by the PQ-CAN execution gate, the
 agent will also append a local JSONL audit record under
-`<agent workdir>/audit/execution_gate.jsonl`.
+`<agent workdir>/audit/execution_gate.jsonl`. New records include
+`seq`, `prev_hash`, and `entry_hash` so local verification can detect
+middle-of-chain deletion or modification. Tail truncation still requires an
+external tail-hash anchor.
 
 PQ-CAN is an execution-surface authorization layer, not a replacement for SAGA
 Core. SAGA still performs protocol admission, while the receiving-side runtime

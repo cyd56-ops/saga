@@ -31,6 +31,7 @@ from saga.messages import (
 P = ParamSpec("P")
 T = TypeVar("T")
 ActionScopeSpec = str | tuple[str, ...] | Callable[..., str | tuple[str, ...]]
+AUDIT_CHAIN_GENESIS_HASH = "0" * 64
 
 
 class EnforcementMode(str, Enum):
@@ -169,6 +170,19 @@ class ExecutionAuthorizationError(PermissionError):
         super().__init__(f"{reason}: {action_scope}")
 
 
+@dataclass(frozen=True)
+class ExecutionGateAuditChainValidation:
+    """execution-gate 本地审计 hash chain 的校验结果。"""
+
+    valid: bool
+    reason: str
+    checked_records: int
+    last_seq: int | None
+    tail_hash: str | None
+    failure_line: int | None = None
+    legacy_prefix_records: int = 0
+
+
 def build_execution_gate_audit_record(
     request: ExecutionGateRequest,
     decision: ExecutionGateDecision,
@@ -226,18 +240,203 @@ def append_execution_gate_audit_record(
     workdir: str | Path | None,
     record: Mapping[str, object],
 ) -> Path | None:
-    """Append an execution-gate audit record to a local JSONL audit file."""
+    """向本地 JSONL 审计日志追加 hash-chained execution-gate 记录。"""
     if workdir is None:
         return None
 
     audit_dir = Path(workdir) / "audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
     audit_path = audit_dir / "execution_gate.jsonl"
+    chain_state = validate_execution_gate_audit_chain(audit_path)
+    if not chain_state.valid:
+        raise RuntimeError(
+            f"execution gate audit chain is invalid: {chain_state.reason}"
+        )
     payload = dict(record)
     payload["recorded_at"] = datetime.now(tz=timezone.utc).isoformat()
+    payload["seq"] = 0 if chain_state.last_seq is None else chain_state.last_seq + 1
+    payload["prev_hash"] = chain_state.tail_hash or AUDIT_CHAIN_GENESIS_HASH
+    payload["entry_hash"] = _execution_gate_audit_entry_hash(payload)
     with audit_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+        handle.write(_canonical_execution_gate_audit_json(payload) + "\n")
     return audit_path
+
+
+def validate_execution_gate_audit_chain(
+    audit_path: str | Path,
+    *,
+    expected_tail_hash: str | None = None,
+) -> ExecutionGateAuditChainValidation:
+    """校验本地 execution-gate 审计链；外部 tail hash 锚点可检测截断。"""
+    path = Path(audit_path)
+    if not path.exists():
+        return ExecutionGateAuditChainValidation(
+            valid=True,
+            reason="empty",
+            checked_records=0,
+            last_seq=None,
+            tail_hash=AUDIT_CHAIN_GENESIS_HASH,
+        )
+
+    expected_seq = 0
+    prev_hash = AUDIT_CHAIN_GENESIS_HASH
+    legacy_prefix_records = 0
+    saw_chained_record = False
+    checked_records = 0
+
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                return ExecutionGateAuditChainValidation(
+                    valid=False,
+                    reason="blank_audit_line",
+                    checked_records=checked_records,
+                    last_seq=expected_seq - 1 if expected_seq else None,
+                    tail_hash=prev_hash,
+                    failure_line=line_number,
+                    legacy_prefix_records=legacy_prefix_records,
+                )
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                return ExecutionGateAuditChainValidation(
+                    valid=False,
+                    reason="invalid_json",
+                    checked_records=checked_records,
+                    last_seq=expected_seq - 1 if expected_seq else None,
+                    tail_hash=prev_hash,
+                    failure_line=line_number,
+                    legacy_prefix_records=legacy_prefix_records,
+                )
+            if not isinstance(payload, dict):
+                return ExecutionGateAuditChainValidation(
+                    valid=False,
+                    reason="audit_record_not_object",
+                    checked_records=checked_records,
+                    last_seq=expected_seq - 1 if expected_seq else None,
+                    tail_hash=prev_hash,
+                    failure_line=line_number,
+                    legacy_prefix_records=legacy_prefix_records,
+                )
+
+            has_seq = "seq" in payload
+            has_prev_hash = "prev_hash" in payload
+            has_entry_hash = "entry_hash" in payload
+            has_all_chain_fields = has_seq and has_prev_hash and has_entry_hash
+            has_any_chain_field = has_seq or has_prev_hash or has_entry_hash
+            if not has_all_chain_fields:
+                if has_any_chain_field:
+                    return ExecutionGateAuditChainValidation(
+                        valid=False,
+                        reason="incomplete_chain_fields",
+                        checked_records=checked_records,
+                        last_seq=expected_seq - 1 if expected_seq else None,
+                        tail_hash=prev_hash,
+                        failure_line=line_number,
+                        legacy_prefix_records=legacy_prefix_records,
+                    )
+                if saw_chained_record:
+                    return ExecutionGateAuditChainValidation(
+                        valid=False,
+                        reason="legacy_record_after_chained_record",
+                        checked_records=checked_records,
+                        last_seq=expected_seq - 1 if expected_seq else None,
+                        tail_hash=prev_hash,
+                        failure_line=line_number,
+                        legacy_prefix_records=legacy_prefix_records,
+                    )
+                # 旧 JSONL 前缀没有链字段；新链会把该前缀的合成 tail hash 作为锚点。
+                synthetic_payload = dict(payload)
+                synthetic_payload["seq"] = expected_seq
+                synthetic_payload["prev_hash"] = prev_hash
+                prev_hash = _execution_gate_audit_entry_hash(synthetic_payload)
+                legacy_prefix_records += 1
+                expected_seq += 1
+                checked_records += 1
+                continue
+
+            saw_chained_record = True
+            if not isinstance(payload["seq"], int) or payload["seq"] != expected_seq:
+                return ExecutionGateAuditChainValidation(
+                    valid=False,
+                    reason="seq_mismatch",
+                    checked_records=checked_records,
+                    last_seq=expected_seq - 1 if expected_seq else None,
+                    tail_hash=prev_hash,
+                    failure_line=line_number,
+                    legacy_prefix_records=legacy_prefix_records,
+                )
+            if payload["prev_hash"] != prev_hash:
+                return ExecutionGateAuditChainValidation(
+                    valid=False,
+                    reason="prev_hash_mismatch",
+                    checked_records=checked_records,
+                    last_seq=expected_seq - 1 if expected_seq else None,
+                    tail_hash=prev_hash,
+                    failure_line=line_number,
+                    legacy_prefix_records=legacy_prefix_records,
+                )
+            expected_entry_hash = _execution_gate_audit_entry_hash(payload)
+            if payload["entry_hash"] != expected_entry_hash:
+                return ExecutionGateAuditChainValidation(
+                    valid=False,
+                    reason="entry_hash_mismatch",
+                    checked_records=checked_records,
+                    last_seq=expected_seq - 1 if expected_seq else None,
+                    tail_hash=prev_hash,
+                    failure_line=line_number,
+                    legacy_prefix_records=legacy_prefix_records,
+                )
+            prev_hash = str(payload["entry_hash"])
+            expected_seq += 1
+            checked_records += 1
+
+    if expected_tail_hash is not None and prev_hash != expected_tail_hash:
+        return ExecutionGateAuditChainValidation(
+            valid=False,
+            reason="tail_hash_mismatch",
+            checked_records=checked_records,
+            last_seq=expected_seq - 1 if expected_seq else None,
+            tail_hash=prev_hash,
+            legacy_prefix_records=legacy_prefix_records,
+        )
+
+    if checked_records == 0:
+        reason = "empty"
+    elif legacy_prefix_records == checked_records:
+        reason = "legacy_jsonl_without_chain"
+    elif legacy_prefix_records:
+        reason = "ok_with_legacy_prefix"
+    else:
+        reason = "ok"
+    return ExecutionGateAuditChainValidation(
+        valid=True,
+        reason=reason,
+        checked_records=checked_records,
+        last_seq=expected_seq - 1 if expected_seq else None,
+        tail_hash=prev_hash,
+        legacy_prefix_records=legacy_prefix_records,
+    )
+
+
+def _canonical_execution_gate_audit_json(payload: Mapping[str, object]) -> str:
+    """按稳定 JSON 形式序列化审计记录，避免字段顺序影响 hash。"""
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+
+
+def _execution_gate_audit_entry_hash(payload: Mapping[str, object]) -> str:
+    """计算单条审计记录的 hash；entry_hash 自身不参与被哈希内容。"""
+    hash_payload = dict(payload)
+    hash_payload.pop("entry_hash", None)
+    return sha256_hex(
+        _canonical_execution_gate_audit_json(hash_payload).encode("utf-8")
+    )
 
 
 class ExecutionGate(Protocol):

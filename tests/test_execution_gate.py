@@ -25,6 +25,7 @@ from saga.execution_gate import (
     SignedRequestExecutionGate,
     SQLiteReplayStateStore,
     build_execution_gate_audit_record,
+    validate_execution_gate_audit_chain,
 )
 from saga.messages import RequestEnvelope, build_request_envelope, parse_request_envelope, sha256_hex
 
@@ -1405,7 +1406,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
         self.assertEqual(record["token_digest"], sha256_hex(request.token.encode("utf-8")))
 
     def test_append_execution_gate_audit_record_writes_jsonl_row(self) -> None:
-        """Audit helpers should append structured records to a local JSONL file."""
+        """Audit helpers should append hash-chained records to a local JSONL file."""
         request = self._build_request()
         decision = self.gate.evaluate_request(
             ExecutionGateRequest(
@@ -1431,6 +1432,168 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             self.assertEqual(payload["reason"], "message_digest_mismatch")
             self.assertEqual(payload["sender_aid"], request.sender_aid)
             self.assertIn("recorded_at", payload)
+            self.assertEqual(payload["seq"], 0)
+            self.assertEqual(payload["prev_hash"], "0" * 64)
+            self.assertEqual(len(payload["entry_hash"]), 64)
+
+            validation = validate_execution_gate_audit_chain(audit_path)
+            self.assertTrue(validation.valid)
+            self.assertEqual(validation.reason, "ok")
+            self.assertEqual(validation.checked_records, 1)
+            self.assertEqual(validation.last_seq, 0)
+            self.assertEqual(validation.tail_hash, payload["entry_hash"])
+
+    def test_append_execution_gate_audit_record_links_multiple_rows(self) -> None:
+        """连续审计记录应以前一条 entry hash 作为下一条 prev hash。"""
+        request = self._build_request()
+        decision = self.gate.evaluate_request(
+            ExecutionGateRequest(
+                sender_aid=request.sender_aid,
+                receiver_aid=request.receiver_aid,
+                token=request.token,
+                message="tampered",
+                action_scope=request.action_scope,
+                request_envelope=request.request_envelope,
+                pq_signature=request.pq_signature,
+            )
+        )
+        record = build_execution_gate_audit_record(request, decision)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audit_path = append_execution_gate_audit_record(tmpdir, record)
+            append_execution_gate_audit_record(tmpdir, {**record, "reason": "second"})
+
+            assert audit_path is not None
+            rows = [
+                json.loads(line)
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(rows[0]["seq"], 0)
+            self.assertEqual(rows[1]["seq"], 1)
+            self.assertEqual(rows[1]["prev_hash"], rows[0]["entry_hash"])
+            self.assertNotEqual(rows[1]["entry_hash"], rows[0]["entry_hash"])
+
+            validation = validate_execution_gate_audit_chain(audit_path)
+            self.assertTrue(validation.valid)
+            self.assertEqual(validation.tail_hash, rows[1]["entry_hash"])
+
+    def test_validate_execution_gate_audit_chain_detects_tampering(self) -> None:
+        """篡改已写入记录会导致 entry hash 校验失败。"""
+        request = self._build_request()
+        decision = self.gate.evaluate_request(
+            ExecutionGateRequest(
+                sender_aid=request.sender_aid,
+                receiver_aid=request.receiver_aid,
+                token=request.token,
+                message="tampered",
+                action_scope=request.action_scope,
+                request_envelope=request.request_envelope,
+                pq_signature=request.pq_signature,
+            )
+        )
+        record = build_execution_gate_audit_record(request, decision)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audit_path = append_execution_gate_audit_record(tmpdir, record)
+            append_execution_gate_audit_record(tmpdir, {**record, "reason": "second"})
+
+            assert audit_path is not None
+            rows = [
+                json.loads(line)
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
+            ]
+            rows[0]["reason"] = "tampered_reason"
+            audit_path.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            validation = validate_execution_gate_audit_chain(audit_path)
+            self.assertFalse(validation.valid)
+            self.assertEqual(validation.reason, "entry_hash_mismatch")
+            self.assertEqual(validation.failure_line, 1)
+
+            with self.assertRaisesRegex(RuntimeError, "entry_hash_mismatch"):
+                append_execution_gate_audit_record(tmpdir, record)
+
+    def test_validate_execution_gate_audit_chain_uses_external_tail_anchor(self) -> None:
+        """本地链只能用外部 tail hash 锚点检测末尾截断。"""
+        request = self._build_request()
+        decision = self.gate.evaluate_request(
+            ExecutionGateRequest(
+                sender_aid=request.sender_aid,
+                receiver_aid=request.receiver_aid,
+                token=request.token,
+                message="tampered",
+                action_scope=request.action_scope,
+                request_envelope=request.request_envelope,
+                pq_signature=request.pq_signature,
+            )
+        )
+        record = build_execution_gate_audit_record(request, decision)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audit_path = append_execution_gate_audit_record(tmpdir, record)
+            append_execution_gate_audit_record(tmpdir, {**record, "reason": "second"})
+            assert audit_path is not None
+            original_validation = validate_execution_gate_audit_chain(audit_path)
+            self.assertTrue(original_validation.valid)
+            assert original_validation.tail_hash is not None
+
+            rows = audit_path.read_text(encoding="utf-8").splitlines()
+            audit_path.write_text(rows[0] + "\n", encoding="utf-8")
+
+            local_validation = validate_execution_gate_audit_chain(audit_path)
+            self.assertTrue(local_validation.valid)
+            anchored_validation = validate_execution_gate_audit_chain(
+                audit_path,
+                expected_tail_hash=original_validation.tail_hash,
+            )
+            self.assertFalse(anchored_validation.valid)
+            self.assertEqual(anchored_validation.reason, "tail_hash_mismatch")
+
+    def test_append_execution_gate_audit_record_anchors_legacy_jsonl_prefix(self) -> None:
+        """旧普通 JSONL 前缀可作为新 hash chain 的合成锚点。"""
+        request = self._build_request()
+        decision = self.gate.evaluate_request(
+            ExecutionGateRequest(
+                sender_aid=request.sender_aid,
+                receiver_aid=request.receiver_aid,
+                token=request.token,
+                message="tampered",
+                action_scope=request.action_scope,
+                request_envelope=request.request_envelope,
+                pq_signature=request.pq_signature,
+            )
+        )
+        record = build_execution_gate_audit_record(request, decision)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audit_dir = Path(tmpdir) / "audit"
+            audit_dir.mkdir()
+            audit_path = audit_dir / "execution_gate.jsonl"
+            audit_path.write_text(
+                json.dumps({"reason": "legacy", "allowed": False}) + "\n",
+                encoding="utf-8",
+            )
+
+            validation_before = validate_execution_gate_audit_chain(audit_path)
+            self.assertTrue(validation_before.valid)
+            self.assertEqual(validation_before.reason, "legacy_jsonl_without_chain")
+            self.assertEqual(validation_before.legacy_prefix_records, 1)
+
+            append_execution_gate_audit_record(tmpdir, record)
+            rows = [
+                json.loads(line)
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertNotIn("entry_hash", rows[0])
+            self.assertEqual(rows[1]["seq"], 1)
+            self.assertEqual(rows[1]["prev_hash"], validation_before.tail_hash)
+
+            validation_after = validate_execution_gate_audit_chain(audit_path)
+            self.assertTrue(validation_after.valid)
+            self.assertEqual(validation_after.reason, "ok_with_legacy_prefix")
 
     def test_build_execution_gate_audit_record_captures_capability_metadata(self) -> None:
         """审计记录应保留签名 capability 与父 capability 绑定字段。"""

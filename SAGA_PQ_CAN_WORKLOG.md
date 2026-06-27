@@ -518,6 +518,13 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `would_reject`
   - `would_reject_reason`
   显式 permissive / disabled 降级路径会被审计；普通历史兼容路径仍不扩大为安全 claim。
+- 当前 execution-gate audit JSONL 已升级为第一版 hash-chained 本地证据日志：
+  - 新增 `ExecutionGateAuditChainValidation`
+  - 新增 `validate_execution_gate_audit_chain(...)`
+  - `append_execution_gate_audit_record(...)` 现在追加 `seq / prev_hash / entry_hash`
+  - `entry_hash` 基于稳定 canonical JSON 计算，且不把 `entry_hash` 自身纳入被哈希内容
+  - 旧普通 JSONL 行可作为 legacy prefix，被第一条 chained record 的 `prev_hash` 锚定
+  - 本地 hash chain 可检测中间删改；末尾截断检测必须依赖外部 tail-hash anchor 或 checkpoint
 - 当前 canonical request envelope 已支持第一版参数级 / 受约束 scope：
   - `saga/messages.py` 新增 `scope_constraints`，并把约束写入 canonical envelope digest。
   - 约束 schema 只允许封闭谓词集合：`eq`、`in`、`lte`、`gte`、`max_length`；不允许 callback、regex 或任意表达式。
@@ -891,7 +898,7 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
 - SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
-- 后续执行访问控制扩展：`进行中`（J1-J4 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation 与 fail-closed 测试已落地；下一步为 hash-chained audit）
+- 后续执行访问控制扩展：`进行中`（J1-J5 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit 与 fail-closed / tamper-evidence 测试已落地；下一步为 capability budget）
 
 ### 3.4 阻塞 / 风险
 
@@ -905,6 +912,16 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `.venv/bin/python -m pytest -q`
   - `.venv/bin/python -m pytest -q tests/security`
   - `.venv/bin/python -m pytest -q tests/integration`
+- 已于 `2026-06-27` 重新确认 J5 hash-chained audit 后测试结果：
+  - `.venv/bin/python -m py_compile saga/execution_gate.py tests/test_execution_gate.py` -> success
+  - `.venv/bin/python -m pytest -q tests/test_execution_gate.py` -> `59 passed`
+  - `.venv/bin/python -m pytest -q tests/test_execution_gate.py tests/integration/test_baseline_agent_flow.py` -> `93 passed`
+  - `.venv/bin/python -m pytest -q tests/test_result_logging.py tests/test_end_to_end_validation.py tests/test_real_negative_runner.py` -> `34 passed, 3 subtests passed`
+  - `.venv/bin/python -m pytest -q` -> `439 passed, 69 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `38 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 `pyproject.toml`、`setup.cfg`、`tox.ini`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `pyrightconfig.json`，因此未运行 `ruff check .` / `mypy .`。
 - 已于 `2026-06-27` 重新确认 J4 delegation constraint attenuation 后测试结果：
   - `.venv/bin/python -m py_compile saga/messages.py saga/execution_gate.py saga/agent.py saga/security_kernel.py experiments/mutation_evidence_runner.py tests/test_encoding.py tests/test_execution_gate.py tests/integration/test_baseline_agent_flow.py` -> success
   - `.venv/bin/python -m pytest -q tests/test_encoding.py tests/test_execution_gate.py tests/test_mutation_evidence_runner.py tests/test_security_kernel.py tests/test_strict_runtime_auth_evidence_summary.py tests/integration/test_baseline_agent_flow.py::BaselineAgentFlowTests::test_conversation_payload_binds_parent_capability_for_delegation_child` -> `120 passed, 18 subtests passed`
@@ -1858,7 +1875,7 @@ protected sinks 至少覆盖：
 - J2. 设计参数级 / 受约束 scope schema，并纳入 canonical envelope digest：`已完成`（第一阶段：`scope_constraints` 已进入 signed envelope；封闭谓词 schema 与 canonical normalization 已落地）
 - J3. 实现确定性 predicate evaluator 与 fail-closed 参数校验测试：`已完成`（第一阶段：runtime parameters 已传入 gate/context/facade；约束缺参、篡改、越界、未知 op、非有限数字均 fail-closed）
 - J4. 定义 delegation constraint attenuation 规则，证明子 capability 只能收窄参数空间：`已完成`（第一阶段：父 `scope_constraints` 已进入 child envelope 的 `parent_scope_constraints`，parent fact source 支持 scopes+constraints，子 capability 删除、放宽或移动到更宽 scope 均 fail-closed）
-- J5. 将 execution-gate audit JSONL 升级为 hash-chained tamper-evident log：`未开始`
+- J5. 将 execution-gate audit JSONL 升级为 hash-chained tamper-evident log：`已完成`（第一阶段：`seq / prev_hash / entry_hash`、legacy JSONL prefix anchoring、tamper detection 与外部 tail-hash anchor 截断检测入口已落地）
 - J6. 设计 `CapabilityStateStore` 与 capability budget 原子消费接口：`未开始`
 - J7. 实现 SQLite budget contract 测试，并明确 file-marker 不作为并发预算主后端：`未开始`
 - J8. 设计 revocation store、短 TTL 默认值与 parent capability 级联撤销语义：`未开始`
@@ -1872,8 +1889,8 @@ protected sinks 至少覆盖：
 
 0. 当前默认主线调整为 `Execution access control extensions for signed intent capabilities`：
    - 旧的 proof-hardening / sink-centric signed intent execution gate 主线已经完成第一阶段闭环，不再有必须补完的旧主线 blocker。
-   - J1-J4 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation 与 fail-closed 参数校验已接入 runtime gate。
-   - 下一步默认继续 J5：hash-chained audit；随后再推进 capability budget、revocation / short TTL、online invariant monitor、IFC 与不可信推理平台论文论证。
+   - J1-J5 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit 与 fail-closed / tamper-evidence 测试已接入 runtime gate。
+   - 下一步默认继续 J6/J7：capability budget 与 SQLite contract；随后再推进 revocation / short TTL、online invariant monitor、IFC 与不可信推理平台论文论证。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
    - ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
 
@@ -2028,11 +2045,11 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 从 J5 开始推进 execution-gate audit hash chain：
-   - 当前普通 `execution_gate.jsonl` 可作为兼容输入。
-   - 新链路需要稳定 `seq / prev_hash / entry_hash` 字段。
-   - 防截断必须明确依赖外部 tail-hash anchor，不能只靠本地 hash chain。
-2. J6/J7 budget、J8 revocation、J9 monitor 在 J2/J4 schema 稳定后推进。
+1. 从 J6/J7 开始推进 capability budget：
+   - 设计 `CapabilityStateStore` 与原子消费接口。
+   - 优先实现 SQLite budget contract 测试。
+   - 明确 file-marker 后端不作为并发预算主后端。
+2. J8 revocation、J9 monitor 在 budget 状态接口稳定后推进。
 3. J10 IFC 后置为机密性扩展；J11 论文 threat model 可先以文档形式推进，不阻塞代码。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
@@ -2069,6 +2086,76 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-06-27 Hash-Chained Audit J5 Implementation Session
+
+目标：
+
+- 完成 J5：将 execution-gate audit JSONL 升级为 hash-chained tamper-evident log。
+- 保持 `<agent workdir>/audit/execution_gate.jsonl` 文件名和旧 JSONL 读取兼容。
+- 明确本地 hash chain 只检测中间删改；末尾截断必须依赖外部 tail-hash anchor。
+
+已做工作：
+
+- `saga/execution_gate.py`
+  - 新增 `AUDIT_CHAIN_GENESIS_HASH`。
+  - 新增 `ExecutionGateAuditChainValidation`。
+  - 新增 `validate_execution_gate_audit_chain(...)`。
+  - `append_execution_gate_audit_record(...)` 现在追加：
+    - `seq`
+    - `prev_hash`
+    - `entry_hash`
+  - `entry_hash` 使用稳定 canonical JSON 计算，并排除 `entry_hash` 字段自身。
+  - 旧普通 JSONL 行可作为 legacy prefix；第一条 chained record 会把 legacy prefix 的合成 tail hash 写入 `prev_hash`。
+  - 如果已有 chained log 校验失败，后续 append 会拒绝继续扩展损坏链。
+- `tests/test_execution_gate.py`
+  - 覆盖单条 audit 记录的链字段。
+  - 覆盖连续两条记录的 `prev_hash -> entry_hash` 链接。
+  - 覆盖中间记录篡改导致 `entry_hash_mismatch`。
+  - 覆盖本地链无法单独检测末尾截断，必须传入外部 `expected_tail_hash` 才能检测 `tail_hash_mismatch`。
+  - 覆盖 legacy JSONL prefix 被第一条 chained record 锚定。
+- `README.md`
+  - 记录 execution-gate audit 现在带 `seq / prev_hash / entry_hash`。
+- `SECURITY.md`
+  - 记录 hash-chain 审计语义、legacy prefix 兼容、可检测范围和截断限制。
+- 本工作文档：
+  - J5 标记为 `已完成`。
+  - 当前下一步切换到 J6/J7 capability budget 与 SQLite contract。
+
+已验证：
+
+- `.venv/bin/python -m py_compile saga/execution_gate.py tests/test_execution_gate.py` -> success
+- `.venv/bin/python -m pytest -q tests/test_execution_gate.py` -> `59 passed`
+- `.venv/bin/python -m pytest -q tests/test_execution_gate.py tests/integration/test_baseline_agent_flow.py` -> `93 passed`
+- `.venv/bin/python -m pytest -q tests/test_result_logging.py tests/test_end_to_end_validation.py tests/test_real_negative_runner.py` -> `34 passed, 3 subtests passed`
+- `.venv/bin/python -m pytest -q` -> `439 passed, 69 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `38 passed, 12 subtests passed`
+- `git diff --check` -> no output
+- 未发现 `pyproject.toml`、`setup.cfg`、`tox.ini`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `pyrightconfig.json`，因此未运行 `ruff check .` / `mypy .`。
+
+安全边界：
+
+- 本轮没有实现生产级密码算法；toy LWE / compiled verifier 边界不变。
+- Hash chain 是本地 tamper-evident evidence log，不是远程不可抵赖日志。
+- 本地链能检测已锚定链中的中间删改；如果攻击者删除末尾记录且没有外部 tail-hash anchor，本地文件自身无法证明截断。
+- 外部 anchor 可使用最新 `entry_hash` / tail hash 的独立 checkpoint、append-only store 或备份分支记录；本轮只提供校验入口，不实现外部 anchoring 服务。
+
+待提交文件：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `saga/execution_gate.py`
+- `tests/test_execution_gate.py`
+
+本轮待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+
+GitHub / checkpoint 状态：
+
+- 已形成本轮本地 checkpoint：
+  - `checkpoint: add hash-chained execution audit`
+- 备份推送待执行；目标仍为 `origin/backup/repro-local`，不得推送主开发分支。
 
 ### 2026-06-27 Delegation Constraint Attenuation J4 Implementation Session
 

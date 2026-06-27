@@ -210,6 +210,16 @@ by the tests and paper tables.
   `authorization_formula`: `saga_token_valid`, `request_envelope_valid`,
   `pq_signature_valid`, `can_accept`, `execution_scope_allowed`, and
   `internal_policy_accept`.
+- Execution-gate audit records are appended to
+  `<agent workdir>/audit/execution_gate.jsonl` as a local hash chain. Each new
+  chained record carries `seq`, `prev_hash`, and `entry_hash`, where
+  `entry_hash` is computed over a stable canonical JSON representation of the
+  record without the `entry_hash` field itself. Existing plain JSONL rows are
+  accepted as a legacy prefix and are anchored by the first chained append. This
+  local chain detects middle-of-chain deletion or modification after a chained
+  tail exists; it does not by itself prevent truncation of the most recent
+  records. Detecting tail truncation requires storing the latest `entry_hash`
+  in an external append-only anchor or checkpoint.
 - Agent-LLM output may request scopes or explain intent, but it is not a trusted
   authorization proof. Runtime gates make the final decision.
 - LLM/requested scopes are compiled by local policy. Rejected proposals use
