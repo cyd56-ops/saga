@@ -21,10 +21,12 @@ from saga.execution_gate import (
     ExecutionGateDecision,
     ExecutionGateRequest,
     FileReplayStateStore,
+    InMemoryRevocationStore,
     RedisReplayStateStore,
     SignedRequestExecutionGate,
     SQLiteCapabilityStateStore,
     SQLiteReplayStateStore,
+    SQLiteRevocationStore,
     build_execution_gate_audit_record,
     validate_execution_gate_audit_chain,
 )
@@ -78,6 +80,14 @@ class _UnavailableCapabilityStateStore:
     def consume_budget(self, envelope: RequestEnvelope, action_scope: str) -> str:
         """模拟后端扣减失败，执行路径应 fail-closed。"""
         raise OSError("capability state unavailable")
+
+
+class _UnavailableRevocationStore:
+    """测试用不可用 revocation store，模拟撤销后端故障。"""
+
+    def revocation_status(self, envelope: RequestEnvelope) -> str:
+        """模拟后端查询失败，gate 应 fail-closed。"""
+        raise OSError("revocation store unavailable")
 
 
 class SignedRequestExecutionGateTests(unittest.TestCase):
@@ -220,6 +230,111 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 "internal_policy_accept": None,
             },
         )
+
+    def test_gate_rejects_revoked_capability_id_after_signature_verification(self) -> None:
+        """已撤销 capability id 即使签名/CAN 通过也必须 fail-closed。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-revoked",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            message="hello",
+            timestamp=self.now,
+            capability_id="cap-revoked",
+        )
+        request = self._signed_request_from_envelope(envelope, "hello")
+        revocations = InMemoryRevocationStore(capability_ids={"cap-revoked"})
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            revocation_store=revocations,
+        )
+
+        decision = gate.evaluate_request(request)
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "capability_revoked")
+        self.assertTrue(decision.pq_signature_valid)
+        self.assertTrue(decision.can_accept)
+        self.assertTrue(decision.execution_scope_allowed)
+        self.assertIsNone(gate.build_local_execution_context_from_decision(request, decision))
+
+    def test_gate_rejects_child_when_parent_digest_is_revoked(self) -> None:
+        """撤销父 envelope digest 应级联拒绝声明该父 digest 的子 capability。"""
+        parent = self._parent_capability_envelope()
+        child = self._delegated_child_envelope(parent)
+        request = self._signed_request_from_envelope(child, "child")
+        revocations = InMemoryRevocationStore(
+            parent_envelope_digests={parent.hex_digest()}
+        )
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            parent_capability_store={parent.hex_digest(): parent},
+            revocation_store=revocations,
+        )
+
+        decision = gate.evaluate_request(request)
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "parent_capability_revoked")
+        self.assertTrue(decision.pq_signature_valid)
+        self.assertTrue(decision.can_accept)
+
+    def test_sqlite_revocation_store_rejects_revoked_capability(self) -> None:
+        """SQLite revocation store 应持久化 capability id 撤销事实。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-sqlite-revoked",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            message="hello",
+            timestamp=self.now,
+            capability_id="cap-sqlite-revoked",
+        )
+        request = self._signed_request_from_envelope(envelope, "hello")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            revocations = SQLiteRevocationStore(Path(tmpdir) / "revocations.sqlite3")
+            revocations.revoke_capability_id("cap-sqlite-revoked", reason="operator test")
+            gate = SignedRequestExecutionGate(
+                CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+                {"alice@example.com:calendar_agent": self.key_pair.public_key},
+                now_fn=lambda: self.now,
+                revocation_store=revocations,
+            )
+
+            decision = gate.evaluate_request(request)
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "capability_revoked")
+
+    def test_gate_fails_closed_when_revocation_store_is_unavailable(self) -> None:
+        """配置了 revocation store 时，查询失败必须拒绝而不是放行。"""
+        request = self._build_request()
+        gate = SignedRequestExecutionGate(
+            CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
+            {"alice@example.com:calendar_agent": self.key_pair.public_key},
+            now_fn=lambda: self.now,
+            revocation_store=_UnavailableRevocationStore(),
+        )
+
+        decision = gate.evaluate_request(request)
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "revocation_store_unavailable")
+        self.assertTrue(decision.pq_signature_valid)
+        self.assertTrue(decision.can_accept)
 
     def test_enforcement_mode_values_are_stable_for_audit(self) -> None:
         """执行强制模式需要稳定的小写值，供配置和审计 JSON 复用。"""

@@ -407,6 +407,10 @@ child envelopes must reference a known parent digest and may only attenuate the
 parent scope set; they cannot add new tool, memory, prompt, or delegation
 authority. Budgeted capabilities require an injected state backend such as
 `SQLiteCapabilityStateStore`; missing or unavailable budget state fails closed.
+Runtime-auth signed capabilities default to a 300-second TTL capped by the SAGA
+token expiry. A revocation backend such as `SQLiteRevocationStore` can revoke a
+single `capability_id` or cascade-revoke children that name a revoked
+`parent_envelope_digest`.
 
 The experiment entrypoints also append a task-level structured result row under
 `experiments/results/<task-name>.jsonl`, including the run mode, peer AID,

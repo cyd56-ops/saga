@@ -813,6 +813,186 @@ class SQLiteCapabilityStateStore:
             raise RuntimeError("sqlite capability state database is unavailable") from exc
 
 
+RevocationStatus = Literal[
+    "active",
+    "capability_revoked",
+    "parent_capability_revoked",
+]
+
+
+class RevocationStore(Protocol):
+    """查询 signed capability 是否已被本地撤销的状态后端。"""
+
+    def revocation_status(self, envelope: RequestEnvelope) -> RevocationStatus:
+        """返回 capability 撤销状态；后端故障应抛出 ``OSError``。"""
+
+
+class InMemoryRevocationStore:
+    """进程内撤销事实源，适用于测试或显式注入的小型本地运行。"""
+
+    def __init__(
+        self,
+        *,
+        capability_ids: Iterable[str] | None = None,
+        parent_envelope_digests: Iterable[str] | None = None,
+    ) -> None:
+        """初始化 capability id 与 parent digest 两类撤销集合。"""
+        self._capability_ids = set(capability_ids or ())
+        self._parent_envelope_digests = {
+            digest.lower() for digest in (parent_envelope_digests or ())
+        }
+
+    def revoke_capability_id(self, capability_id: str) -> None:
+        """按 capability id 撤销已签名 capability。"""
+        if not capability_id:
+            raise ValueError("capability_id must be non-empty")
+        self._capability_ids.add(capability_id)
+
+    def revoke_parent_envelope_digest(self, parent_envelope_digest: str) -> None:
+        """按父 envelope digest 撤销所有声明该父 capability 的子 capability。"""
+        if not parent_envelope_digest:
+            raise ValueError("parent_envelope_digest must be non-empty")
+        self._parent_envelope_digests.add(parent_envelope_digest.lower())
+
+    def revocation_status(self, envelope: RequestEnvelope) -> RevocationStatus:
+        """检查 capability 自身或其父 capability 是否已被撤销。"""
+        if envelope.capability_id in self._capability_ids:
+            return "capability_revoked"
+        if (
+            envelope.parent_envelope_digest
+            and envelope.parent_envelope_digest.lower() in self._parent_envelope_digests
+        ):
+            return "parent_capability_revoked"
+        return "active"
+
+
+class SQLiteRevocationStore:
+    """使用 SQLite 保存 capability revocation 状态的本地 SQL-style 后端。"""
+
+    def __init__(self, database_path: str | Path, *, timeout_seconds: float = 5.0) -> None:
+        """初始化 SQLite revocation store，并创建撤销表。"""
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        self.database_path = Path(database_path)
+        if self.database_path.parent != Path("."):
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.timeout_seconds = timeout_seconds
+        self._ensure_schema()
+
+    def revoke_capability_id(self, capability_id: str, *, reason: str = "") -> None:
+        """按 capability id 写入撤销记录。"""
+        if not capability_id:
+            raise ValueError("capability_id must be non-empty")
+        self._insert_revocation("capability_id", capability_id, reason)
+
+    def revoke_parent_envelope_digest(
+        self,
+        parent_envelope_digest: str,
+        *,
+        reason: str = "",
+    ) -> None:
+        """按 parent envelope digest 写入级联撤销记录。"""
+        if not parent_envelope_digest:
+            raise ValueError("parent_envelope_digest must be non-empty")
+        self._insert_revocation(
+            "parent_envelope_digest",
+            parent_envelope_digest.lower(),
+            reason,
+        )
+
+    def revocation_status(self, envelope: RequestEnvelope) -> RevocationStatus:
+        """查询 capability 自身或其父 capability 是否已被撤销。"""
+        try:
+            with closing(self._connect()) as connection:
+                if self._revocation_exists(
+                    connection,
+                    "capability_id",
+                    envelope.capability_id,
+                ):
+                    return "capability_revoked"
+                if envelope.parent_envelope_digest and self._revocation_exists(
+                    connection,
+                    "parent_envelope_digest",
+                    envelope.parent_envelope_digest.lower(),
+                ):
+                    return "parent_capability_revoked"
+        except sqlite3.Error as exc:
+            raise OSError("sqlite revocation database is unavailable") from exc
+        return "active"
+
+    def _insert_revocation(self, revocation_type: str, value: str, reason: str) -> None:
+        """以幂等 upsert 方式保存撤销事实。"""
+        try:
+            with closing(self._connect()) as connection:
+                with connection:
+                    connection.execute(
+                        """
+                        INSERT OR REPLACE INTO saga_capability_revocations (
+                            revocation_type,
+                            revocation_value,
+                            recorded_at,
+                            reason
+                        )
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            revocation_type,
+                            value,
+                            datetime.now(tz=timezone.utc).isoformat(),
+                            reason,
+                        ),
+                    )
+        except sqlite3.Error as exc:
+            raise OSError("sqlite revocation database is unavailable") from exc
+
+    def _revocation_exists(
+        self,
+        connection: sqlite3.Connection,
+        revocation_type: str,
+        value: str,
+    ) -> bool:
+        """查询指定撤销事实是否存在。"""
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM saga_capability_revocations
+            WHERE revocation_type = ?
+              AND revocation_value = ?
+            LIMIT 1
+            """,
+            (revocation_type, value),
+        ).fetchone()
+        return row is not None
+
+    def _connect(self) -> sqlite3.Connection:
+        """打开短生命周期连接，避免跨线程共享 SQLite connection 状态。"""
+        connection = sqlite3.connect(self.database_path, timeout=self.timeout_seconds)
+        connection.execute(f"PRAGMA busy_timeout = {int(self.timeout_seconds * 1000)}")
+        return connection
+
+    def _ensure_schema(self) -> None:
+        """创建撤销表；复合主键保证撤销事实幂等。"""
+        try:
+            with closing(self._connect()) as connection:
+                with connection:
+                    connection.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS saga_capability_revocations (
+                            revocation_type TEXT NOT NULL,
+                            revocation_value TEXT NOT NULL,
+                            recorded_at TEXT NOT NULL,
+                            reason TEXT NOT NULL,
+                            PRIMARY KEY (
+                                revocation_type,
+                                revocation_value
+                            )
+                        )
+                        """
+                    )
+        except sqlite3.Error as exc:
+            raise RuntimeError("sqlite revocation database is unavailable") from exc
+
+
 @dataclass(frozen=True)
 class LocalExecutionContext:
     """Execution context propagated into local prompt/tool execution."""
@@ -1219,6 +1399,7 @@ class SignedRequestExecutionGate:
         replay_state_dir: str | Path | None = None,
         replay_state_store: ReplayStateStore | None = None,
         capability_state_store: CapabilityStateStore | None = None,
+        revocation_store: RevocationStore | None = None,
         parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None = None,
     ) -> None:
         """Store a CAN gate, trusted public keys, and optional shared replay state."""
@@ -1227,6 +1408,7 @@ class SignedRequestExecutionGate:
         self.can_gate = can_gate
         self.trusted_public_keys = dict(trusted_public_keys)
         self.capability_state_store = capability_state_store
+        self.revocation_store = revocation_store
         self.parent_capability_store = _normalize_parent_capability_store(parent_capability_store)
         self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
         self._seen_request_ids: set[str] = set()
@@ -1334,6 +1516,33 @@ class SignedRequestExecutionGate:
                 pq_signature=signature,
                 sender_public_key=public_key,
             )
+        if self.revocation_store is not None:
+            try:
+                revocation_status = self.revocation_store.revocation_status(envelope)
+            except OSError:
+                return ExecutionGateDecision(
+                    False,
+                    "revocation_store_unavailable",
+                    request_envelope_valid=request_envelope_valid,
+                    pq_signature_valid=True,
+                    can_accept=True,
+                    execution_scope_allowed=execution_scope_allowed,
+                    request_envelope=envelope,
+                    pq_signature=signature,
+                    sender_public_key=public_key,
+                )
+            if revocation_status != "active":
+                return ExecutionGateDecision(
+                    False,
+                    revocation_status,
+                    request_envelope_valid=request_envelope_valid,
+                    pq_signature_valid=True,
+                    can_accept=True,
+                    execution_scope_allowed=execution_scope_allowed,
+                    request_envelope=envelope,
+                    pq_signature=signature,
+                    sender_public_key=public_key,
+                )
         return ExecutionGateDecision(
             True,
             "authorized",
@@ -1521,6 +1730,7 @@ def build_toy_lwe_execution_gate(
     now_fn: Callable[[], datetime] | None = None,
     replay_state_dir: str | Path | None = None,
     replay_state_store: ReplayStateStore | None = None,
+    revocation_store: RevocationStore | None = None,
     parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None = None,
 ) -> SignedRequestExecutionGate:
     """Build a signed execution gate for the research-only toy LWE scheme.
@@ -1550,6 +1760,7 @@ def build_toy_lwe_execution_gate(
         now_fn=now_fn,
         replay_state_dir=replay_state_dir,
         replay_state_store=replay_state_store,
+        revocation_store=revocation_store,
         parent_capability_store=parent_capability_store,
     )
 

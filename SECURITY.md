@@ -254,6 +254,19 @@ by the tests and paper tables.
   consistency. File-marker replay stores are not budget backends. Missing,
   unavailable, conflicting, or exhausted budget state fails closed before the
   protected action runs.
+- Runtime-auth signed capabilities default to a short TTL of 300 seconds,
+  capped by the SAGA token expiry. This changes only the capability envelope
+  lifetime; it does not extend or weaken token validation. Config may lower or
+  raise `capability_ttl_seconds`, but the value must be a positive integer.
+- Revocation is checked after request envelope binding, time-window validation,
+  execution-scope validation, PQ/CAN signature verification, and before
+  `LocalExecutionContext` construction. A `RevocationStore` can revoke a single
+  signed capability by `capability_id` or cascade-revoke delegated children by
+  `parent_envelope_digest`. The checked-in `SQLiteRevocationStore` is a local
+  SQL-style contract proof and does not claim distributed consistency.
+  Configured revocation-store lookup failure fails closed as
+  `revocation_store_unavailable`; revoked entries fail closed as
+  `capability_revoked` or `parent_capability_revoked`.
 - Tool permission failures after prompt entry are local execution-surface
   failures, not PQ-CAN signature-gate rejects. Wrapped tool calls expose
   `tool_not_authorized`; capability-facade failures expose

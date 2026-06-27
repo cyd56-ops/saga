@@ -534,6 +534,13 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `LocalExecutionContext.require_action(...)` 会在授权通过后、protected sink 执行前消费预算
   - 带预算的 capability 缺少状态后端、状态后端不可用、预算冲突或预算耗尽时 fail-closed
   - file-marker replay store 不作为并发预算主后端；当前预算 contract 只落地 SQLite 本地 research/test adapter
+- 当前 signed capability 已支持第一版 revocation 与短 TTL：
+  - `saga/execution_gate.py` 新增 `RevocationStore` 协议、`InMemoryRevocationStore` 与 `SQLiteRevocationStore`
+  - revocation 可按 `capability_id` 精确撤销，也可按 `parent_envelope_digest` 级联撤销声明该父 digest 的 delegated child capability
+  - 配置了 revocation backend 时，后端不可用会以 `revocation_store_unavailable` fail-closed
+  - 撤销检查位于 envelope/time/scope/PQ/CAN 验证之后、`LocalExecutionContext` 构造之前；撤销不能替代验签，只能在验签后收紧授权
+  - runtime-auth signed capability 默认 TTL 已收紧为 300 秒，并由 SAGA token 过期时间封顶
+  - `ToyRuntimeAuthConfig.capability_ttl_seconds` 支持显式覆盖，但只接受正整数
 - 当前 canonical request envelope 已支持第一版参数级 / 受约束 scope：
   - `saga/messages.py` 新增 `scope_constraints`，并把约束写入 canonical envelope digest。
   - 约束 schema 只允许封闭谓词集合：`eq`、`in`、`lte`、`gte`、`max_length`；不允许 callback、regex 或任意表达式。
@@ -907,7 +914,7 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
 - SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
-- 后续执行访问控制扩展：`进行中`（J1-J7 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget 与 SQLite contract 已落地；下一步为 revocation / short TTL）
+- 后续执行访问控制扩展：`进行中`（J1-J8 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store 与短 TTL 已落地；下一步为 online invariant monitor）
 
 ### 3.4 阻塞 / 风险
 
@@ -928,6 +935,12 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `.venv/bin/python -m pytest -q tests/test_agent_wrapper_gate.py tests/test_security_kernel.py tests/test_strict_runtime_auth_evidence_summary.py` -> `50 passed, 10 subtests passed`
   - `.venv/bin/python -m pytest -q tests/test_negative_injection_runner.py tests/test_real_negative_runner.py tests/test_end_to_end_validation.py` -> `33 passed, 3 subtests passed`
   - `.venv/bin/python -m pytest -q` -> `446 passed, 69 subtests passed`
+- 已于 `2026-06-27` 聚焦确认 J8 revocation / short TTL 后测试结果：
+  - `.venv/bin/python -m py_compile saga/execution_gate.py saga/agent.py saga/config.py tests/test_execution_gate.py tests/test_agent_runtime_auth.py` -> success
+  - `.venv/bin/python -m pytest -q tests/test_execution_gate.py tests/test_agent_runtime_auth.py tests/test_runtime_auth_configs.py` -> `97 passed`
+  - `.venv/bin/python -m pytest -q tests/integration/test_baseline_agent_flow.py` -> `34 passed`
+  - `.venv/bin/python -m pytest -q tests/test_security_kernel.py tests/test_strict_runtime_auth_evidence_summary.py tests/test_negative_injection_runner.py` -> `37 passed, 10 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/test_real_negative_runner.py tests/test_end_to_end_validation.py tests/test_agent_wrapper_gate.py` -> `46 passed, 3 subtests passed`
   - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
   - `.venv/bin/python -m pytest -q tests/integration` -> `38 passed, 12 subtests passed`
   - `git diff --check` -> no output
@@ -1898,7 +1911,7 @@ protected sinks 至少覆盖：
 - J5. 将 execution-gate audit JSONL 升级为 hash-chained tamper-evident log：`已完成`（第一阶段：`seq / prev_hash / entry_hash`、legacy JSONL prefix anchoring、tamper detection 与外部 tail-hash anchor 截断检测入口已落地）
 - J6. 设计 `CapabilityStateStore` 与 capability budget 原子消费接口：`已完成`（第一阶段：signed `execution_budget`、`CapabilityStateStore.consume_budget(...)`、缺 store / store failure / budget exhausted fail-closed 已落地）
 - J7. 实现 SQLite budget contract 测试，并明确 file-marker 不作为并发预算主后端：`已完成`（第一阶段：`SQLiteCapabilityStateStore` 用事务原子消费 `total` 与 per-scope budget，并发消费不超过 signed limit；file-marker replay store 不作为预算后端）
-- J8. 设计 revocation store、短 TTL 默认值与 parent capability 级联撤销语义：`未开始`
+- J8. 设计 revocation store、短 TTL 默认值与 parent capability 级联撤销语义：`已完成`（第一阶段：`RevocationStore`、`InMemoryRevocationStore`、`SQLiteRevocationStore`、`capability_id` 精确撤销、`parent_envelope_digest` 级联撤销、后端不可用 fail-closed 与默认 300 秒 capability TTL 已落地）
 - J9. 在 capability facade / sink wrapper 上加入第一版 online invariant monitor：`未开始`
 - J10. 设计轻量 IFC 标签、flow policy、source/transform/egress sink 分类和显式 declassify scope：`未开始`
 - J11. 更新论文 threat model，明确验签神经元的价值来自“不可信推理平台 / 控制流不可信”部署模型：`未开始`
@@ -1909,8 +1922,8 @@ protected sinks 至少覆盖：
 
 0. 当前默认主线调整为 `Execution access control extensions for signed intent capabilities`：
    - 旧的 proof-hardening / sink-centric signed intent execution gate 主线已经完成第一阶段闭环，不再有必须补完的旧主线 blocker。
-   - J1-J7 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget 与 SQLite contract 已接入 runtime gate。
-   - 下一步默认继续 J8：revocation store、短 TTL 默认值与 parent capability 级联撤销语义；随后再推进 online invariant monitor、IFC 与不可信推理平台论文论证。
+   - J1-J8 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store 与短 TTL 已接入 runtime gate。
+   - 下一步默认继续 J9：在 capability facade / sink wrapper 上加入第一版 online invariant monitor；随后再推进 IFC 与不可信推理平台论文论证。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
    - ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
 
@@ -2723,6 +2736,72 @@ GitHub / checkpoint 状态：
 GitHub / checkpoint 状态：
 
 - 当前工作区改动尚未形成 checkpoint commit；需在规定测试通过后执行最终 git 状态检查。
+
+### 2026-06-27 Revocation Store / Short TTL J8 Implementation Session
+
+目标：
+
+- 完成 J8：为 signed intent capability 增加 revocation store、短 TTL 默认值与 parent capability 级联撤销语义。
+
+已做工作：
+
+- 更新 `saga/execution_gate.py`：
+  - 新增 `RevocationStore` 协议与 `RevocationStatus`
+  - 新增 `InMemoryRevocationStore`，用于测试和显式注入的小型本地运行
+  - 新增 `SQLiteRevocationStore`，用本地 SQLite 表保存 `capability_id` 与 `parent_envelope_digest` 两类撤销事实
+  - `SignedRequestExecutionGate` 新增可选 `revocation_store`
+  - gate 在 envelope/time/scope/PQ/CAN 验证通过后、`LocalExecutionContext` 构造前检查撤销状态
+  - revocation backend 不可用时以 `revocation_store_unavailable` fail-closed
+- 更新 `saga/config.py`：
+  - `ToyRuntimeAuthConfig` 新增 `capability_ttl_seconds`
+  - 配置只接受正整数，避免无限 TTL 或布尔值歧义
+- 更新 `saga/agent.py`：
+  - runtime-auth signed capability 默认 TTL 收紧为 300 秒
+  - envelope `expires_at` 取 `issued_at + capability_ttl_seconds` 与 SAGA token expiry 的较早值
+  - config-driven runtime auth helper 支持传入 revocation backend 与 TTL 配置
+- 更新测试：
+  - 覆盖 `capability_id` 精确撤销
+  - 覆盖 `parent_envelope_digest` 级联撤销 delegated child capability
+  - 覆盖 SQLite revocation store 持久化撤销事实
+  - 覆盖 revocation backend 不可用 fail-closed
+  - 覆盖默认 300 秒短 TTL、配置覆盖 TTL、TTL 不延长 token expiry、非法 TTL 配置拒绝
+- 更新文档：
+  - `README.md` 记录短 TTL 与 revocation backend 能力
+  - `SECURITY.md` 记录 revocation 检查顺序、fail-closed 原因与 SQLite 后端边界
+  - 本工作文档将 J8 标记为 `已完成`，当前下一步切换到 J9 online invariant monitor
+
+已验证：
+
+- `.venv/bin/python -m py_compile saga/execution_gate.py saga/agent.py saga/config.py tests/test_execution_gate.py tests/test_agent_runtime_auth.py` -> success
+- `.venv/bin/python -m pytest -q tests/test_execution_gate.py tests/test_agent_runtime_auth.py tests/test_runtime_auth_configs.py` -> `97 passed`
+- `.venv/bin/python -m pytest -q tests/integration/test_baseline_agent_flow.py` -> `34 passed`
+- `.venv/bin/python -m pytest -q tests/test_security_kernel.py tests/test_strict_runtime_auth_evidence_summary.py tests/test_negative_injection_runner.py` -> `37 passed, 10 subtests passed`
+- `.venv/bin/python -m pytest -q tests/test_real_negative_runner.py tests/test_end_to_end_validation.py tests/test_agent_wrapper_gate.py` -> `46 passed, 3 subtests passed`
+- `.venv/bin/python -m pytest -q` -> `454 passed, 69 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `38 passed, 12 subtests passed`
+- `git diff --check` -> success
+- 未发现 `ruff` / `mypy` 配置文件，因此未运行 `ruff check .` 或 `mypy .`。
+
+当前 checkpoint 待提交文件范围：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `saga/agent.py`
+- `saga/config.py`
+- `saga/execution_gate.py`
+- `tests/test_agent_runtime_auth.py`
+- `tests/test_execution_gate.py`
+
+敏感文件审查：
+
+- 待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+- 本次未启动真实服务 runner 或模型 batch，未生成新的实验运行产物。
+
+GitHub / checkpoint 状态：
+
+- 当前工作区改动尚未形成 checkpoint commit；需在完整测试通过后执行最终 git 状态检查。
 
 ### 2026-06-09 Default Branch Proof-Hardening Sync Session
 

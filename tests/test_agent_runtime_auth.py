@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import tempfile
@@ -74,7 +74,100 @@ class AgentRuntimeAuthTests(unittest.TestCase):
         self.assertEqual(alice.pq_public_key, self.alice_keys.public_key)
         self.assertEqual(alice.pq_secret_key, self.alice_keys.secret_key)
         self.assertTrue(alice.strict_execution_gate)
+        self.assertEqual(alice.runtime_auth_capability_ttl_seconds, 300)
         self.assertEqual(local_agent.strict_values, [True])
+
+    def test_runtime_auth_caps_signed_capability_ttl_by_default(self) -> None:
+        """runtime-auth 签名 capability 默认不继承一小时 token TTL。"""
+        alice_aid = "alice@example.com:calendar_agent"
+        bob_aid = "bob@example.com:email_agent"
+        alice = self._make_agent(alice_aid)
+        enable_toy_lwe_runtime_auth(
+            alice,
+            scheme=self.scheme,
+            key_pair=self.alice_keys,
+            trusted_public_keys={bob_aid: self.bob_keys.public_key},
+            now_fn=lambda: self.now,
+        )
+
+        payload = alice._build_conversation_payload(
+            receiver_aid=bob_aid,
+            token="enc-token",
+            message="hello",
+            action_scope="llm_prompt",
+            turn_index=0,
+            token_dict={
+                "issue_timestamp": self.now.isoformat(),
+                "expiration_timestamp": (self.now + timedelta(hours=1)).isoformat(),
+            },
+        )
+
+        envelope = parse_request_envelope(payload["request_envelope"])
+        self.assertEqual(envelope.issued_at, "2026-05-11T12:00:00Z")
+        self.assertEqual(envelope.expires_at, "2026-05-11T12:05:00Z")
+
+    def test_config_runtime_auth_can_override_capability_ttl(self) -> None:
+        """配置中的 capability_ttl_seconds 应控制 signed capability TTL 上限。"""
+        alice_aid = "alice@example.com:calendar_agent"
+        bob_aid = "bob@example.com:email_agent"
+        alice = self._make_agent(alice_aid)
+        runtime_auth_config = ToyRuntimeAuthConfig(
+            enabled=True,
+            seed=47,
+            capability_ttl_seconds=60,
+            trusted_public_keys={
+                bob_aid: base64.b64encode(self.bob_keys.public_key).decode("utf-8")
+            },
+        )
+        enable_toy_lwe_runtime_auth_from_config(
+            alice,
+            runtime_auth_config,
+            now_fn=lambda: self.now,
+        )
+
+        payload = alice._build_conversation_payload(
+            receiver_aid=bob_aid,
+            token="enc-token",
+            message="hello",
+            action_scope="llm_prompt",
+            turn_index=0,
+            token_dict={
+                "issue_timestamp": self.now.isoformat(),
+                "expiration_timestamp": (self.now + timedelta(hours=1)).isoformat(),
+            },
+        )
+
+        envelope = parse_request_envelope(payload["request_envelope"])
+        self.assertEqual(alice.runtime_auth_capability_ttl_seconds, 60)
+        self.assertEqual(envelope.expires_at, "2026-05-11T12:01:00Z")
+
+    def test_runtime_auth_capability_ttl_does_not_extend_token_expiry(self) -> None:
+        """短 TTL 上限不能把 capability 过期时间延长到 token 过期之后。"""
+        alice_aid = "alice@example.com:calendar_agent"
+        bob_aid = "bob@example.com:email_agent"
+        alice = self._make_agent(alice_aid)
+        enable_toy_lwe_runtime_auth(
+            alice,
+            scheme=self.scheme,
+            key_pair=self.alice_keys,
+            trusted_public_keys={bob_aid: self.bob_keys.public_key},
+            now_fn=lambda: self.now,
+        )
+
+        payload = alice._build_conversation_payload(
+            receiver_aid=bob_aid,
+            token="enc-token",
+            message="hello",
+            action_scope="llm_prompt",
+            turn_index=0,
+            token_dict={
+                "issue_timestamp": self.now.isoformat(),
+                "expiration_timestamp": (self.now + timedelta(seconds=30)).isoformat(),
+            },
+        )
+
+        envelope = parse_request_envelope(payload["request_envelope"])
+        self.assertEqual(envelope.expires_at, "2026-05-11T12:00:30Z")
 
     def test_runtime_auth_requires_persistent_replay_state_by_default(self) -> None:
         """安全模式缺少 workdir 或显式 replay store 时不能退回内存态。"""
@@ -712,6 +805,14 @@ class AgentRuntimeAuthTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "downgrade_reason"):
             ToyRuntimeAuthConfig(enabled=True, enforcement_mode="disabled")
+
+    def test_config_rejects_invalid_capability_ttl(self) -> None:
+        """capability_ttl_seconds 必须是正整数，避免无限或布尔配置歧义。"""
+        with self.assertRaisesRegex(ValueError, "capability_ttl_seconds"):
+            ToyRuntimeAuthConfig(enabled=True, capability_ttl_seconds=0)
+
+        with self.assertRaisesRegex(ValueError, "capability_ttl_seconds"):
+            ToyRuntimeAuthConfig(enabled=True, capability_ttl_seconds=True)
 
     def test_config_rejects_conflicting_strict_flag_and_enforcement_mode(self) -> None:
         """新旧 enforcement 字段冲突时应拒绝，避免配置语义含混。"""

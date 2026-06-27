@@ -141,6 +141,8 @@ class ToyRuntimeAuthConfig(Serializable):
     """Explicit replay backend config; preferred over legacy ``replay_state_dir``."""
     replay_state_dir: str | None = None
     """Legacy shared marker directory; mapped to ``ReplayStoreConfig(file_marker)``."""
+    capability_ttl_seconds: int = 300
+    """Default signed capability TTL; envelope expiry is capped by token expiry."""
     trusted_public_keys: dict[str, str] = field(default_factory=dict)
     """Mapping from trusted peer AIDs to base64-encoded toy public keys."""
 
@@ -159,6 +161,12 @@ class ToyRuntimeAuthConfig(Serializable):
             raise ValueError("toy_wrapper mode requires verifier_flavor='wrapper'")
         if self.message_bytes <= 0:
             raise ValueError("message_bytes must be positive")
+        if (
+            not isinstance(self.capability_ttl_seconds, int)
+            or isinstance(self.capability_ttl_seconds, bool)
+            or self.capability_ttl_seconds <= 0
+        ):
+            raise ValueError("capability_ttl_seconds must be a positive integer")
         if self.replay_store is not None and self.replay_state_dir is not None:
             raise ValueError("configure either replay_store or replay_state_dir, not both")
         if self.enforcement_mode is not None:

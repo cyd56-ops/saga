@@ -36,6 +36,7 @@ from saga.execution_gate import (
     ExecutionGateRequest,
     LocalExecutionContext,
     ReplayStateStore,
+    RevocationStore,
     build_toy_lwe_execution_gate,
     normalize_enforcement_mode,
 )
@@ -52,6 +53,7 @@ NONCE_SIZE_BYTES = 12  # Size of the nonce in bytes
 MAX_QUERIES = 100
 # 真实 LLM 工具调用可能超过两分钟；该超时只限制 socket 等待，不改变 token/信封有效期。
 CONVERSATION_SOCKET_TIMEOUT_SECONDS = 300.0
+DEFAULT_RUNTIME_AUTH_CAPABILITY_TTL_SECONDS = 300
 # TODO: Handle max_queries
 
 _LEGACY_DOWNGRADE_REASON = "legacy_non_strict_execution_gate"
@@ -192,6 +194,32 @@ def _sync_execution_capability_mode(agent: "Agent") -> None:
         local_agent.set_strict_execution_capabilities(_agent_enforcement_mode(agent) is EnforcementMode.STRICT)
 
 
+def _coerce_aware_datetime(value: datetime | str, field_name: str) -> datetime:
+    """把 token / capability 时间字段收敛为 aware datetime，避免本地时区歧义。"""
+    if isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    elif isinstance(value, datetime):
+        parsed = value
+    else:
+        raise TypeError(f"{field_name} must be a datetime or ISO-8601 string")
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field_name} must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
+
+
+def _capability_expires_at(
+    issued_at: datetime | str,
+    token_expires_at: datetime | str,
+    ttl_seconds: int,
+) -> datetime:
+    """按 runtime-auth 短 TTL 与 token 过期时间取较早者。"""
+    if ttl_seconds <= 0:
+        raise ValueError("ttl_seconds must be positive")
+    issued_at_dt = _coerce_aware_datetime(issued_at, "issued_at")
+    token_expires_at_dt = _coerce_aware_datetime(token_expires_at, "expires_at")
+    return min(token_expires_at_dt, issued_at_dt + timedelta(seconds=ttl_seconds))
+
+
 def enable_toy_lwe_runtime_auth(
     agent: "Agent",
     *,
@@ -203,6 +231,8 @@ def enable_toy_lwe_runtime_auth(
     now_fn: Callable[[], datetime] | None = None,
     replay_state_dir: str | Path | None = None,
     replay_state_store: ReplayStateStore | None = None,
+    revocation_store: RevocationStore | None = None,
+    capability_ttl_seconds: int = DEFAULT_RUNTIME_AUTH_CAPABILITY_TTL_SECONDS,
     enforcement_mode: EnforcementMode | str = EnforcementMode.STRICT,
     downgrade_reason: str | None = None,
 ) -> ExecutionGate:
@@ -219,6 +249,12 @@ def enable_toy_lwe_runtime_auth(
     if resolved_enforcement_mode is not EnforcementMode.STRICT:
         if downgrade_reason is None or not downgrade_reason.strip():
             raise ValueError("non-strict enforcement_mode requires downgrade_reason")
+    if (
+        not isinstance(capability_ttl_seconds, int)
+        or isinstance(capability_ttl_seconds, bool)
+        or capability_ttl_seconds <= 0
+    ):
+        raise ValueError("capability_ttl_seconds must be a positive integer")
 
     effective_replay_state_dir = replay_state_dir
     if replay_state_store is None:
@@ -232,6 +268,7 @@ def enable_toy_lwe_runtime_auth(
         now_fn=now_fn,
         replay_state_dir=effective_replay_state_dir,
         replay_state_store=replay_state_store,
+        revocation_store=revocation_store,
     )
     agent.pq_signature_scheme = scheme
     agent.pq_public_key = key_pair.public_key
@@ -239,6 +276,7 @@ def enable_toy_lwe_runtime_auth(
     agent.execution_gate = gate
     agent.enforcement_mode = resolved_enforcement_mode.value
     agent.execution_gate_downgrade_reason = downgrade_reason
+    agent.runtime_auth_capability_ttl_seconds = capability_ttl_seconds
     agent.strict_execution_gate = resolved_enforcement_mode is EnforcementMode.STRICT
     _sync_execution_capability_mode(agent)
     return gate
@@ -250,6 +288,7 @@ def enable_toy_lwe_runtime_auth_from_config(
     *,
     now_fn: Callable[[], datetime] | None = None,
     replay_state_store: ReplayStateStore | None = None,
+    revocation_store: RevocationStore | None = None,
 ) -> ExecutionGate | None:
     """从配置块启用 runtime auth，并按 mode 与 replay backend 保持安全边界。"""
     if runtime_auth_config is None or not runtime_auth_config.enabled:
@@ -295,6 +334,8 @@ def enable_toy_lwe_runtime_auth_from_config(
         now_fn=now_fn,
         replay_state_dir=replay_state_dir,
         replay_state_store=replay_state_store,
+        revocation_store=revocation_store,
+        capability_ttl_seconds=runtime_auth_config.capability_ttl_seconds,
         enforcement_mode=runtime_auth_config.resolved_enforcement_mode(),
         downgrade_reason=runtime_auth_config.downgrade_reason,
     )
@@ -1345,6 +1386,16 @@ class Agent:
         if token_dict is not None:
             issued_at = token_dict.get("issue_timestamp", issued_at)
             expires_at = token_dict.get("expiration_timestamp", expires_at)
+        capability_ttl_seconds = getattr(
+            self,
+            "runtime_auth_capability_ttl_seconds",
+            DEFAULT_RUNTIME_AUTH_CAPABILITY_TTL_SECONDS,
+        )
+        expires_at = _capability_expires_at(
+            issued_at,
+            expires_at,
+            capability_ttl_seconds,
+        )
 
         envelope = build_request_envelope(
             sender_aid=self.aid,
