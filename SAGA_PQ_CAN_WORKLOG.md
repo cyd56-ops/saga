@@ -2186,7 +2186,9 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 
 GitHub / checkpoint 状态：
 
-- 待最终 checkpoint 后补充本地提交与备份推送结果。
+- 已形成本轮本地 checkpoint：
+  - `checkpoint: add capability budget store`
+- 备份推送待执行；目标仍为 `origin/backup/repro-local`，不得推送主开发分支。
 
 ### 2026-06-27 Hash-Chained Audit J5 Implementation Session
 
