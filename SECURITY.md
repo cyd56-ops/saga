@@ -275,6 +275,16 @@ by the tests and paper tables.
   exhaustion, budget-store failures, and monitor backend failures all fail
   closed before the protected sink runs. `JSONLExecutionInvariantMonitor` is a
   local audit adapter, not a distributed monitor.
+- The first IFC slice is an explicit signed egress contract, not full automatic
+  language-level taint tracking. `flow_policy` is part of the canonical signed
+  envelope and defines which labels may flow to selected egress scopes. Runtime
+  transforms join labels monotonically; a label not allowed by the egress policy
+  can leave only when the same signed capability also carries
+  `declassify:<label>`. `ExecutionCapabilityFacade.call_egress(...)` checks the
+  normal action scope, the flow policy, and required declassification before the
+  protected egress operation runs. Missing declassification fails closed as
+  `ifc_declassify_scope_required`; tampering with `flow_policy` invalidates the
+  detached signature.
 - Tool permission failures after prompt entry are local execution-surface
   failures, not PQ-CAN signature-gate rejects. Wrapped tool calls expose
   `tool_not_authorized`; capability-facade failures expose

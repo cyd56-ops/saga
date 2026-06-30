@@ -22,6 +22,9 @@ from saga.messages import (
     action_scopes_allow,
     action_scope_allows,
     normalize_execution_budget,
+    flow_policy_blocked_labels,
+    join_flow_labels,
+    normalize_flow_labels,
     normalize_scope_constraints,
     parse_action_scope,
     parse_request_envelope,
@@ -307,6 +310,13 @@ def build_execution_gate_audit_record(
         record["signed_scope_constraints"] = {
             scope: list(constraints)
             for scope, constraints in envelope.scope_constraints.items()
+        }
+        record["signed_flow_policy"] = {
+            "default_label": envelope.flow_policy["default_label"],
+            "egress": {
+                scope: list(labels)
+                for scope, labels in envelope.flow_policy["egress"].items()
+            },
         }
         record["signed_capability_id"] = envelope.capability_id
         record["signed_parent_envelope_digest"] = envelope.parent_envelope_digest
@@ -1141,6 +1151,73 @@ class LocalExecutionContext:
                 action_scope,
             )
 
+    def join_flow_labels(
+        self,
+        *label_sets: Iterable[str] | str | None,
+    ) -> tuple[str, ...]:
+        """合并本 capability 内的 IFC 标签；普通 transform 不会降低污点。"""
+        return join_flow_labels(
+            *label_sets,
+            default_label=str(self.request_envelope.flow_policy["default_label"]),
+        )
+
+    def blocked_egress_labels(
+        self,
+        egress_scope: str,
+        labels: Iterable[str] | str | None,
+    ) -> tuple[str, ...]:
+        """返回指定 egress sink 需要显式 declassify 的标签集合。"""
+        return flow_policy_blocked_labels(
+            self.request_envelope.flow_policy,
+            egress_scope,
+            labels,
+        )
+
+    def authorize_egress(
+        self,
+        egress_scope: str,
+        labels: Iterable[str] | str | None,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """判断带 IFC 标签的数据能否流向指定 egress sink。"""
+        if not self.authorize_action(egress_scope, parameters):
+            return False
+        return all(
+            action_scopes_allow(
+                self.request_envelope.authorized_scopes,
+                f"declassify:{label}",
+            )
+            for label in self.blocked_egress_labels(egress_scope, labels)
+        )
+
+    def require_egress(
+        self,
+        egress_scope: str,
+        labels: Iterable[str] | str | None,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> None:
+        """要求 egress sink 授权且所有非允许标签均有显式 declassify scope。"""
+        if not self.authorize_action(egress_scope, parameters):
+            raise ExecutionAuthorizationError(
+                reason_for_unauthorized_scope(egress_scope),
+                egress_scope,
+            )
+        blocked_labels = self.blocked_egress_labels(egress_scope, labels)
+        missing_declassify = [
+            label
+            for label in blocked_labels
+            if not action_scopes_allow(
+                self.request_envelope.authorized_scopes,
+                f"declassify:{label}",
+            )
+        ]
+        if missing_declassify:
+            raise ExecutionAuthorizationError(
+                "ifc_declassify_scope_required",
+                egress_scope,
+            )
+        self._consume_budget(egress_scope)
+
     def authorize_tool_call(
         self,
         tool_name: str,
@@ -1289,6 +1366,35 @@ class ExecutionCapabilityFacade:
             constraint_parameters,
         )
 
+    def require_egress(
+        self,
+        egress_scope: str,
+        labels: Iterable[str] | str | None,
+        constraint_parameters: Mapping[str, Any] | None = None,
+    ) -> None:
+        """要求带 IFC 标签的数据可以流向指定 egress sink。"""
+        context = self._current_context(egress_scope)
+        if context is None:
+            return
+        try:
+            context.require_egress(egress_scope, labels, constraint_parameters)
+        except PermissionError as exc:
+            self._record_invariant_event(
+                context,
+                egress_scope,
+                "violation",
+                _authorization_error_reason(exc, egress_scope),
+                constraint_parameters,
+            )
+            raise
+        self._record_invariant_event(
+            context,
+            egress_scope,
+            "authorized",
+            "authorized",
+            constraint_parameters,
+        )
+
     def require_any_action(
         self,
         action_scopes: str | tuple[str, ...],
@@ -1343,6 +1449,19 @@ class ExecutionCapabilityFacade:
     ) -> T:
         """在调用底层操作前检查指定执行面 capability。"""
         self.require_action(action_scope, constraint_parameters)
+        return operation(*args, **kwargs)
+
+    def call_egress(
+        self,
+        egress_scope: str,
+        labels: Iterable[str] | str | None,
+        operation: Callable[P, T],
+        *args: P.args,
+        constraint_parameters: Mapping[str, Any] | None = None,
+        **kwargs: P.kwargs,
+    ) -> T:
+        """在 egress sink 执行前同时检查 scope、IFC flow policy 和 declassify。"""
+        self.require_egress(egress_scope, labels, constraint_parameters)
         return operation(*args, **kwargs)
 
     def call_any_action(
@@ -1504,6 +1623,8 @@ def reason_for_unauthorized_scope(action_scope: str) -> str:
         return "unauthorized_memory_write"
     if action_scope == "delegation":
         return "unauthorized_delegation"
+    if action_scope.startswith("declassify:") or action_scope == "declassify":
+        return "unauthorized_declassify_scope"
     if action_scope == "llm_prompt":
         return "prompt_scope_not_authorized"
     return "execution_scope_not_authorized"

@@ -13,8 +13,13 @@ from saga.messages import (
     action_scopes_are_attenuated,
     action_scopes_allow,
     build_request_envelope,
+    flow_policy_allows_egress,
+    flow_policy_blocked_labels,
+    join_flow_labels,
     normalize_authorized_scopes,
     normalize_execution_budget,
+    normalize_flow_labels,
+    normalize_flow_policy,
     normalize_scope_constraints,
     parse_action_scope,
     parse_request_envelope,
@@ -292,6 +297,74 @@ class RequestEnvelopeTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "non-negative integers"):
             normalize_execution_budget({"total": True})
+
+    def test_declassify_scope_parser_accepts_label_specific_scope(self) -> None:
+        """declassify scope 可绑定到具体 IFC 标签。"""
+        self.assertEqual(parse_action_scope("declassify:private"), ("declassify", "private"))
+        self.assertTrue(action_scope_allows("declassify", "declassify:private"))
+        self.assertFalse(action_scope_allows("declassify:secret", "declassify:private"))
+
+    def test_flow_policy_is_canonicalized_and_signed(self) -> None:
+        """IFC flow policy 应规范化后进入 canonical envelope digest。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="token-1",
+            session_id="session-1",
+            turn_id="turn-flow",
+            issued_at=datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 5, 7, 14, 0, 0, tzinfo=timezone.utc),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email", "declassify:private"],
+            flow_policy={
+                "default_label": "PUBLIC",
+                "egress": {"tool_call:send_email": ["private", "PUBLIC"]},
+            },
+            message="hello",
+        )
+
+        self.assertEqual(
+            envelope.flow_policy,
+            {
+                "default_label": "public",
+                "egress": {"tool_call:send_email": ("private", "public")},
+            },
+        )
+        self.assertIn("\"flow_policy\"", envelope.canonical_json())
+        parsed = parse_request_envelope(envelope.canonical_json())
+        self.assertEqual(parsed.as_dict(), envelope.as_dict())
+
+    def test_flow_policy_rejects_uncovered_egress_scope(self) -> None:
+        """flow_policy 中的 egress scope 必须落在 signed authorized scopes 内。"""
+        with self.assertRaisesRegex(ValueError, "covered by authorized_scopes"):
+            build_request_envelope(
+                sender_aid="alice@example.com:calendar_agent",
+                receiver_aid="bob@example.com:email_agent",
+                token="token-1",
+                session_id="session-1",
+                turn_id="turn-flow-reject",
+                issued_at=datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc),
+                expires_at=datetime(2026, 5, 7, 14, 0, 0, tzinfo=timezone.utc),
+                action_scope="llm_prompt",
+                flow_policy={"egress": {"tool_call:send_email": ["private"]}},
+                message="hello",
+            )
+
+    def test_flow_policy_helpers_join_taint_and_require_declassify(self) -> None:
+        """IFC helper 默认只允许 public；非 public 标签需要显式降密。"""
+        policy = normalize_flow_policy(
+            {"egress": {"tool_call:send_email": ["public"]}}
+        )
+        labels = join_flow_labels("public", ("private", "audit"))
+
+        self.assertEqual(labels, ("audit", "private", "public"))
+        self.assertEqual(normalize_flow_labels(None), ("public",))
+        self.assertTrue(flow_policy_allows_egress(policy, "tool_call:send_email", "public"))
+        self.assertFalse(flow_policy_allows_egress(policy, "tool_call:send_email", labels))
+        self.assertEqual(
+            flow_policy_blocked_labels(policy, "tool_call:send_email", labels),
+            ("audit", "private"),
+        )
 
     def test_scope_constraint_evaluator_accepts_and_rejects_parameters(self) -> None:
         """封闭 predicate evaluator 应按签名约束检查运行时参数。"""

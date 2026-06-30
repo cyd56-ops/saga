@@ -23,14 +23,17 @@ BASE_ACTION_SCOPES = frozenset(
         "memory_write",
         "tool_call",
         "delegation",
+        "declassify",
     }
 )
 SUPPORTED_SCOPE_CONSTRAINT_OPS = frozenset({"eq", "in", "lte", "gte", "max_length"})
 EXECUTION_BUDGET_TOTAL_KEY = "total"
 CONSTRAINT_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+FLOW_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
+DEFAULT_FLOW_LABEL = "public"
 MISSING_CONSTRAINT_VALUE = object()
 ACTION_SCOPE_RE = re.compile(
-    r"^(?P<base>llm_prompt|memory_read|memory_write|tool_call|delegation)"
+    r"^(?P<base>llm_prompt|memory_read|memory_write|tool_call|delegation|declassify)"
     r"(?::(?P<detail>[A-Za-z0-9_.-]+))?$"
 )
 
@@ -50,6 +53,7 @@ def parse_action_scope(action_scope: str) -> tuple[str, str | None]:
     - ``tool_call``
     - ``delegation``
     - ``tool_call:<tool_name>`` for tool-specific authorization
+    - ``declassify:<label>`` for explicit IFC declassification
     """
     match = ACTION_SCOPE_RE.fullmatch(action_scope)
     if match is None:
@@ -143,6 +147,116 @@ def normalize_execution_budget(
             raise ValueError("execution_budget values must be non-negative integers")
         normalized[scope] = limit
     return dict(sorted(normalized.items()))
+
+
+def normalize_flow_label(label: str) -> str:
+    """规范化 IFC 标签；标签只作为确定性文本比较，不执行策略代码。"""
+    if not isinstance(label, str):
+        raise TypeError("flow labels must be strings")
+    normalized = label.strip().lower()
+    if not FLOW_LABEL_RE.fullmatch(normalized):
+        raise ValueError("flow labels must be simple identifiers")
+    return normalized
+
+
+def normalize_flow_labels(
+    labels: Iterable[str] | str | None,
+    *,
+    default_label: str = DEFAULT_FLOW_LABEL,
+) -> tuple[str, ...]:
+    """规范化运行时污点标签集合；缺省或空集合使用默认标签。"""
+    normalized_default = normalize_flow_label(default_label)
+    if labels is None:
+        return (normalized_default,)
+    if isinstance(labels, str):
+        labels = (labels,)
+    normalized = {normalize_flow_label(label) for label in labels}
+    if not normalized:
+        normalized.add(normalized_default)
+    return tuple(sorted(normalized))
+
+
+def join_flow_labels(
+    *label_sets: Iterable[str] | str | None,
+    default_label: str = DEFAULT_FLOW_LABEL,
+) -> tuple[str, ...]:
+    """合并多个 IFC 标签集合；普通 transform 只能累加污点。"""
+    joined: set[str] = set()
+    for labels in label_sets:
+        joined.update(normalize_flow_labels(labels, default_label=default_label))
+    if not joined:
+        joined.add(normalize_flow_label(default_label))
+    return tuple(sorted(joined))
+
+
+def normalize_flow_policy(flow_policy: Mapping[str, Any] | None) -> dict[str, Any]:
+    """规范化 signed IFC flow policy，只允许封闭 egress 标签表。"""
+    if flow_policy is None:
+        return {"default_label": DEFAULT_FLOW_LABEL, "egress": {}}
+    if not isinstance(flow_policy, Mapping):
+        raise TypeError("flow_policy must be a mapping")
+    allowed_keys = {"default_label", "egress"}
+    unknown_keys = set(flow_policy) - allowed_keys
+    if unknown_keys:
+        raise ValueError("flow_policy contains unsupported keys")
+
+    default_label = normalize_flow_label(flow_policy.get("default_label", DEFAULT_FLOW_LABEL))
+    egress_policy = flow_policy.get("egress", {})
+    if not isinstance(egress_policy, Mapping):
+        raise TypeError("flow_policy.egress must be a mapping")
+
+    normalized_egress: dict[str, tuple[str, ...]] = {}
+    for egress_scope, labels in egress_policy.items():
+        if not isinstance(egress_scope, str):
+            raise TypeError("flow_policy.egress keys must be action-scope strings")
+        parse_action_scope(egress_scope)
+        normalized_egress[egress_scope] = normalize_flow_labels(
+            labels,
+            default_label=default_label,
+        )
+    return {
+        "default_label": default_label,
+        "egress": dict(sorted(normalized_egress.items())),
+    }
+
+
+def flow_policy_allowed_labels(
+    flow_policy: Mapping[str, Any] | None,
+    egress_scope: str,
+) -> tuple[str, ...]:
+    """返回某个 egress sink 可直接流出的标签集合，默认只允许 public。"""
+    parse_action_scope(egress_scope)
+    normalized_policy = normalize_flow_policy(flow_policy)
+    default_label = str(normalized_policy["default_label"])
+    allowed = {default_label}
+    for policy_scope, labels in normalized_policy["egress"].items():
+        if action_scope_allows(policy_scope, egress_scope):
+            allowed.update(labels)
+    return tuple(sorted(allowed))
+
+
+def flow_policy_blocked_labels(
+    flow_policy: Mapping[str, Any] | None,
+    egress_scope: str,
+    labels: Iterable[str] | str | None,
+) -> tuple[str, ...]:
+    """计算 egress 前仍需显式 declassify 授权的标签。"""
+    normalized_policy = normalize_flow_policy(flow_policy)
+    normalized_labels = normalize_flow_labels(
+        labels,
+        default_label=str(normalized_policy["default_label"]),
+    )
+    allowed = set(flow_policy_allowed_labels(normalized_policy, egress_scope))
+    return tuple(label for label in normalized_labels if label not in allowed)
+
+
+def flow_policy_allows_egress(
+    flow_policy: Mapping[str, Any] | None,
+    egress_scope: str,
+    labels: Iterable[str] | str | None,
+) -> bool:
+    """判断指定标签集合是否可直接流向某个 egress sink。"""
+    return not flow_policy_blocked_labels(flow_policy, egress_scope, labels)
 
 
 def scope_constraints_allow(
@@ -435,6 +549,7 @@ class RequestEnvelope:
     authorized_scopes: tuple[str, ...] | list[str] | None = None
     scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None = None
     execution_budget: Mapping[str, Any] | None = None
+    flow_policy: Mapping[str, Any] | None = None
     domain: str = DEFAULT_ENVELOPE_DOMAIN
     content_type: str = "text"
     provider_id: str = ""
@@ -458,6 +573,7 @@ class RequestEnvelope:
         authorized_scopes = normalize_authorized_scopes(self.action_scope, self.authorized_scopes)
         scope_constraints = normalize_scope_constraints(self.scope_constraints)
         execution_budget = normalize_execution_budget(self.execution_budget)
+        flow_policy = normalize_flow_policy(self.flow_policy)
         for constrained_scope in scope_constraints:
             if not action_scopes_allow(authorized_scopes, constrained_scope):
                 raise ValueError("scope_constraints keys must be covered by authorized_scopes")
@@ -467,6 +583,9 @@ class RequestEnvelope:
                 budget_scope,
             ):
                 raise ValueError("execution_budget keys must be covered by authorized_scopes")
+        for egress_scope in flow_policy["egress"]:
+            if not action_scopes_allow(authorized_scopes, egress_scope):
+                raise ValueError("flow_policy egress keys must be covered by authorized_scopes")
         parent_authorized_scopes = self._normalize_parent_authorized_scopes(
             self.parent_authorized_scopes
         )
@@ -512,6 +631,7 @@ class RequestEnvelope:
         object.__setattr__(self, "authorized_scopes", authorized_scopes)
         object.__setattr__(self, "scope_constraints", scope_constraints)
         object.__setattr__(self, "execution_budget", execution_budget)
+        object.__setattr__(self, "flow_policy", flow_policy)
         object.__setattr__(self, "capability_id", capability_id)
         object.__setattr__(self, "parent_envelope_digest", parent_envelope_digest)
         object.__setattr__(self, "parent_authorized_scopes", parent_authorized_scopes)
@@ -531,6 +651,13 @@ class RequestEnvelope:
             "domain": self.domain,
             "execution_budget": dict(self.execution_budget),
             "expires_at": self.expires_at,
+            "flow_policy": {
+                "default_label": self.flow_policy["default_label"],
+                "egress": {
+                    scope: list(labels)
+                    for scope, labels in self.flow_policy["egress"].items()
+                },
+            },
             "issued_at": self.issued_at,
             "max_delegation_depth": self.max_delegation_depth,
             "message_digest": self.message_digest,
@@ -609,6 +736,7 @@ def build_request_envelope(
     authorized_scopes: Iterable[str] | None = None,
     scope_constraints: Mapping[str, Iterable[Mapping[str, Any]]] | None = None,
     execution_budget: Mapping[str, Any] | None = None,
+    flow_policy: Mapping[str, Any] | None = None,
     message: str | bytes,
     domain: str = DEFAULT_ENVELOPE_DOMAIN,
     content_type: str = "text",
@@ -650,6 +778,7 @@ def build_request_envelope(
         authorized_scopes=tuple(authorized_scopes) if authorized_scopes is not None else None,
         scope_constraints=scope_constraints,
         execution_budget=execution_budget,
+        flow_policy=flow_policy,
         message_digest=sha256_hex(message_bytes),
         domain=domain,
         content_type=content_type,

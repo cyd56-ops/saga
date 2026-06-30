@@ -310,7 +310,7 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
 
 ## 3. 当前状态面板
 
-最后更新日期：`2026-06-27`
+最后更新日期：`2026-06-30`
 
 ### 3.1 代码实际状态
 
@@ -548,6 +548,14 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - strict capability 路径缺少 `LocalExecutionContext`、scope 未授权、budget store 缺失/故障/耗尽、monitor 后端故障都会在 protected sink 执行前 fail-closed
   - `GatedExecutionResource` 的候选 scope 路径现在会对选中的授权 scope 消费 signed budget，避免 backend proxy 绕过预算扣减
   - `AgentWrapper` 支持安装 monitor；带 workdir 的真实 `Agent` runtime hook 会安装本地 JSONL invariant audit adapter
+- 当前 signed capability 已支持第一版轻量 IFC / egress contract：
+  - `saga/messages.py` 新增 `declassify:<label>` action scope、`flow_policy` canonical envelope field 与确定性 label / egress helper
+  - `flow_policy` 进入 signed canonical JSON / digest；篡改 flow policy 会导致 detached signature 验证失败
+  - 默认 IFC 标签为 `public`，普通 transform 通过 `join_flow_labels(...)` 单调累加标签，不自动降密
+  - `LocalExecutionContext.require_egress(...)` 会先检查 egress action scope，再检查 flow policy；非允许标签只有在 signed `authorized_scopes` 中包含 `declassify:<label>` 时才能流出
+  - `ExecutionCapabilityFacade.call_egress(...)` 在 protected egress operation 前执行 scope / IFC / declassify 检查，并在拒绝时保证无副作用
+  - 缺少 declassify scope 时以 `ifc_declassify_scope_required` fail-closed
+  - 当前 IFC 只声明显式 signed egress contract，不声明全自动语言级 taint tracking 或跨任意 Python 对象的数据流分析
 - 当前 canonical request envelope 已支持第一版参数级 / 受约束 scope：
   - `saga/messages.py` 新增 `scope_constraints`，并把约束写入 canonical envelope digest。
   - 约束 schema 只允许封闭谓词集合：`eq`、`in`、`lte`、`gte`、`max_length`；不允许 callback、regex 或任意表达式。
@@ -921,7 +929,7 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
 - SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
-- 后续执行访问控制扩展：`进行中`（J1-J9 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL 与 online invariant monitor 已落地；下一步为轻量 IFC）
+- 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
 
 ### 3.4 阻塞 / 风险
 
@@ -935,6 +943,14 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `.venv/bin/python -m pytest -q`
   - `.venv/bin/python -m pytest -q tests/security`
   - `.venv/bin/python -m pytest -q tests/integration`
+- 已于 `2026-06-30` 完成 J10 轻量 IFC / signed egress contract 后测试结果：
+  - `.venv/bin/python -m py_compile saga/messages.py saga/execution_gate.py tests/test_encoding.py tests/test_execution_gate.py` -> success
+  - `.venv/bin/python -m pytest -q tests/test_encoding.py tests/test_execution_gate.py` -> `106 passed`
+  - `.venv/bin/python -m pytest -q` -> `468 passed, 69 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 `pyproject.toml`、`setup.cfg`、`tox.ini`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `pyrightconfig.json`，因此未运行 `ruff check .` / `mypy .`。
 - 已于 `2026-06-27` 重新确认 J6/J7 capability budget 与 SQLite contract 后测试结果：
   - `.venv/bin/python -m py_compile saga/messages.py saga/execution_gate.py tests/test_encoding.py tests/test_execution_gate.py` -> success
   - `.venv/bin/python -m pytest -q tests/test_encoding.py tests/test_execution_gate.py` -> `90 passed`
@@ -1920,7 +1936,7 @@ protected sinks 至少覆盖：
 - J7. 实现 SQLite budget contract 测试，并明确 file-marker 不作为并发预算主后端：`已完成`（第一阶段：`SQLiteCapabilityStateStore` 用事务原子消费 `total` 与 per-scope budget，并发消费不超过 signed limit；file-marker replay store 不作为预算后端）
 - J8. 设计 revocation store、短 TTL 默认值与 parent capability 级联撤销语义：`已完成`（第一阶段：`RevocationStore`、`InMemoryRevocationStore`、`SQLiteRevocationStore`、`capability_id` 精确撤销、`parent_envelope_digest` 级联撤销、后端不可用 fail-closed 与默认 300 秒 capability TTL 已落地）
 - J9. 在 capability facade / sink wrapper 上加入第一版 online invariant monitor：`已完成`（第一阶段：`ExecutionInvariantMonitor`、内存/JSONL monitor、facade sink event、strict 缺 context violation、参数键名审计、monitor 后端故障 fail-closed 与候选 scope budget 消费已落地）
-- J10. 设计轻量 IFC 标签、flow policy、source/transform/egress sink 分类和显式 declassify scope：`未开始`
+- J10. 设计轻量 IFC 标签、flow policy、source/transform/egress sink 分类和显式 declassify scope：`已完成`（第一阶段：signed `flow_policy`、`declassify:<label>` scope、标签 join、egress policy 检查、facade egress wrapper、tamper detection 与 no-side-effect 拒绝测试已落地；当前只声明显式 egress contract，不声明全自动语言级 taint tracking）
 - J11. 更新论文 threat model，明确验签神经元的价值来自“不可信推理平台 / 控制流不可信”部署模型：`未开始`
 
 ## 7. 当前工作焦点
@@ -1929,8 +1945,8 @@ protected sinks 至少覆盖：
 
 0. 当前默认主线调整为 `Execution access control extensions for signed intent capabilities`：
    - 旧的 proof-hardening / sink-centric signed intent execution gate 主线已经完成第一阶段闭环，不再有必须补完的旧主线 blocker。
-   - J1-J9 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL 与 online invariant monitor 已接入 runtime gate。
-   - 下一步默认继续 J10：设计轻量 IFC 标签、flow policy、source/transform/egress sink 分类和显式 declassify scope；随后再推进不可信推理平台论文论证。
+   - J1-J10 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / signed egress contract 已接入 runtime gate。
+   - 下一步默认继续 J11：更新论文 threat model，明确验签神经元的价值来自“不可信推理平台 / 控制流不可信”部署模型。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
    - ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
 
@@ -2085,12 +2101,9 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 从 J8 开始推进 revocation / short TTL：
-   - 设计 `RevocationStore`，支持 `capability_id` 与 `parent_envelope_digest` 撤销。
-   - 撤销检查应位于 PQ/CAN 验签后、`LocalExecutionContext` 构造前。
-   - 明确短 TTL 默认值与续签 / epoch / 单调计数器的后续边界。
-2. J9 monitor 在 revocation 状态接口稳定后推进。
-3. J10 IFC 后置为机密性扩展；J11 论文 threat model 可先以文档形式推进，不阻塞代码。
+1. 继续 J11：更新论文 threat model，明确验签神经元的价值来自“不可信推理平台 / 控制流不可信”部署模型。
+2. 若继续代码增强，可在 J10 的第一版 IFC 基础上补真实 tool egress wiring 或更多 egress sink 清单，但必须保持显式 signed `flow_policy` / `declassify:<label>` contract。
+3. ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2126,6 +2139,65 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-06-30 Lightweight IFC J10 Implementation Session
+
+目标：
+
+- 完成 J10 第一阶段：设计轻量 IFC 标签、signed `flow_policy`、egress sink 检查和显式 `declassify:<label>` scope。
+- 保持执行访问控制扩展 deterministic、fail-closed、可审计，并明确当前不声明全自动语言级 taint tracking。
+
+已做工作：
+
+- `saga/messages.py`
+  - 新增 `declassify:<label>` action scope。
+  - 新增 `flow_policy` canonical envelope field，并进入 `as_dict()` / canonical JSON / digest。
+  - 新增 `normalize_flow_label(...)`、`normalize_flow_labels(...)`、`join_flow_labels(...)`、`normalize_flow_policy(...)`、`flow_policy_allowed_labels(...)`、`flow_policy_blocked_labels(...)` 与 `flow_policy_allows_egress(...)`。
+  - `flow_policy.egress` key 必须是已被 `authorized_scopes` 覆盖的 action scope；标签只允许稳定文本 identifier。
+- `saga/execution_gate.py`
+  - `LocalExecutionContext` 新增 IFC helper：
+    - `join_flow_labels(...)`
+    - `blocked_egress_labels(...)`
+    - `authorize_egress(...)`
+    - `require_egress(...)`
+  - `require_egress(...)` 在 protected egress 前检查 action scope、signed flow policy 和 `declassify:<label>` 授权；缺少降密 scope 时以 `ifc_declassify_scope_required` fail-closed。
+  - `ExecutionCapabilityFacade` 新增 `require_egress(...)` 与 `call_egress(...)`，拒绝时在 monitor 中记录 violation 且不触发底层 operation。
+  - execution-gate audit record 新增 `signed_flow_policy`。
+- `tests/test_encoding.py`
+  - 覆盖 `declassify:<label>` scope parser。
+  - 覆盖 `flow_policy` canonicalization / signed JSON round-trip。
+  - 覆盖 uncovered egress scope fail-closed。
+  - 覆盖 label join、默认 public、blocked label 判断和 direct egress allow/deny helper。
+- `tests/test_execution_gate.py`
+  - 覆盖 private label 缺少 `declassify:private` 时 egress 拒绝。
+  - 覆盖 signed `declassify:private` 允许受控降密。
+  - 覆盖 facade egress wrapper 拒绝时无副作用并记录 invariant violation。
+  - 覆盖篡改 `flow_policy` 后 detached signature 验证失败。
+- `SECURITY.md`
+  - 记录第一版 IFC 是显式 signed egress contract，不是全自动语言级 taint tracking。
+  - 记录 `flow_policy`、label join、`declassify:<label>` 和 `ifc_declassify_scope_required` fail-closed 语义。
+- 本工作文档：
+  - 状态面板新增 J10 第一阶段代码实况。
+  - J10 标记为 `已完成`，当前下一步切换到 J11 threat model。
+
+已验证：
+
+- `.venv/bin/python -m py_compile saga/messages.py saga/execution_gate.py tests/test_encoding.py tests/test_execution_gate.py` -> success
+- `.venv/bin/python -m pytest -q tests/test_encoding.py tests/test_execution_gate.py` -> `106 passed`
+- `.venv/bin/python -m pytest -q` -> `468 passed, 69 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `git diff --check` -> no output
+- 未发现 `pyproject.toml`、`setup.cfg`、`tox.ini`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `pyrightconfig.json`，因此未运行 `ruff check .` / `mypy .`。
+
+安全边界：
+
+- 本轮没有实现生产级密码算法；toy LWE / compiled verifier 边界不变。
+- 当前 IFC 只约束显式通过 `LocalExecutionContext.require_egress(...)` 或 `ExecutionCapabilityFacade.call_egress(...)` 的 egress sink；任意 Python 对象级自动污点传播和未接入 facade 的 raw backend 不纳入本阶段 claim。
+
+GitHub / checkpoint 状态：
+
+- 当前工作区改动尚未形成 checkpoint commit；最终 git 状态检查显示待提交文件为 `SAGA_PQ_CAN_WORKLOG.md`、`SECURITY.md`、`saga/execution_gate.py`、`saga/messages.py`、`tests/test_encoding.py`、`tests/test_execution_gate.py`。
 
 ### 2026-06-27 Capability Budget J6/J7 Implementation Session
 

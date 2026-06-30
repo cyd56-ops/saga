@@ -2003,6 +2003,148 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.reason, "unauthorized_tool_scope")
 
+    def test_local_context_blocks_private_egress_without_declassify_scope(self) -> None:
+        """非 public 标签流向 egress sink 时必须有显式 declassify scope。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-ifc-block",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            flow_policy={"egress": {"tool_call:send_email": ["public"]}},
+            message="draft private mail",
+            timestamp=self.now,
+        )
+        context = self.gate.build_local_execution_context(
+            self._signed_request_from_envelope(envelope, "draft private mail")
+        )
+
+        assert context is not None
+        with self.assertRaises(ExecutionAuthorizationError) as raised:
+            context.require_egress("tool_call:send_email", ("public", "private"))
+
+        self.assertEqual(raised.exception.reason, "ifc_declassify_scope_required")
+        self.assertEqual(raised.exception.action_scope, "tool_call:send_email")
+
+    def test_local_context_allows_private_egress_with_signed_declassify_scope(self) -> None:
+        """签名 capability 显式携带 declassify:<label> 后才可降密流出。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-ifc-allow",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email", "declassify:private"],
+            flow_policy={"egress": {"tool_call:send_email": ["public"]}},
+            message="draft private mail",
+            timestamp=self.now,
+        )
+        context = self.gate.build_local_execution_context(
+            self._signed_request_from_envelope(envelope, "draft private mail")
+        )
+
+        assert context is not None
+        self.assertEqual(
+            context.join_flow_labels("public", ("private",)),
+            ("private", "public"),
+        )
+        self.assertEqual(
+            context.blocked_egress_labels("tool_call:send_email", ("private",)),
+            ("private",),
+        )
+        self.assertTrue(
+            context.authorize_egress("tool_call:send_email", ("private",))
+        )
+        context.require_egress("tool_call:send_email", ("private",))
+
+    def test_facade_egress_wrapper_rejects_before_side_effect(self) -> None:
+        """facade egress helper 应在副作用前执行 IFC 与 declassify 检查。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-ifc-facade",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email"],
+            flow_policy={"egress": {"tool_call:send_email": ["public"]}},
+            message="draft private mail",
+            timestamp=self.now,
+            capability_id="cap-ifc-facade",
+        )
+        context = self.gate.build_local_execution_context(
+            self._signed_request_from_envelope(envelope, "draft private mail")
+        )
+        assert context is not None
+        monitor = InMemoryExecutionInvariantMonitor()
+        facade = ExecutionCapabilityFacade(lambda: context, invariant_monitor=monitor)
+        side_effects: list[str] = []
+
+        with self.assertRaises(ExecutionAuthorizationError) as raised:
+            facade.call_egress(
+                "tool_call:send_email",
+                ("private",),
+                lambda: side_effects.append("sent"),
+            )
+
+        self.assertEqual(raised.exception.reason, "ifc_declassify_scope_required")
+        self.assertEqual(side_effects, [])
+        events = monitor.events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].status, "violation")
+        self.assertEqual(events[0].reason, "ifc_declassify_scope_required")
+        self.assertEqual(events[0].capability_id, "cap-ifc-facade")
+
+    def test_authorize_rejects_tampered_flow_policy(self) -> None:
+        """修改已签名 flow_policy 必须导致签名验签失败。"""
+        envelope = build_request_envelope(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            session_id="session-1",
+            turn_id="turn-ifc-tamper",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=5),
+            action_scope="llm_prompt",
+            authorized_scopes=["tool_call:send_email", "declassify:private"],
+            flow_policy={"egress": {"tool_call:send_email": ["public"]}},
+            message="draft private mail",
+            timestamp=self.now,
+        )
+        signature = self.scheme.sign(self.key_pair.secret_key, envelope.digest())
+        envelope_dict = envelope.as_dict()
+        envelope_dict["flow_policy"]["egress"]["tool_call:send_email"].append("private")
+        tampered_envelope = json.dumps(
+            envelope_dict,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        request = ExecutionGateRequest(
+            sender_aid="alice@example.com:calendar_agent",
+            receiver_aid="bob@example.com:email_agent",
+            token="enc-token",
+            message="draft private mail",
+            action_scope="llm_prompt",
+            request_envelope=tampered_envelope,
+            pq_signature=base64.b64encode(signature).decode("utf-8"),
+        )
+
+        self.assertFalse(self.gate.authorize(request))
+        self.assertEqual(
+            self.gate.evaluate_request(request).reason,
+            "signature_verification_failed",
+        )
+
     def test_execution_invariant_monitor_records_authorized_and_rejected_sink(self) -> None:
         """capability facade 应把 sink 授权通过和不变式违例记录到 monitor。"""
         envelope = build_request_envelope(
