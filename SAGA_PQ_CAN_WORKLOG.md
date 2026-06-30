@@ -2197,7 +2197,11 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 
 GitHub / checkpoint 状态：
 
-- 当前工作区改动尚未形成 checkpoint commit；最终 git 状态检查显示待提交文件为 `SAGA_PQ_CAN_WORKLOG.md`、`SECURITY.md`、`saga/execution_gate.py`、`saga/messages.py`、`tests/test_encoding.py`、`tests/test_execution_gate.py`。
+- 已形成本地 checkpoint commit：
+  - `5183b41 checkpoint: add signed ifc egress contract`
+- 已推送备份分支：
+  - `git push origin HEAD:backup/repro-local` -> success
+- checkpoint 文件范围为 `SAGA_PQ_CAN_WORKLOG.md`、`SECURITY.md`、`saga/execution_gate.py`、`saga/messages.py`、`tests/test_encoding.py`、`tests/test_execution_gate.py`；不包含 secrets、生成凭据、本地 DB、模型输出或 `paper/`。
 
 ### 2026-06-27 Capability Budget J6/J7 Implementation Session
 
