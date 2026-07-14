@@ -308,9 +308,223 @@ Execution access control extensions for signed intent capabilities
 ML-DSA / Dilithium external backend 仍是 production-facing 路线，但不应阻塞上述
 execution access control 原型扩展；toy LWE research path 可以继续用于结构验证。
 
+### 2.7 双路线认证研究与论文选择主线
+
+自 `2026-07-14` 起，在已完成的 strict runtime-auth kernel 与执行访问控制扩展之上，
+并行推进两条互不降级、共享运行时基础设施的认证研究路线：
+
+```text
+路线 A：Compiled Neural Signature Verifier
+    A0 = partially_compiled_toy_shadow
+    A0.5 = reusable_fixed_circuit_toolchain
+    A1 = full_relu_toy_verifier
+    A2 = module_lattice_ring_convolution_verifier
+
+路线 B：Standard Cryptography + Fixed Authorization Circuit
+    B0 = strict external ML-DSA verification
+    B0.5 = typed_authorization_circuit_toolchain
+    B1 = FixedPolicyAggregator
+    B1.5 = enforced_after_reference_equivalence
+    B2 = FixedAuthorizationCircuit over raw authorization relations
+    B3 = versioned_portable_policy_compiler
+```
+
+两条路线的职责必须保持清晰：
+
+- 路线 A 研究 `N_sig(pk, envelope_digest, signature) -> {0,1}` 的固定神经电路表达，
+  不得在运行路径调用普通 `scheme.verify()` 冒充纯验签神经元。
+- 路线 B 使用外部审查过的 ML-DSA backend 证明请求真实性，再由固定认证电路
+  计算 execution-surface authorization；固定电路不提高 ML-DSA 的不可伪造性。
+- 默认真实执行由路线 B 决定，路线 A 通过有界异步 shadow queue / outbox 观测，
+  不得影响路线 B 的放行延迟与可用性。
+- `dual_required_research` 仅用于双签名研究实验，要求 A、B 均通过；禁止
+  `A OR B`，也禁止 ML-DSA 失败后降级到 toy / neural 路线。
+- A、B 可以绑定同一个 canonical envelope，但通常使用不同 algorithm、key 与
+  signature；接收方必须依据本地 trust registry 选择 route/profile，不能让未验证
+  的请求字段选择弱路线。
+
+默认运行模式：
+
+```text
+route_b_only
+    allow = route_B_accept
+
+route_b_with_a_shadow
+    allow = route_B_accept
+    route_A 仅生成 late RouteEvidence，不参与放行
+
+dual_required_research
+    allow = route_A_accept AND route_B_accept
+
+offline_compare
+    只生成实验 Evidence，不创建 LocalExecutionContext
+```
+
+共享核心接口必须先于 A/B 分叉稳定下来：
+
+```text
+Route.evaluate(request) -> RouteEvidence              # 无副作用
+Coordinator.evaluate(request) -> CompositeEvidence    # 无副作用
+Coordinator.commit(evidence) -> Context | Reject      # 唯一状态提交入口
+```
+
+只有 `RuntimeAuthCoordinator.commit(...)` 可以 reserve replay request、复核
+revocation/version、持久化 authorization decision / capability id、创建
+`LocalExecutionContext` 和追加权威审计事件。strict coordinator 模式下，旧
+`authorize()`、直接 `build_local_execution_context()` 与 legacy gate 路径不得成为
+新的 Context 创建入口。
+
+签名绑定使用无歧义的固定二进制结构或长度前缀 TLV，不使用变长字符串直接拼接：
+
+```text
+magic | version | route_id | algorithm_id | key_id_len | key_id
+| profile_id | digest_algorithm_id | envelope_digest
+```
+
+`envelope_digest` 不包含 signatures；重复 route、未知字段、未知 profile、超长材料、
+非规范编码与 backend 版本不匹配必须 fail-closed。路线 B 必须明确使用纯 ML-DSA
+或标准 HashML-DSA profile，不自行构造语义不明的双重哈希。
+
+路线 B 的固定电路与工具链分级：
+
+- B0.5 先建立与具体 policy profile 解耦的 typed toolchain：至少包含
+  `AuthorizationInputLayout`、`AuthorizationFactProvenance`、`AuthorizationPredicateIR`、
+  `ReferenceAuthorizationPolicy`、`FixedPolicyTrace` 与 `FixedCircuitComplexity`。
+- B1 只聚合严格 typed、由受信代码生成的事实时，名称固定为
+  `FixedPolicyAggregator`，先做 shadow / reference equivalence，不夸大为独立上下文复核。
+- B1.5 只有在相同授权谓词、相同输入 corpus 和稳定 reason mapping 上通过 reference
+  equivalence 后，才允许正式进入路线 B 的强制 AND；标准 ML-DSA 结果仍必须在电路外
+  作为独立必要条件再次检查，防止 circuit bug 绕过标准验签。
+- B2 至少直接计算 scope bitset subset、flow-label conflict、delegation depth、TTL / 时间
+  整数比较，以及固定宽度 sender / receiver / digest 等值关系中的一组核心谓词，才称为
+  `FixedAuthorizationCircuit`。
+- B3 通过版本化 `PolicyCompiler / CircuitProfile` 从本地 policy 生成固定常量与 layout，
+  并至少用第二个 execution-surface / policy profile 证明无需复制整套 circuit 即可迁移。
+- 路线 B 输入只允许 `bool / uint8 / fixed-width integer / bitset`；浮点、NaN、Inf、
+  错误长度与未知 layout 在入电路前拒绝。协调器只接受精确整数 `1`。
+- Shamir real-valued protection 继续作为路线 A 的研究对象，不作为路线 B 生产正确性的
+  唯一基础。
+
+路线 B 的工具链完成门槛：
+
+```text
+BG1. 所有 authorization facts 都带不可伪造的内部 provenance，请求方不能直接提供 allow bits
+BG2. layout / policy / circuit profile 全部版本化，未知、缺失、重复、错误长度均 fail-closed
+BG3. B1 在小型事实空间穷举等价，正常 corpus 做固定种子差分且无不一致
+BG4. standard_signature_valid 在固定电路内外均为必要条件，任何单独 can_accept 不得放行
+BG5. 删除 signature/scope/flow/delegation/time 检查时 mutation tests 必须失败且 sink 无副作用
+BG6. 所有模块无训练入口，trace 可定位拒绝谓词，最终只接受精确整数 1
+BG7. 第二个 policy / surface profile 复用同一 IR、layout/compiler 和 gadget，不复制 verifier 主体
+BG8. 自动输出谓词覆盖、层数、固定参数数、延迟、内存与 reference-equivalence manifest
+```
+
+只有 BG1-BG6 通过后才能进入 B1.5 强制路径。B2/B3 可以在此后继续作为研究实现推进，
+但 BG7/BG8 必须由第二 policy profile 和自动 manifest 闭环；只有 BG1-BG8 全部通过后，
+才可宣称路线 B 已建立可信、可测试、可迁移的 fixed authorization circuit toolchain，
+并把 B2/B3 纳入正式论文贡献评估。
+
+路线 A 的术语、工具链与完成边界：
+
+- 当前 `CompiledToyLWEVerifier` 只能称为 A0：仅公开矩阵投影进入固定电路；SHA-256
+  challenge、解码、模运算、等值判断和部分聚合仍是普通 Python / hard gate。
+- A0.5 的目标不是继续美化 toy scheme，而是建立可复用的 fixed-circuit toolchain：
+  `BinaryInputGuard`、`FixedModReduce`、`FixedEquality`、`FixedRange/NormCheck`、
+  `FixedBooleanAggregator`、scheme-independent `FixedProjector`、稳定 trace / boundary / complexity
+  manifest，以及 dense projector 与 tiny negacyclic ring projector 两个 backend smoke。
+- 只有去除运行路径中的普通 verifier 调用，并把既定 verifier 边界内的 `%`、`==`、
+  范围、范数、聚合、challenge / parse 边界按论文 claim 完整收口后，才可升级为 A1。
+- 当前算法不是 ring-LWE，A0 profile 不得使用 `toy-ring-lwe-*` 等误导性 ID。
+- A1 仍是 toy / research-only；其作用是证明工具链可以完整表达一个有 reference oracle 的
+  verifier core，而不是作为最终密码学贡献长期优化。
+- A2 使用同一 toolchain 转向明确标注 research-only 的 module-lattice / module-SIS-style
+  verification relation，并以 `R_q = Z_q[x] / (x^n + 1)` 上的 fixed negacyclic convolution
+  作为第一版环运算 backend；NTT 与完整 ML-DSA 神经化后置，不阻塞路线 B。
+
+路线 A 的工具链完成门槛：
+
+```text
+AG1. 每个 arithmetic / Boolean gadget 在有界定义域内穷举通过
+AG2. tiny toy 参数下端到端 verifier 与 reference 穷举等价；正常参数固定种子差分无不一致
+AG3. claimed circuit 内不存在 scheme.verify、Python %、Python == 或未声明的数据相关分支
+AG4. binary domain、[0,1] real domain 与软件 NaN/Inf/越界输入边界均有明确 contract 和测试
+AG5. 每个中间节点有数值上界；浮点实现处于精确整数范围或改用定点/整数 backend
+AG6. 删除 mod/equality/range/norm/mask/aggregation 时 mutation tests 必须失败
+AG7. dense 与 tiny negacyclic projector 复用同一 guard/gadget/trace/complexity 接口并同时通过
+AG8. 自动输出 circuit boundary、层数、固定参数数、延迟、内存与 reference-equivalence manifest
+```
+
+只有 A1 verifier core 完成并且 AG1-AG8 全部通过，才称为建立了可信、可测试、可迁移的
+固定电路工具链。A0.5 只能提供 gadget、数值边界和第二 projector backend 的 preliminary
+evidence，不能单独关闭 AG2 / AG3。达到全部门槛后
+停止扩大 toy 参数、优化 toy 性能或优先神经化完整 SHA-256，立即进入 A2；若 AG7 不能在不
+重写 core gadget 的情况下通过，则工具链仍不具备可迁移性，不能进入 A2 论文主张。
+
+论文选择采用三个独立实验维度，避免同时改变签名算法与授权谓词而失去归因能力：
+
+```text
+标准验签 + 普通 reference policy
+    vs 标准验签 + fixed authorization circuit
+
+toy reference verifier
+    vs A0 / A0.5 / A1 compiled verifier
+
+tiny module-lattice / ring reference
+    vs A2 fixed negacyclic-convolution verifier
+
+B-only
+    vs B + asynchronous A-shadow
+    vs A AND B dual research
+```
+
+所有授权消融必须使用相同谓词。统计 A/B 四象限、reference equivalence、误拒绝、
+protected-sink 无副作用、p50/p95/p99 延迟、shadow backlog/drop、崩溃恢复、replay 与
+capability 重放。路线 A 达到 AG1-AG8、A2 环结构 verifier 与新的 Ring/CNN / 复杂度 / 安全
+证明贡献时可优先形成神经密码论文；路线 B 达到 BG1-BG8、B2/B3、唯一 Coordinator、事务
+状态与明确神经执行收益时可优先形成系统安全论文；两边均达门槛时优先拆分论文，而不是
+强行合并主张。
+
+分支开发采用“共享核心 + A/B 功能分支 + 最终集成分支”，不手工复制仓库：
+
+```text
+origin/backup/repro-local
+        |
+        v
+research/runtime-auth-core
+        |
+        +-----------------------------+
+        |                             |
+        v                             v
+research/route-a-neural-verifier  research/route-b-fixed-auth
+        |                             |
+        +--------------+--------------+
+                       v
+          research/dual-route-integration
+                       |
+              verified checkpoint
+                       v
+          origin/backup/repro-local
+```
+
+分支职责与合并纪律：
+
+- `runtime-auth-core`：`SignatureBindingV1`、Evidence、Coordinator、唯一 commit / Context
+  入口、状态接口、审计 shape 与兼容迁移。
+- `route-a-neural-verifier`：A0/A0.5/A1/A2、real-valued rejection、电路工具链与 Route A evidence。
+- `route-b-fixed-auth`：strict ML-DSA adapter、B0.5-B3、授权电路工具链与 Route B evidence。
+- `dual-route-integration`：运行模式、异步 shadow、Dual、综合 runner 与论文实验。
+- 必须先形成并测试 `core-api-v1` 固定提交，再从同一提交分出 A、B 和 integration。
+- 允许 `core -> A/B/integration` 与 `A/B -> integration`；不直接 `A <-> B`，也不把
+  integration 中混合改动整体反灌路线分支。
+- 公共缺陷先在 core 修复，再同步到三条分支；路线缺陷回所属分支修复后重新合并。
+- 多工作目录使用 `git worktree`，不复制目录；功能分支默认先保留本地，是否推送远端
+  研究分支由用户另行确认。
+- `origin/backup/repro-local` 保持为已验证 checkpoint；同步前必须展示精确文件列表、
+  完成敏感路径检查并运行规定测试；不使用 legacy
+  `origin/backup/repro-local-sanitized`。
+
 ## 3. 当前状态面板
 
-最后更新日期：`2026-06-30`
+最后更新日期：`2026-07-14`
 
 ### 3.1 代码实际状态
 
@@ -341,6 +555,10 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `pq/mldsa_adapter.py`
 - `ToyLWESignatureScheme` 已实现为明确标注 `non-production` 的研究/测试用 toy 方案。
 - `MLDSAAdapter` 当前为 fail-closed 外部 backend adapter；若未接入外部审查过的 backend，会明确报错，接入时只委托 `keygen/sign/verify`，不在仓库内实现 ML-DSA。
+- `MLDSAAdapter.verify(...)` 当前仍使用 `bool(backend.verify(...))` 收敛返回值：
+  - 非空字符串、非零整数或其他 truthy 畸形对象可能被误解释为成功
+  - 双路线 P0 必须把 generic adapter 收紧为只接受严格布尔结果
+  - backend-specific 非标准返回只能由显式 shim 转换，异常、超时、进程退出与版本不匹配均需形成 fail-closed evidence
 - 当前仓库已新增 canonical request envelope 模块：
   - `saga/messages.py`
 - 当前仓库已新增最小 `neural/` 实现：
@@ -355,11 +573,17 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - 当前已新增显式编译边界对象 `CompiledVerifierBoundary`
   - `ProjectionTrace` 已记录 `challenge_source="deterministic_sha256_preprocessing:not_neural_hash"`
   - README / SECURITY / 设计文档均已固定：SHA-256 challenge 派生不是神经哈希电路，而是 deterministic preprocessing
+  - 因此当前实现按新双路线术语属于 `A0 = partially_compiled_toy_shadow`，不能称为 A1 `full_relu_toy_verifier`
 - 当前仓库已新增固定电路审计 helper：
   - `neural/fixed_circuit.py`
   - `assert_fixed_circuit(...)`
   - `find_trainable_state(...)`
   - 当前已覆盖 compiled verifier 与 `CAN` 组合的递归不可训练状态检查
+- 当前 Shamir/CAN 软件实现仍依赖额外 Python 边界来获得硬拒绝语义：
+  - `CAN.can_accept_compound_bits(...)` 先以 `mask_value > 0` 提前返回，再用最终精确 `== 1.0` 收敛为整数
+  - 当前 RECT/MASK 对 `<0`、`>1`、NaN、Inf 与极端浮点值没有形成完整的软件输入域保证
+  - 路线 B 必须在入电路前执行严格 typed / finite / length / value 检查，不能把 Shamir 公式作为唯一生产边界
+  - 路线 A 必须明确数学输入域并补越界实数与软件特殊浮点拒绝，才能扩大 real-valued security claim
 - 当前 `neural/verifier_wrapper.py` 仍保留原始 wrapper 路径：
   - 已能验证接口与执行层接线
   - 当前 compiled DNN verifier 与 wrapper verifier 并存，便于逐步替换和回归比较
@@ -374,6 +598,12 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
   - `request_envelope / pq_signature` 已进入实际消息格式
   - `tool` 已有实际包装 gate
   - `memory` 已至少有一个真实写入点走 gate
+- 当前 `SignedRequestExecutionGate` 的状态与 Context 入口尚未收口为新 Coordinator 契约：
+  - `consume_request(...)` 会在验证通过后原子 reserve replay id
+  - `build_local_execution_context(...)` 当前只调用 `evaluate_request(...)`，可以在未 reserve replay 的情况下构造 Context
+  - 主 Agent strict 路径通常先 consume 再从 decision 构造 Context，但旧公开 helper、legacy gate 与测试路径仍可直接调用
+  - replay reserve、revocation、decision/capability 持久化和 audit 目前也不是一条跨后端事务
+  - 双路线实现前必须建立唯一 `RuntimeAuthCoordinator.commit(...)` / Context 创建入口，并为 research 与 production-facing profile 分别声明崩溃恢复语义
 - 当前 `saga/security_kernel.py` 已从 entry-centric 清单升级为第一版 sink-centric audit：
   - 新增 `ProtectedSinkAudit`
   - 新增论文级命题 `Execute(surface) => N_verify=1 AND scope_ok AND replay_ok AND delegation_ok AND policy_ok`
@@ -930,8 +1160,31 @@ execution access control 原型扩展；toy LWE research path 可以继续用于
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
+- 双路线认证研究与论文选择：`进行中`（设计阶段：A0-A2 与 B0-B3 边界、AG1-AG8 / BG1-BG8 工具链门槛、默认 B-enforced + asynchronous A-shadow、唯一 Coordinator、无歧义签名绑定、分支拓扑、实验归因和论文选择门槛已写入本文档；尚未开始代码实现或创建研究分支）
 
 ### 3.4 阻塞 / 风险
+
+- 双路线实现前 P0 阻塞项：
+  - generic `MLDSAAdapter.verify(...)` 尚未严格验证 backend 返回类型
+  - `SignatureBindingV1` 尚未定义无歧义 TLV / 固定二进制编码与 pure / HashML-DSA profile
+  - `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator` 尚未实现
+  - strict 模式尚未禁止旧 `authorize()` / 直接 Context helper 绕过唯一 commit
+  - 路线 B 尚无真实 vetted ML-DSA backend wiring，也没有 fixed authorization circuit
+  - 路线 A 当前仅为 A0 部分编译，不能作为纯验签神经元完成态
+  - 文件 marker 只能原子 reserve replay，不能保证 replay / revocation / capability / audit 整条提交链事务化
+  - A shadow 尚无有界异步队列、资源预算、drop evidence 与 late discrepancy audit
+- 当前最大论文风险：
+  - 路线 B 若只把预计算布尔值改写成 ReLU AND，工程可行但创新性不足；B0.5 必须建立 typed layout / provenance / predicate IR / trace，B2 必须直接计算原始授权关系，B3 必须用第二 policy profile 证明迁移能力
+  - 路线 A 若停留在 A0，只适合作为 exploratory shadow artifact；A0.5 必须以第二 projector backend 证明工具链可迁移，A1/A2 需要完整 verifier 电路、环结构、复杂度数据和相对既有 secure-DNN transformation 的新增贡献
+  - A 的单个 toy verifier 能运行、B 的单个 fixed policy 能运行，都不能单独作为“工具链完成”证据；必须分别通过 AG1-AG8 与 BG1-BG8
+  - A/B 不能作为只改变一个变量的直接对照；签名 verifier、authorization evaluator 与 integration mode 必须分三个实验维度评估
+- 已于 `2026-07-14` 完成双路线工作文档更新后回归验证：
+  - 系统环境没有 `python` 命令，因此使用仓库 `.venv/bin/python` 执行等价测试命令
+  - `.venv/bin/python -m pytest -q` -> `468 passed, 69 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 `pyproject.toml`、`setup.cfg`、`tox.ini`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `pyrightconfig.json`，因此未运行 `ruff check .` / `mypy .`
 
 - 已在本环境实际跑通：
   - Python 依赖导入
@@ -1484,7 +1737,90 @@ PQ-CAN 当前优先做的是来源、上下文、执行面、二进制输入合�
 - `SECURITY.md` 与 proof/evidence 文档同步更新新增安全不变量和残余限制。
 - toy cryptography 仍明确标注非生产用途；生产路线只能通过 vetted ML-DSA/Dilithium backend adapter。
 
-状态：`未开始`
+状态：`进行中`（J1-J10 第一阶段已完成；J11 与真实 tool egress / 更完整 IFC 后续推进）
+
+## Phase R：双路线认证、Coordinator 与论文选择
+
+目标：
+
+- 在不破坏现有 strict runtime-auth kernel 的前提下，建立标准安全锚点与研究型神经验签并行的统一实验平台。
+- 先稳定共享协议与唯一状态提交入口，再从同一 core commit 分出路线 A、路线 B 和 integration。
+- 用独立、可归因的实验决定路线 A、路线 B或拆分论文，不预先把两条路线强行绑定成同一安全 claim。
+
+阶段划分：
+
+1. Stage 0 / P0 安全收口：
+   - generic ML-DSA adapter 只接受严格布尔结果。
+   - 定义无歧义 `SignatureBindingV1`、固定 profile / digest semantics 与解析限制。
+   - 为 fixed circuit 定义严格 typed input layout；NaN、Inf、浮点、未知版本与错误长度前置拒绝。
+2. Stage 1 / Shared core：
+   - 定义无副作用 `RouteEvidence`、`CompositeEvidence` 与稳定 reason taxonomy。
+   - 新增 `RuntimeAuthCoordinator.evaluate(...) / commit(...)`。
+   - strict coordinator 成为唯一 replay reserve、decision/capability persistence 与 Context 创建入口。
+   - 旧 `authorize()` / direct Context helper 进入显式 compatibility / test 边界。
+3. Stage 2 / 路线 B 工具链与 B1 shadow：
+   - 显式注入 vetted ML-DSA backend，不允许 config-driven toy fallback。
+   - 建立 B0.5 typed layout、fact provenance、predicate IR、reference policy、trace 与 complexity manifest。
+   - 实现 B1 `FixedPolicyAggregator`，只在 shadow 中与普通 reference policy 做等价性测试。
+   - BG1-BG6 未通过前，B1 不得进入真实执行 AND；BG7/BG8 未通过前，不得宣称可迁移工具链。
+4. Stage 3 / 路线 A A0 与 A0.5：
+   - 把现有 compiled toy verifier 按 A0 接入有界异步 shadow。
+   - 建立 A0.5 reusable gadget / projector / trace / boundary / complexity toolchain。
+   - 对 dense projector 和 tiny negacyclic ring projector 做第二 backend smoke；只改 projector / decoder，不复制 core verifier。
+   - shadow job 只携带不可变公开材料；队列满、超时、异常和结果分歧必须形成 late evidence，不能阻塞 B。
+5. Stage 4 / 两条工具链阶段门控：
+   - 路线 A 的 A0.5 先形成 AG1 / AG4-AG8 preliminary evidence；AG2 / AG3 必须由 A1 端到端 toy verifier closure 完成。
+   - 路线 A 未通过全部 AG1-AG8 时不得进入 A2；达到门槛后停止扩大 toy 工作量并切换环结构。
+   - 路线 B 必须逐项通过 BG1-BG6 后才进入 B1.5；通过 BG1-BG8 后才进入 B2/B3 portable-policy claim。
+   - 两条路线均需将 reference equivalence、mutation detection、numeric/input bounds 与 complexity manifest 写入可机器读取 evidence。
+6. Stage 5 / 路线 B B1.5-B3：
+   - B1.5 正式进入 `route_B_accept = standard_signature_valid AND fixed_policy_accept`，同时保留电路外标准验签必要条件。
+   - B2 直接计算 scope bitset subset、flow conflict、delegation depth、TTL / time 和固定摘要等值关系中的核心集合。
+   - B3 以第二 policy / execution-surface profile 验证版本化 PolicyCompiler 与 circuit profile 的迁移能力。
+7. Stage 6 / 路线 A A1-A2：
+   - A1 将模运算、相等、范围、范数与聚合编译为固定 ReLU gadget，运行路径不得调用 reference verifier。
+   - 明确 parse / hash-to-challenge 是否进入 A1 claim；不把随机测试表述为完整数学证明。
+   - A1 负责关闭 AG2 / AG3 并汇总最终 AG1-AG8 gate report；未全部通过时保持 A1 状态，不进入 A2。
+   - A2 转向 research-only module-lattice / module-SIS-style relation 与 fixed negacyclic convolution；NTT 和完整 ML-DSA 神经化后置。
+8. Stage 7 / 状态事务与恢复：
+   - 定义 `PENDING -> COMMITTED -> CONSUMED / REJECTED` 或等价 durable state machine。
+   - production-facing profile 使用数据库事务保存 request state、decision、capability id 与 audit outbox。
+   - research file-marker profile继续 fail-closed，但必须明确崩溃后合法请求可能被永久误拒绝的 availability 限制。
+9. Stage 8 / 集成与论文实验：
+   - 支持 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare`。
+   - 分别完成 authorization circuit、compiled verifier、module-lattice migration 和 integration mode 实验。
+   - 根据硬门槛选择 A、B 或拆分论文。
+
+分支实施：
+
+```text
+origin/backup/repro-local
+        -> research/runtime-auth-core
+              -> research/route-a-neural-verifier
+              -> research/route-b-fixed-auth
+              -> research/dual-route-integration
+                    -> verified origin/backup/repro-local checkpoint
+```
+
+- 先在 core 分支完成 Stage 0 / Stage 1 对应的 R2-R5，并形成通过规定测试的 `core-api-v1` 固定提交。
+- A、B、integration 必须从同一 `core-api-v1` 提交创建；在 core 稳定前不并行改公共 gate 文件。
+- 共享文件由 core 管理；A、B 主要修改各自 verifier / circuit / route adapter；integration 只负责组合、shadow 与实验。
+- 多目录并行用 `git worktree`；不手工复制代码，不维护两个长期语义漂移的项目副本。
+- 稳定 integration milestone 才能成为 `origin/backup/repro-local` checkpoint；研究分支是否推远端需用户另行确认。
+
+完成标准：
+
+- 路线 A、B 和 Coordinator 均有独立单元测试、集成测试、负向测试与稳定 evidence schema。
+- 标准路线 backend 缺失、异常、超时、版本不匹配、畸形返回时全部 fail-closed。
+- strict 模式不存在绕过 Coordinator 创建 Context 的受支持公开路径。
+- Shadow 不增加 B 的同步关键路径等待；资源耗尽只影响 shadow evidence，不影响 B 决策。
+- 所有固定模块无训练入口，输出只按精确整数 `1` 接受。
+- standard-only 与 B 使用相同授权谓词；toy reference 与 A 使用相同签名 relation。
+- 路线 A AG1-AG8 与路线 B BG1-BG8 均生成可机器读取的 gate report；未通过的门槛不得通过文档措辞绕过。
+- 论文结果报告 A/B 四象限、reference equivalence、误拒绝、延迟、backlog、crash recovery、replay 与 protected-sink side effects。
+- toy / A0-A2 的非生产边界明确；路线 B 只通过 vetted external ML-DSA backend 获得 production-facing signature claim。
+
+状态：`进行中`（设计已完成第一版；代码、分支与实验尚未开始）
 
 ## Phase U0：定义安全内核边界
 
@@ -1939,16 +2275,41 @@ protected sinks 至少覆盖：
 - J10. 设计轻量 IFC 标签、flow policy、source/transform/egress sink 分类和显式 declassify scope：`已完成`（第一阶段：signed `flow_policy`、`declassify:<label>` scope、标签 join、egress policy 检查、facade egress wrapper、tamper detection 与 no-side-effect 拒绝测试已落地；当前只声明显式 egress contract，不声明全自动语言级 taint tracking）
 - J11. 更新论文 threat model，明确验签神经元的价值来自“不可信推理平台 / 控制流不可信”部署模型：`未开始`
 
+### R. 双路线认证与论文选择
+
+- R0. 固定双路线职责、运行模式、论文归因与非降级安全边界：`已完成`（设计阶段：A0-A2、B0-B3、B-enforced+A-shadow、Dual 研究模式和多维实验已写入本文档）
+- R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（设计阶段；尚未创建分支）
+- R2. 收紧 generic `MLDSAAdapter.verify(...)` 返回类型并定义 backend error evidence：`未开始`
+- R3. 定义无歧义 `SignatureBindingV1`、profile / digest semantics 与拒绝规则：`未开始`
+- R4. 定义 `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator`，并收口唯一 commit / Context 入口：`未开始`
+- R5. 将旧 `authorize()` / direct Context helper 收进 compatibility 边界并补 strict bypass 测试：`未开始`
+- R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`未开始`
+- R7. 路线 B0.5：实现 typed layout、fact provenance、predicate IR、reference policy、trace 与 complexity manifest：`未开始`
+- R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`未开始`
+- R9. 路线 B1.5：通过 BG1-BG6 后把 fixed policy 正式纳入 B 的 AND，同时保留电路外标准验签必要条件：`未开始`
+- R10. 路线 B2：实现原始 scope / flow / delegation / time / digest 关系电路：`未开始`
+- R11. 路线 B3：用第二 policy / execution-surface profile 证明 PolicyCompiler / circuit profile 可迁移并完成 BG1-BG8：`未开始`
+- R12. 路线 A0：将 `partially_compiled_toy_shadow` 接入有界异步 shadow queue / outbox：`未开始`
+- R13. 路线 A0.5：实现 reusable arithmetic / Boolean gadget、scheme-independent projector、trace / boundary / complexity manifest：`未开始`
+- R14. 路线 A0.5 migration smoke：dense 与 tiny negacyclic projector 复用同一 core，并形成 AG1 / AG4-AG8 preliminary evidence：`未开始`
+- R15. 路线 A1：完成 fixed ReLU toy verifier core、关闭 AG2/AG3、汇总 AG1-AG8 gate report，并明确 parse / hash / numeric / real-valued claim 边界：`未开始`
+- R16. 路线 A2：实现 research-only module-lattice / module-SIS-style fixed negacyclic-convolution verifier：`未开始`
+- R17. 定义并实现 durable authorization state machine 与 audit outbox；记录 file-marker profile 的 availability 限制：`未开始`
+- R18. 完成 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare`、公平实验、A/B 四象限统计与论文路线选择：`未开始`
+
 ## 7. 当前工作焦点
 
 当前建议优先顺序：
 
-0. 当前默认主线调整为 `Execution access control extensions for signed intent capabilities`：
-   - 旧的 proof-hardening / sink-centric signed intent execution gate 主线已经完成第一阶段闭环，不再有必须补完的旧主线 blocker。
-   - J1-J10 第一阶段已经完成：`EnforcementMode` 默认 strict、参数级 constrained scope、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / signed egress contract 已接入 runtime gate。
-   - 下一步默认继续 J11：更新论文 threat model，明确验签神经元的价值来自“不可信推理平台 / 控制流不可信”部署模型。
+0. 当前默认主线调整为 `Dual-route authentication research with a shared runtime coordinator`：
+   - 旧的 proof-hardening / sink-centric signed intent execution gate 与 J1-J10 执行访问控制扩展已完成第一阶段闭环，作为双路线共享安全基座保留。
+   - 路线 A 推进 `A0 -> A0.5 reusable toolchain -> A1 toy circuit closure -> A2 module-lattice ring convolution`，追求神经密码学创新，但不承担默认真实执行安全保证。
+   - 路线 B 推进 `B0 strict ML-DSA -> B0.5 typed toolchain -> B1/B1.5 -> B2 raw relations -> B3 portable policy compiler`，作为默认真实执行安全锚点。
+   - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
+   - 第一实现优先级不是立即编写 A/B 算法，而是先完成 R2-R5 P0/shared core：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口。
+   - shared core 通过测试并形成 `core-api-v1` 后，才从同一提交分出 A、B 与 integration，避免三条分支同时重构公共 gate。
+   - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
-   - ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
 
 1. `baseline` 与 `PQ-CAN` 正向三任务已于 `2026-05-27` 重新采集端到端统计并全部通过：
    - baseline 运行目录：`experiments/runs/20260527T114103Z-schedule_meeting-expense_report-create_blogpost/`
@@ -2101,9 +2462,13 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 继续 J11：更新论文 threat model，明确验签神经元的价值来自“不可信推理平台 / 控制流不可信”部署模型。
-2. 若继续代码增强，可在 J10 的第一版 IFC 基础上补真实 tool egress wiring 或更多 egress sink 清单，但必须保持显式 signed `flow_policy` / `declassify:<label>` contract。
-3. ML-DSA / Redis 真实服务 artifact / PostgreSQL adapter / CNN + Ring- or Module-LWE / 更多 live sample 仍是后续增强，除非用户重新指定这些方向。
+1. 从当前已同步的 `origin/backup/repro-local` 建立本地 `research/runtime-auth-core`；在执行前先再次确认工作区干净并记录 base commit。
+2. 在 core 分支完成 R2：修复 generic `MLDSAAdapter.verify(...)` truthy 返回问题，定义严格 backend result / error evidence，并补畸形返回、异常和缺 backend 测试。
+3. 完成 R3：冻结 `SignatureBindingV1` 的固定二进制或 length-prefixed TLV 编码、pure / HashML-DSA profile、digest/canonicalization 版本和重复/未知/超长字段拒绝规则。
+4. 完成 R4/R5：引入无副作用 Route / Composite Evidence 与 Coordinator skeleton；让 strict coordinator 成为唯一 commit / replay reserve / Context 创建入口，并把旧 helper 收进 compatibility 边界。
+5. 对 shared core 运行规定测试并形成 `core-api-v1` 固定提交；只有该 checkpoint 通过后，才创建 A、B 和 integration 三个分支 / worktree。
+6. A/B 并行第一阶段：B 按 R6-R8 完成 B0/B0.5/B1 shadow 与 BG1-BG6；A 按 R12-R14 完成 A0/A0.5、tiny ring smoke 和 preliminary AG evidence，不提前进入强制 B1.5 或声称 A1/A2。
+7. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与 shared-core P0 混在同一 patch。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2121,8 +2486,9 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 - 两个旧 calendar agent 证书已重命名为：
   - `saga/user/emma_johnson@gmail.com:calendar_agent/agent.crt.stale-20260516`
   - `saga/user/raj.sharma@gmail.com:calendar_agent/agent.crt.stale-20260516`
-- 工作区包含生成凭据、实验结果和本地 DB 状态变更；不得自动 push 到主开发分支。
-- `2026-06-14` 审计修复待提交文件未包含 secrets、生成凭据、本地 DB、模型输出或 `paper/`；仍需在 checkpoint 前展示确切文件列表。
+- 当前 `2026-07-14` 双路线方案更新开始前工作区为 clean，且 `origin/repro-local` 与 `origin/backup/repro-local` 均已同步到 `34caff7`；本次只修改工作文档。
+- 历史运行环境中仍存在生成凭据、实验结果和本地 DB；任何后续提交都必须以实际 `git status` / staged file list 为准，不得因本次文档范围干净而放宽检查。
+- 不自动 push 到主开发分支；稳定 integration checkpoint 默认目标仍是 `origin/backup/repro-local`，推送前必须展示确切文件列表。
 
 ### 当前结束前固定动作
 
@@ -2139,6 +2505,55 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-14 Dual-Route Research Plan and Branching Strategy Session
+
+目标：
+
+- 评估并正式记录“纯验签神经元”与“标准 ML-DSA 验签 + 固定神经授权电路”两条路线并行推进的可行方案。
+- 吸收设计评审中的 P0/P1 意见，避免在实现前固化不安全接口或不准确论文表述。
+- 确立 shared core、A/B feature branches 与 dual-route integration 的开发、合并和 checkpoint 纪律。
+
+本次只读核对确认：
+
+- 当前 `MLDSAAdapter.verify(...)` 使用 `bool(backend.verify(...))`，truthy 畸形返回存在误接受风险。
+- 当前 `CompiledToyLWEVerifier` 明确只有矩阵投影进入 fixed circuit，challenge、decode、mod、equality 等仍在普通 Python / hard gate 边界，因此属于 A0 而不是 A1。
+- 当前 `CAN` 的硬拒绝依赖 `mask_value > 0` Python 提前返回与最终精确 `== 1.0`；RECT/MASK 本身不能覆盖任意软件浮点特殊值和区间外输入。
+- 当前 `build_local_execution_context(...)` 可以只经 `evaluate_request(...)` 构造 Context，不执行 replay reserve；主 Agent 路径通常安全使用 consume decision，但旧公开 helper 尚未收口。
+- 当前 replay、revocation、decision/capability 和 audit 跨后端链路不是完整事务；file marker 只保证 replay reserve 原子性。
+
+本次更新：
+
+- 新增 `2.7 双路线认证研究与论文选择主线`：
+  - 固定 A0-A2 与 B0-B3 术语、职责和非生产边界。
+  - 默认 `route_b_with_a_shadow`；Dual 仅研究；禁止 OR / fallback。
+  - 固定 `Route.evaluate -> Coordinator.evaluate -> Coordinator.commit` 的无副作用 / 唯一提交边界。
+  - 固定无歧义 `SignatureBindingV1`、严格 typed fixed-circuit input 与论文三维实验。
+  - 固定 shared core、A/B feature branches、integration 分支拓扑与合并方向。
+- 补充两条路线的工具链阶段门控：
+  - 路线 A 新增 A0.5 reusable toolchain、AG1-AG8、tiny negacyclic projector migration smoke，以及通过后停止扩大 toy 工作量并转入 A2 的条件。
+  - 路线 B 新增 B0.5 typed authorization toolchain、BG1-BG8、B1.5 enforce gate 和 B3 second-profile portability，避免停留在一次性 ReLU AND。
+- 更新当前状态面板：记录 strict adapter、A0、Shamir 数值域、Context/replay 入口和事务状态差距。
+- 将 Phase X 状态纠正为 J1-J10 第一阶段已完成后的 `进行中`，新增 Phase R 双路线阶段计划。
+- 新增并细化任务看板 R0-R18，区分“设计已完成”、shared core、A/B 工具链、迁移与论文实验。
+- 将当前工作焦点和下一步切换到 R2-R5 shared-core P0，不提前并行修改 A/B 公共路径。
+- 新增 `2026-07-14` 目标调整记录，明确论文选择采用阶段门槛，而不是预先指定单一路线。
+
+分支 / Git 状态：
+
+- 本次方案更新前，本地 `repro-local`、`origin/repro-local` 与 `origin/backup/repro-local` 均位于 `34caff7`。
+- 尚未创建 `research/runtime-auth-core`、路线 A、路线 B 或 integration 分支。
+- 本次只修改 `SAGA_PQ_CAN_WORKLOG.md`，未修改代码、SECURITY、设计文档或实验产物。
+- 本次文档 patch 尚未形成 checkpoint commit；需在最终文件检查完成后再决定是否同步备份分支。
+
+已验证：
+
+- 系统环境没有 `python` 命令，因此使用项目虚拟环境解释器运行规定测试。
+- `.venv/bin/python -m pytest -q` -> `468 passed, 69 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `git diff --check` -> no output
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
 
 ### 2026-06-30 Lightweight IFC J10 Implementation Session
 
@@ -7410,6 +7825,49 @@ GitHub / checkpoint 状态：
 - 当前工作区同时还混有敏感/生成物与此前未整理改动，因此本次只保留本地 checkpoint 摘要，不自动推送备份分支。
 
 ## 9. 目标调整记录
+
+### 2026-07-14 双路线认证研究与论文选择主线调整
+
+原始状态：
+
+- strict runtime-auth kernel、proof-hardening 与 J1-J10 执行访问控制扩展已经完成第一阶段闭环。
+- ML-DSA external backend、CNN + Ring/Module-LWE 与更完整 compiled verifier 原被统一列为不阻塞主线的后续增强。
+- 当前 compiled verifier、普通 wrapper、CAN 和 execution gate 已能支撑 toy research 实验，但 `pq_signature_valid` 与 `can_accept` 在现有路径中仍可能来自同一次 CAN 结果，尚未形成标准验签与固定授权电路的独立证据。
+
+调整后的研究策略：
+
+- 不提前押注单一路线，改为并行推进：
+  - 路线 A：A0 部分编译 toy shadow，经 A0.5 reusable toolchain 与 A1 toy circuit closure 后转入 A2 module-lattice ring-convolution verifier。
+  - 路线 B：严格 external ML-DSA，经 B0.5 typed toolchain、B1/B1.5 fixed policy aggregation、B2 raw authorization relation circuit 后进入 B3 versioned portable policy compiler。
+- 默认安全模式由路线 B 执行，路线 A 异步 shadow；Dual 只用于研究，不允许 OR / fallback。
+- 两条路线共享 canonical envelope、SignatureBinding、Evidence、Coordinator、状态提交、审计和 protected sinks，但不混淆密码学结论。
+- 实验拆成 signature verifier、authorization evaluator 与 integration mode 三个维度，避免同时改变多个变量后错误归因。
+- 论文选择延后到 R18：A 通过 AG1-AG8 并达到 A2 环结构与新增神经密码贡献时优先 A；B 通过 BG1-BG8 并达到 B2/B3 直接谓词、可迁移 policy profile、不可绕过性与明确神经执行收益时优先 B；两边均强时优先拆分论文。
+
+调整后的工程策略：
+
+- 采用 `shared core -> A/B feature branches -> dual-route integration`，不复制仓库，也不在一个分支中从第一天混写所有功能。
+- 先从 `origin/backup/repro-local` 创建 `research/runtime-auth-core`，完成 R2-R5 并形成 `core-api-v1`。
+- A、B、integration 必须从同一 core commit 分叉；公共修复回 core，路线修复回所属分支，integration 只做组合与实验。
+- 稳定 integration checkpoint 才同步到 `origin/backup/repro-local`；研究分支是否推远端另行确认。
+
+必须先修正的安全边界：
+
+- `MLDSAAdapter` 只接受严格 backend 布尔结果。
+- SignatureBinding 使用无歧义编码并固定 ML-DSA profile / digest semantics。
+- 路线 B 严格拒绝浮点、NaN、Inf、错误 layout 与非精确整数输出。
+- Coordinator 成为唯一 commit / replay reserve / Context 创建入口。
+- production-facing 状态后端需要 durable state machine / transaction / outbox；research file-marker profile 必须记录可能误拒绝的 availability 限制。
+- 路线 A 在 AG1-AG8 未通过前不能宣称已建立可迁移 fixed-circuit toolchain，也不能因为 toy verifier 可运行就提前进入 A2。
+- 路线 B 在 BG1-BG6 未通过前不能进入强制 B1.5，在 BG1-BG8 未通过前不能宣称 fixed authorization circuit 可迁移或具有独立上下文复核贡献。
+
+调整原因：
+
+- 路线 A 具有更高潜在神经密码创新，但当前 A0 距离完整验签电路仍远，单独押注风险较高。
+- 路线 B 工程可行性更高，但若只实现 ReLU AND，论文创新性不足，需要 B2 原始授权关系和 reference equivalence。
+- 两条路线存在相同的方法学风险：只完成一个能运行的单体实现不等于建立了可信、可测试、可迁移的工具链；必须通过第二 backend / 第二 policy profile 的复用证据。
+- 并行路线与阶段性选择可以保留高风险创新机会，同时由标准 ML-DSA 路线提供可信安全锚点。
+- 分支隔离可以减少未成熟路线相互干扰，而统一 integration 仍能支持 shadow、Dual 和公平实验。
 
 ### 2026-06-26 Execution Access Control Extension 主线调整
 
