@@ -5,4 +5,4 @@ flask_jwt_extended>=4.7.1
 flask_pymongo>=3.0.1
 openai>=1.0.0
 git+https://github.com/lebrice/SimpleParsing.git
-cryptography>=43.0.3
+cryptography>=48.0.1,<50.0.0

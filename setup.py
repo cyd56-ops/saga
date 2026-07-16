@@ -8,7 +8,7 @@ setup(
     description="A project for secure and governable autonomous agent communication.",
     packages=find_packages(),
     install_requires=[
-        "cryptography",
+        "cryptography>=48.0.1,<50.0.0",
         "requests",
         "flask",
         "flask_sqlalchemy",

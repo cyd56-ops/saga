@@ -560,7 +560,7 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `verify_with_evidence(...)` 返回不可变 `MLDSAVerificationEvidence`，区分签名合法、普通签名无效、backend 缺失、接口畸形、backend 异常和返回类型畸形
   - backend 缺失、异常、接口或返回类型错误均 fail-closed 为 `False`
   - evidence 只记录稳定 reason、返回类型或异常类型，不复制可能包含实现细节的异常消息
-  - backend-specific 非标准返回仍只能由后续显式 shim 转换；真实 vetted backend wiring 与版本契约属于 R6
+  - backend-specific 非标准返回只能由显式 shim 转换；R6 已新增 strict route B contract，实际可用性仍取决于本地 vetted library/provider
 - 双路线 R3 `SignatureBindingV1` 已完成第一阶段：
   - 新增 `pq/signature_binding.py`，使用固定 magic/version/field count 与严格有序 length-prefixed TLV
   - 绑定 route、algorithm、opaque key ID、signature profile、envelope digest algorithm、canonicalization ID 与 envelope digest；signature bytes 不进入 binding 或 envelope digest
@@ -575,6 +575,14 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `SignedRequestExecutionGate` 默认使用 strict Coordinator mode；旧 `authorize()`、`consume_request()` 和 direct Context helper 不能在 strict 模式授予可执行 authority
   - 显式 `compatibility` mode 只保留历史测试、离线诊断和已声明降级路径；其 Context 标记为 uncommitted，strict Agent prompt 路径会拒绝
   - 当前仍不是 replay/revocation/capability/audit 的跨后端事务；file-marker 在 reserve 后崩溃可能永久拒绝合法重试，该限制保留给 R17
+- 路线 B R6 strict external ML-DSA backend wiring 已完成第一阶段：
+  - 新增 `pq/mldsa_route_b.py`，定义版本化 backend descriptor/contract、稳定 verification evidence 与 `MLDSARouteBVerifier`
+  - 本地 contract 显式 pin backend/provider 名称与版本、ML-DSA parameter set、pure/Hash profile、固定 V1 context 和有限正超时；backend 自报 descriptor 不能动态扩大信任
+  - verifier 在 backend 调用前拒绝跨路线 binding、profile/parameter 漂移、错误 key/signature 类型与 FIPS 204 长度、缺失接口、版本/API/capability 不匹配和 unavailable provider
+  - backend 异常、TimeoutError、wall timeout 与非内建 bool 结果均形成不含诊断消息的 fail-closed evidence；每个 verifier 最多保留一个在途 worker，避免超时重试无限创建线程
+  - 新增 `pq/cryptography_mldsa.py` 与 `CryptographyMLDSABackend`，只委托 `cryptography>=48.0.1,<50.0.0` 的 OpenSSL pure ML-DSA + context API；不手工预哈希冒充 HashML-DSA
+  - repo-local venv 已升级到 cryptography 49.0.0，其 wheel-provided OpenSSL 4.0.1 报告 `mldsa_supported=True`；本机已完成 real ML-DSA-44 keygen/sign/verify round trip（public key 1312 bytes、signature 2420 bytes）
+  - R6 尚未把 B0 evidence 接入 Agent config/Coordinator executable authority；该接线必须等待 R7/R8 typed authorization/reference-equivalence shadow 边界
 - 当前仓库已新增 canonical request envelope 模块：
   - `saga/messages.py`
 - 当前仓库已新增最小 `neural/` 实现：
@@ -1166,7 +1174,7 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - 最小自动化测试基线：`已完成`
 - 论文级实验复现 harness：`已完成`（第一阶段：正向 batch、真实负向 runner、artifact validation、paper table helper、proof-hardening appendix 均已落地；更多 live sample 属于后续增强）
 - 代码范围收缩与关键路径隔离：`已完成`（第一阶段：SAGA 协议内核、PQ-CAN 扩展内核、evidence/harness/attack-model 非强制边界已写入工作文档与 `SECURITY.md`）
-- PQ/LWE 签名抽象：`已完成`（第一阶段：toy LWE research backend 与 fail-closed ML-DSA external adapter 边界已落地；真实 ML-DSA backend 接线属于后续增强）
+- PQ/LWE 签名抽象：`已完成`（第一阶段：toy LWE research backend、generic fail-closed adapter 与路线 B 版本化 cryptography ML-DSA shim 已落地；cryptography 49/OpenSSL 4.0.1 real ML-DSA-44 正向实签已通过）
 - canonical request context / request envelope：`已完成`（第一阶段：sender/receiver/token/message/scope/time/capability/delegation/replay 绑定已接入 runtime gate）
 - Shamir STEP/RECT/MASK：`已完成`
 - compiled DNN verifier：`已完成`（第一阶段：toy LWE 公开矩阵投影与 deterministic preprocessing 边界固定；更细粒度算术 gadget 神经化属于后续增强）
@@ -1180,7 +1188,7 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 ### 3.4 阻塞 / 风险
 
 - 双路线实现前 P0 阻塞项：
-  - 路线 B 尚无真实 vetted ML-DSA backend wiring，也没有 fixed authorization circuit
+  - 路线 B 已有通过 real ML-DSA-44 round trip 的 cryptography backend shim/contract，但尚无 fixed authorization circuit 或 Agent/Coordinator 强制接线
   - 路线 A 当前仅为 A0 部分编译，不能作为纯验签神经元完成态
   - 文件 marker 只能原子 reserve replay，不能保证 replay / revocation / capability / audit 整条提交链事务化
   - A shadow 尚无有界异步队列、资源预算、drop evidence 与 late discrepancy audit
@@ -1222,6 +1230,17 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `.venv/bin/python -m pytest -q` -> `499 passed, 96 subtests passed`
   - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
   - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
+
+- 已于 `2026-07-16` 完成路线 B R6 strict external ML-DSA backend wiring 后回归验证：
+  - `/home/kali/saga/.venv/bin/python -m py_compile pq/mldsa_route_b.py pq/cryptography_mldsa.py pq/__init__.py tests/test_mldsa_route_b.py tests/test_cryptography_mldsa.py` -> success
+  - `/home/kali/saga/.venv/bin/python -m pytest -q tests/test_mldsa_route_b.py tests/test_cryptography_mldsa.py` -> `10 passed, 31 subtests passed`
+  - `/home/kali/saga/.venv/bin/python -m pytest -q tests/test_mldsa_route_b.py tests/test_cryptography_mldsa.py tests/test_toy_lwe.py tests/test_signature_binding.py` -> `36 passed, 53 subtests passed`
+  - `/home/kali/saga/.venv/bin/python -m pytest -q` -> `508 passed, 1 skipped, 127 subtests passed`
+  - 唯一 skip：`tests/test_paper_tables.py:529`，原因是独立 worktree 不包含主工作区 ignored end-to-end summaries；与 R6 功能无关
+  - `/home/kali/saga/.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `/home/kali/saga/.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
   - `git diff --check` -> no output
   - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
 
@@ -2322,7 +2341,7 @@ protected sinks 至少覆盖：
 - R3. 定义无歧义 `SignatureBindingV1`、profile / digest semantics 与拒绝规则：`已完成`（第一阶段：严格有序 TLV、golden bytes、typed enum、pure/HashML-DSA profile、固定 context、digest/canonicalization 版本和未知/重复/乱序/错误宽度/超长拒绝已落地）
 - R4. 定义 `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator`，并收口唯一 commit / Context 入口：`已完成`（第一阶段：evaluate 无状态提交；commit 重验 current facts、核对 canonical fingerprint、reserve replay 并创建 Coordinator-marked Context；重复/并发 commit 至多一个成功）
 - R5. 将旧 `authorize()` / direct Context helper 收进 compatibility 边界并补 strict bypass 测试：`已完成`（第一阶段：gate 默认 strict；旧 authorize/consume/direct Context helper 无法授予 authority；显式 compatibility Context 标记为 uncommitted 并被 strict Agent 拒绝）
-- R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`未开始`
+- R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`已完成`（第一阶段：cryptography 49/OpenSSL 4.0.1 pure ML-DSA shim、版本化 descriptor/contract、FIPS 长度检查、有界 timeout worker 与稳定 evidence 已落地；本机 real ML-DSA-44 positive round trip 已通过）
 - R7. 路线 B0.5：实现 typed layout、fact provenance、predicate IR、reference policy、trace 与 complexity manifest：`未开始`
 - R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`未开始`
 - R9. 路线 B1.5：通过 BG1-BG6 后把 fixed policy 正式纳入 B 的 AND，同时保留电路外标准验签必要条件：`未开始`
@@ -2504,10 +2523,11 @@ protected sinks 至少覆盖：
 下一步建议直接执行：
 
 1. 当前 `research/runtime-auth-core` 已完成 R2-R5 shared core 第一阶段，并形成通过规定测试的 `core-api-v1` 固定 checkpoint `4bdda66`。
-2. `research/route-a-neural-verifier`、`research/route-b-fixed-auth` 与 `research/dual-route-integration` 已从 `4bdda66` 创建，各自使用 `/home/kali/saga/.worktrees/` 下被 Git 忽略的独立 worktree；当前均无功能改动。
-3. 下一步在路线 B worktree 先执行 R6：显式接入 vetted external ML-DSA backend contract，固定 backend/version/profile/context/error/timeout 的 fail-closed wiring；不在缺少真实 backend 时回退到 toy。
-4. 随后在路线 A worktree 执行 R12-R14 的 A0/A0.5、tiny ring smoke 和 preliminary AG evidence；路线独有改动不得直接写入另一条路线分支。
-5. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与路线初始 patch 混在一起。
+2. `research/route-a-neural-verifier`、`research/route-b-fixed-auth` 与 `research/dual-route-integration` 已从 `4bdda66` 创建并使用独立 worktree；route B 已进入 R6，route A/integration 尚无功能改动。
+3. 路线 B R6 第一阶段已完成；cryptography 49/OpenSSL 4.0.1 real ML-DSA-44 round trip 已通过，provider unavailable 路径仍保持 fail-closed 且不允许回退到 toy。
+4. 下一步继续在路线 B worktree 执行 R7/R8：建立 typed layout/provenance/predicate IR/reference policy/trace/complexity manifest，并让 B1 `FixedPolicyAggregator` 只做 shadow equivalence；BG1-BG6 通过前不得进入执行 AND。
+5. 随后在路线 A worktree 执行 R12-R14 的 A0/A0.5、tiny ring smoke 和 preliminary AG evidence；路线独有改动不得直接写入另一条路线分支。
+6. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与路线初始 patch 混在一起。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2544,6 +2564,87 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-16 Route B R6 Strict External ML-DSA Backend Session
+
+目标：
+
+- 完成路线 B B0 第一阶段：显式接入 external ML-DSA backend contract，并让 backend/provider 版本、parameter set、profile、context、超时、异常和畸形结果全部可审计且 fail-closed。
+- 不在仓库内实现 ML-DSA，不在 provider unavailable 时回退到 toy LWE，也不提前把 B0 evidence 变成 executable authority。
+
+环境核对：
+
+- 初始 repo-local 环境为 cryptography 47.0.0；该版本虽暴露 Python ML-DSA 类，但 `mldsa_supported()` 只对 AWS-LC/BoringSSL 启用，OpenSSL wheel backend 返回 `False`。
+- Python 标准库 `ssl` 链接系统 OpenSSL 3.2.2；cryptography wheel 是独立静态链接，初始实际 backend 为 OpenSSL 4.0.0。先前把两者混为同一 provider 的记录已纠正。
+- cryptography 48 起才支持 OpenSSL 3.5+ ML-DSA；repo-local venv 已安装 cryptography 49.0.0 binary wheel，其 backend 为 OpenSSL 4.0.1，`mldsa_supported()` 返回 `True`。
+- 已在内存中完成 ML-DSA-44 keygen、固定 `ML_DSA_CONTEXT_V1` 签名与验签；public key=`1312` bytes、signature=`2420` bytes，未落盘私钥。
+- 环境中仍没有 `oqs`、`pqcrypto`、`dilithium_py` 或 `fips204` backend；当前 production-facing 路线只声明 cryptography/OpenSSL adapter。
+
+已做工作：
+
+- 新增 `pq/mldsa_route_b.py`：
+  - `MLDSABackendDescriptorV1`：backend/provider identity、version、API version、parameter set、profile、context 与 availability。
+  - `MLDSABackendContractV1`：本地显式批准并精确 pin 上述字段及有限正 timeout；backend descriptor 不用于动态信任发现。
+  - `MLDSARouteBVerificationEvidence`：稳定 reason、返回类型/异常类型和缺失接口，不保存异常消息。
+  - `MLDSARouteBVerifier`：固定 binding/input/descriptor/identity/version/capability/availability/timeout/result/decision 检查顺序。
+  - 在 backend 调用前检查 FIPS 204 public-key/signature 长度：44=`1312/2420`、65=`1952/3309`、87=`2592/4627` bytes。
+  - 每个 verifier 只允许一个在途 daemon worker；wall timeout 后同一实例不并发创建第二个 backend 调用。
+- 新增 `pq/cryptography_mldsa.py`：
+  - `CryptographyMLDSABackend` 只委托 cryptography pure ML-DSA + 固定 V1 context；HashML-DSA profile 直接拒绝，不手工预哈希。
+- 更新 `pq/__init__.py` 导出路线 B R6 公共 API。
+- 新增 `tests/test_mldsa_route_b.py`：
+  - fake backend 覆盖 builtin True/False、跨路线/parameter 漂移、输入类型/长度、接口/descriptor 畸形、API/identity/version/capability mismatch、unavailable、异常、TimeoutError、wall timeout quarantine 和非布尔结果。
+- 新增 `tests/test_cryptography_mldsa.py`：真实 cryptography shim 必须报告 available 并完成 ML-DSA-44 real round trip；环境退化时测试直接失败，不再用 unavailable 分支掩盖。
+- 更新 `README.md` / `SECURITY.md`：
+  - 固定 R6 contract 与 pure-only profile 边界。
+  - 明确 in-process C call 超时后无法强制终止，强资源隔离仍需 out-of-process vetted backend/service。
+  - 明确 Agent config helper 仍 fail-closed；R7/R8 完成 typed authorization 与 shadow equivalence 前，B0 不创建 Context。
+
+已验证：
+
+- `/home/kali/saga/.venv/bin/python -m pip install --upgrade --force-reinstall --no-cache-dir --only-binary=:all: cryptography==49.0.0` -> success（安装 binary wheel；同时更新 venv 内 `cffi 2.1.0` / `pycparser 3.0`）
+- `/home/kali/saga/.venv/bin/python -m pip check` -> `No broken requirements found.`
+- backend probe -> `cryptography=49.0.0`, `cryptography_backend=OpenSSL 4.0.1 9 Jun 2026`, `python_ssl=OpenSSL 3.2.2 4 Jun 2024`, `mldsa_supported=True`, `rust_has_mldsa=True`
+- real ML-DSA-44 in-memory probe -> `real_mldsa_round_trip=PASS`, public key `1312` bytes, signature `2420` bytes
+- `/home/kali/saga/.venv/bin/python -m py_compile pq/mldsa_route_b.py pq/cryptography_mldsa.py pq/__init__.py tests/test_mldsa_route_b.py tests/test_cryptography_mldsa.py` -> success
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/test_mldsa_route_b.py tests/test_cryptography_mldsa.py` -> `10 passed, 31 subtests passed`
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/test_mldsa_route_b.py tests/test_cryptography_mldsa.py tests/test_toy_lwe.py tests/test_signature_binding.py` -> `36 passed, 53 subtests passed`
+- `/home/kali/saga/.venv/bin/python -m pytest -q` -> `508 passed, 1 skipped, 127 subtests passed`
+- 唯一 skip 为独立 worktree 缺少 ignored end-to-end summaries，与 R6 无关。
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `git diff --check` -> no output
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
+
+安全边界：
+
+- 本轮没有手写生产密码算法；真实密码操作只允许委托显式 vetted external backend。
+- Fake backend 只测试 wiring 与 reason taxonomy，不作为密码正确性证据。
+- 当前主机已完成真实 ML-DSA-44 正向实签；这证明本地 backend wiring 可用，但不替代对 cryptography/OpenSSL 版本、构建来源和部署 provider 的持续 pin/audit。
+- B0 只产生标准签名 evidence；B1.5 前不得把 fixed policy 或单独 CAN 结果用于真实执行 AND，唯一 Context 提交入口仍是 shared Coordinator。
+
+当前 checkpoint 待提交文件范围：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `requirements.txt`
+- `setup.py`
+- `pq/__init__.py`
+- `pq/cryptography_mldsa.py`
+- `pq/mldsa_route_b.py`
+- `tests/test_cryptography_mldsa.py`
+- `tests/test_mldsa_route_b.py`
+
+敏感文件审查：
+
+- 待提交范围只包含源码、测试和文档，不包含 private keys、生成 secrets、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+- 测试在内存中生成短生命周期 ML-DSA 私钥用于正向 round trip，但未输出或落盘私钥、seed 或签名产物。
+
+Git / checkpoint 状态：
+
+- 本节将随 route B R6 本地 checkpoint 一起提交；最终提交以 `git log -1 --oneline --decorate` 为准。
+- 本轮不推送研究分支；下一步在 route B worktree 进入 R7/R8 typed authorization toolchain 与 B1 shadow equivalence。
 
 ### 2026-07-16 Dual-Route Worktree Initialization Session
 

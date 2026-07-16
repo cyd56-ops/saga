@@ -391,9 +391,49 @@ For the pure profile, the vetted backend receives the canonical binding bytes
 directly through its pure ML-DSA interface. For a HashML-DSA profile, the vetted
 backend must apply the profile's standard pre-hash to those same binding bytes.
 Callers must not manually pre-hash the binding and then label that operation as
-HashML-DSA. The current module only fixes this protocol contract; R6 still must
-provide an explicit backend shim that enforces the selected profile, parameter
-set, context, backend version, and fail-closed error behavior.
+HashML-DSA.
+
+### Route B B0 External Backend Contract
+
+R6 adds `MLDSABackendDescriptorV1`, `MLDSABackendContractV1`,
+`MLDSARouteBVerifier`, and `CryptographyMLDSABackend`. The trusted deployment
+must pin the backend name/version, provider name/version, ML-DSA parameter set,
+signature profile, fixed `ML_DSA_CONTEXT_V1`, and finite positive timeout. A
+backend descriptor is not trust discovery: every descriptor field is compared
+against the locally configured contract before the backend can be called.
+
+The verifier rejects cross-route bindings, parameter/profile drift, non-byte or
+wrong-length keys/signatures, missing methods, malformed descriptors, API or
+version mismatch, unavailable providers, exceptions, timeouts, and non-boolean
+results. FIPS 204 public-key/signature sizes are checked before the backend call:
+ML-DSA-44 uses 1312/2420 bytes, ML-DSA-65 uses 1952/3309 bytes, and ML-DSA-87
+uses 2592/4627 bytes. Only a built-in `bool` result of `True` produces
+`signature_valid`; diagnostic exception messages never enter evidence.
+
+`CryptographyMLDSABackend` delegates key generation, signing, parsing, and
+verification to the external `cryptography` package; this repository still does
+not implement ML-DSA. Cryptography 47 exposed ML-DSA only when built with
+AWS-LC/BoringSSL; OpenSSL-backed ML-DSA requires cryptography 48+ and OpenSSL
+3.5+. Route B therefore pins `cryptography>=48.0.1,<50.0.0`. The shim only
+advertises pure ML-DSA with the fixed context and rejects HashML-DSA profiles
+rather than applying a caller-defined hash. The validated local environment now
+uses cryptography 49.0.0 with wheel-provided OpenSSL 4.0.1,
+`mldsa_supported=True`, and a real ML-DSA-44 keygen/sign/verify round trip with
+1312-byte public keys and 2420-byte signatures. Python's standard-library
+`ssl` module still uses system OpenSSL 3.2.2, but that separate linkage does not
+control cryptography's statically linked wheel backend.
+
+Verification runs in one bounded daemon worker per verifier. A wall timeout
+fails closed and keeps that backend instance quarantined until the in-flight call
+returns, preventing unbounded concurrent retry threads. Python cannot forcibly
+terminate a blocked in-process C call, so a permanently hung provider can retain
+one daemon thread. Strong process cleanup and resource isolation require an
+out-of-process vetted backend/service and remain outside this first B0 shim.
+
+R6 supplies standard-signature Route B evidence but does not yet attach it to the
+Agent config helper or create executable authority. B0.5/B1 must first add typed
+authorization facts and reference-equivalent fixed-policy shadow evaluation;
+only the shared Coordinator may later commit a successful composite decision.
 
 The current compiled toy verifier has a deliberately narrow boundary:
 
