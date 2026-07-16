@@ -16,7 +16,14 @@ from saga.agent import (
     enable_toy_lwe_runtime_auth_from_config,
 )
 from saga.config import ReplayStoreConfig, ToyRuntimeAuthConfig
-from saga.execution_gate import EnforcementMode, ExecutionGateRequest, SQLiteReplayStateStore
+from saga.execution_gate import (
+    EnforcementMode,
+    ExecutionGateDecision,
+    ExecutionGateRequest,
+    LocalExecutionContext,
+    SignedRequestExecutionGate,
+    SQLiteReplayStateStore,
+)
 from saga.messages import build_request_envelope, parse_request_envelope
 
 
@@ -44,6 +51,24 @@ class AgentRuntimeAuthTests(unittest.TestCase):
         agent.pq_secret_key = None
         agent.local_agent = None
         return agent
+
+    @staticmethod
+    def _commit_request(
+        gate: SignedRequestExecutionGate,
+        request: ExecutionGateRequest,
+    ) -> ExecutionGateDecision:
+        """通过 strict Coordinator 提交请求并返回最终 decision。"""
+        coordinator = gate.runtime_auth_coordinator
+        return coordinator.commit(coordinator.evaluate(request)).decision
+
+    @classmethod
+    def _committed_context(
+        cls,
+        gate: SignedRequestExecutionGate,
+        request: ExecutionGateRequest,
+    ) -> LocalExecutionContext | None:
+        """返回 Coordinator 唯一 commit 路径生成的 Context。"""
+        return cls._commit_request(gate, request).local_execution_context
 
     class _StrictCapabilityLocalAgent:
         """Records strict capability-mode updates from the outer Agent."""
@@ -227,7 +252,7 @@ class AgentRuntimeAuthTests(unittest.TestCase):
         )
 
         assert bob.execution_gate is not None
-        self.assertTrue(bob.execution_gate.authorize(request))
+        self.assertTrue(self._commit_request(bob.execution_gate, request).allowed)
 
     def test_conversation_payload_signs_explicit_tool_authorization_scopes(self) -> None:
         """Conversation envelopes should bind selected downstream tool scopes."""
@@ -274,7 +299,7 @@ class AgentRuntimeAuthTests(unittest.TestCase):
         )
 
         assert bob.execution_gate is not None
-        context = bob.execution_gate.build_local_execution_context(request)
+        context = self._committed_context(bob.execution_gate, request)
 
         self.assertIsNotNone(context)
         assert context is not None
@@ -342,7 +367,7 @@ class AgentRuntimeAuthTests(unittest.TestCase):
             },
         )
         assert bob.execution_gate is not None
-        context = bob.execution_gate.build_local_execution_context(request)
+        context = self._committed_context(bob.execution_gate, request)
         self.assertIsNotNone(context)
         assert context is not None
         context.require_tool_call("send_email", {"recipient_domain": "example.com"})
@@ -394,7 +419,10 @@ class AgentRuntimeAuthTests(unittest.TestCase):
         )
 
         assert bob.execution_gate is not None
-        self.assertFalse(bob.execution_gate.authorize(request))
+        evidence = bob.execution_gate.runtime_auth_coordinator.evaluate(request)
+
+        self.assertFalse(evidence.accepted)
+        self.assertEqual(evidence.reason, "signature_verification_failed")
 
     def test_runtime_wiring_supports_wrapper_verifier_flavor(self) -> None:
         """The runtime helper should still expose the wrapper verifier path."""
@@ -496,8 +524,8 @@ class AgentRuntimeAuthTests(unittest.TestCase):
 
             assert alice.execution_gate is not None
             assert alice_second_process.execution_gate is not None
-            self.assertTrue(alice.execution_gate.consume_request(request).allowed)
-            replay_decision = alice_second_process.execution_gate.consume_request(request)
+            self.assertTrue(self._commit_request(alice.execution_gate, request).allowed)
+            replay_decision = self._commit_request(alice_second_process.execution_gate, request)
 
             self.assertFalse(replay_decision.allowed)
             self.assertEqual(replay_decision.reason, "replayed_request_envelope")
@@ -554,14 +582,14 @@ class AgentRuntimeAuthTests(unittest.TestCase):
             )
 
             assert alice.execution_gate is not None
-            self.assertTrue(alice.execution_gate.consume_request(request).allowed)
+            self.assertTrue(self._commit_request(alice.execution_gate, request).allowed)
             enable_toy_lwe_runtime_auth_from_config(
                 alice_restarted,
                 runtime_auth_config,
                 now_fn=lambda: self.now,
             )
             assert alice_restarted.execution_gate is not None
-            replay_decision = alice_restarted.execution_gate.consume_request(request)
+            replay_decision = self._commit_request(alice_restarted.execution_gate, request)
 
             self.assertFalse(replay_decision.allowed)
             self.assertEqual(replay_decision.reason, "replayed_request_envelope")
@@ -623,8 +651,8 @@ class AgentRuntimeAuthTests(unittest.TestCase):
 
             assert alice.execution_gate is not None
             assert alice_second_process.execution_gate is not None
-            self.assertTrue(alice.execution_gate.consume_request(request).allowed)
-            replay_decision = alice_second_process.execution_gate.consume_request(request)
+            self.assertTrue(self._commit_request(alice.execution_gate, request).allowed)
+            replay_decision = self._commit_request(alice_second_process.execution_gate, request)
 
             self.assertFalse(replay_decision.allowed)
             self.assertEqual(replay_decision.reason, "replayed_request_envelope")
@@ -724,8 +752,8 @@ class AgentRuntimeAuthTests(unittest.TestCase):
 
             assert alice.execution_gate is not None
             assert alice_second_process.execution_gate is not None
-            self.assertTrue(alice.execution_gate.consume_request(request).allowed)
-            replay_decision = alice_second_process.execution_gate.consume_request(request)
+            self.assertTrue(self._commit_request(alice.execution_gate, request).allowed)
+            replay_decision = self._commit_request(alice_second_process.execution_gate, request)
 
             self.assertFalse(replay_decision.allowed)
             self.assertEqual(replay_decision.reason, "replayed_request_envelope")

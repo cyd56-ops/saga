@@ -145,7 +145,13 @@ class ExperimentRuntimeAuthEntrypointTests(unittest.TestCase):
         )
 
         assert receiver_agent.execution_gate is not None
-        self.assertTrue(receiver_agent.execution_gate.authorize(request))
+        coordinator = receiver_agent.execution_gate.runtime_auth_coordinator
+        result = coordinator.commit(coordinator.evaluate(request))
+
+        self.assertTrue(result.committed)
+        self.assertIsNotNone(result.context)
+        assert result.context is not None
+        self.assertTrue(result.context.coordinator_committed)
 
     def _build_signed_request(
         self,
@@ -308,7 +314,11 @@ class ExperimentRuntimeAuthEntrypointTests(unittest.TestCase):
                 )
 
                 assert receiver_agent.execution_gate is not None
-                self.assertFalse(receiver_agent.execution_gate.authorize(request))
+                evidence = receiver_agent.execution_gate.runtime_auth_coordinator.evaluate(
+                    request
+                )
+                self.assertFalse(evidence.accepted)
+                self.assertEqual(evidence.reason, "missing_request_envelope")
 
     def test_query_mode_rejects_trusted_key_mismatch(self) -> None:
         """Receiver gates should reject when sample config trust is replaced with a wrong key."""
@@ -354,11 +364,20 @@ class ExperimentRuntimeAuthEntrypointTests(unittest.TestCase):
                     trusted_public_keys={sender_aid: "AAAAAAAAAAAAAAAAAAAAAA=="},
                 )
                 receiver_agent = self._make_runtime_agent(receiver_aid)
-                enable_toy_lwe_runtime_auth_from_config(receiver_agent, mismatched_runtime_auth)
+                now = datetime(2026, 5, 11, 12, 0, 0, tzinfo=timezone.utc)
+                enable_toy_lwe_runtime_auth_from_config(
+                    receiver_agent,
+                    mismatched_runtime_auth,
+                    now_fn=lambda: now,
+                )
                 request = self._build_signed_request(sender_agent, receiver_aid)
 
                 assert receiver_agent.execution_gate is not None
-                self.assertFalse(receiver_agent.execution_gate.authorize(request))
+                evidence = receiver_agent.execution_gate.runtime_auth_coordinator.evaluate(
+                    request
+                )
+                self.assertFalse(evidence.accepted)
+                self.assertEqual(evidence.reason, "signature_verification_failed")
 
     def test_listen_mode_loads_sample_runtime_auth_before_entering_loop(self) -> None:
         """Each experiment listen path should attach runtime auth before entering listen mode."""

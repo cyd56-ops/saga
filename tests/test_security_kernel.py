@@ -381,7 +381,9 @@ class SecurityKernelInventoryTests(unittest.TestCase):
         )
 
         self.assertIn("missing_execution_gate", inventory_text)
+        self.assertIn("missing_runtime_auth_coordinator", inventory_text)
         self.assertIn("missing_local_execution_context", inventory_text)
+        self.assertIn("uncommitted_local_execution_context", inventory_text)
         self.assertIn("local_agent_execution_context_unsupported", inventory_text)
         self.assertIn("replayed_request_envelope", inventory_text)
         self.assertIn("parent_envelope_digest", inventory_text)
@@ -395,7 +397,7 @@ class SecurityKernelInventoryTests(unittest.TestCase):
         entry = covered_by_id["persistent_replay_state"]
         self.assertTrue(entry.in_security_kernel)
         self.assertIn("enable_toy_lwe_runtime_auth", "\n".join(entry.code_paths))
-        self.assertIn("consume_request", "\n".join(entry.code_paths))
+        self.assertIn("RuntimeAuthCoordinator.commit", "\n".join(entry.code_paths))
         self.assertIn("persistent replay state", entry.gate_mechanism)
         self.assertIn("atomic reserve semantics", entry.residual_risk)
 
@@ -505,7 +507,7 @@ class SecurityKernelInventoryTests(unittest.TestCase):
         )
 
     def test_replay_consume_and_reserve_calls_remain_gate_mediated(self) -> None:
-        """replay consume / reserve 调用必须保持在 signed gate 消费路径内。"""
+        """replay compatibility consume 与 reserve 必须保持在声明的 gate 路径内。"""
         call_sites = _call_sites(
             lambda node: _is_attribute_call(node, "consume_request")
             or _is_attribute_call(node, "reserve_request")
@@ -515,7 +517,7 @@ class SecurityKernelInventoryTests(unittest.TestCase):
             _call_site_locations(call_sites),
             {
                 ("saga/agent.py", "_evaluate_execution_request"),
-                ("saga/execution_gate.py", "consume_request"),
+                ("saga/execution_gate.py", "_commit_evaluated_request"),
             },
             msg=f"Unexpected replay consume/reserve call sites: {call_sites!r}",
         )

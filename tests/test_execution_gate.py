@@ -105,6 +105,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
             {"alice@example.com:calendar_agent": self.key_pair.public_key},
             now_fn=lambda: self.now,
+            coordinator_mode="compatibility",
         )
 
     def _build_request(self, *, message: str = "hello") -> ExecutionGateRequest:
@@ -703,6 +704,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 {"alice@example.com:calendar_agent": self.key_pair.public_key},
                 now_fn=lambda: self.now,
                 replay_state_dir=Path(tmpdir),
+                coordinator_mode="compatibility",
             )
             request = self._build_request()
 
@@ -713,6 +715,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 {"alice@example.com:calendar_agent": self.key_pair.public_key},
                 now_fn=lambda: self.now,
                 replay_state_dir=Path(tmpdir),
+                coordinator_mode="compatibility",
             )
             replay_decision = fresh_gate.consume_request(request)
 
@@ -728,12 +731,14 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 {"alice@example.com:calendar_agent": self.key_pair.public_key},
                 now_fn=lambda: self.now,
                 replay_state_store=shared_store,
+                coordinator_mode="compatibility",
             )
             second_gate = SignedRequestExecutionGate(
                 CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
                 {"alice@example.com:calendar_agent": self.key_pair.public_key},
                 now_fn=lambda: self.now,
                 replay_state_store=shared_store,
+                coordinator_mode="compatibility",
             )
             request = self._build_request()
 
@@ -752,12 +757,14 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 {"alice@example.com:calendar_agent": self.key_pair.public_key},
                 now_fn=lambda: self.now,
                 replay_state_store=SQLiteReplayStateStore(database_path),
+                coordinator_mode="compatibility",
             )
             second_gate = SignedRequestExecutionGate(
                 CAN(CompiledToyLWEVerifier(self.scheme, message_bytes=32)),
                 {"alice@example.com:calendar_agent": self.key_pair.public_key},
                 now_fn=lambda: self.now,
                 replay_state_store=SQLiteReplayStateStore(database_path),
+                coordinator_mode="compatibility",
             )
             request = self._build_request()
 
@@ -859,6 +866,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 {"alice@example.com:calendar_agent": self.key_pair.public_key},
                 now_fn=lambda: self.now,
                 replay_state_dir=Path(tmpdir),
+                coordinator_mode="compatibility",
             )
 
             with mock.patch.object(
@@ -878,6 +886,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             {"alice@example.com:calendar_agent": self.key_pair.public_key},
             now_fn=lambda: self.now,
             replay_state_store=_UnavailableReplayStateStore(),
+            coordinator_mode="compatibility",
         )
 
         decision = gate.consume_request(self._build_request())
@@ -1237,6 +1246,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 capability_state_store=SQLiteCapabilityStateStore(
                     Path(tmpdir) / "capability.sqlite3"
                 ),
+                coordinator_mode="compatibility",
             )
             context = gate.build_local_execution_context(request)
             assert context is not None
@@ -1272,6 +1282,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 capability_state_store=SQLiteCapabilityStateStore(
                     Path(tmpdir) / "capability.sqlite3"
                 ),
+                coordinator_mode="compatibility",
             )
             context = gate.build_local_execution_context(request)
             assert context is not None
@@ -1328,6 +1339,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
             {"alice@example.com:calendar_agent": self.key_pair.public_key},
             now_fn=lambda: self.now,
             capability_state_store=_UnavailableCapabilityStateStore(),
+            coordinator_mode="compatibility",
         )
 
         context = gate.build_local_execution_context(request)
@@ -1367,6 +1379,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                     Path(tmpdir) / "capability.sqlite3",
                     timeout_seconds=10.0,
                 ),
+                coordinator_mode="compatibility",
             )
 
             def consume_once() -> str:
@@ -2275,6 +2288,7 @@ class SignedRequestExecutionGateTests(unittest.TestCase):
                 capability_state_store=SQLiteCapabilityStateStore(
                     Path(tmpdir) / "capability.sqlite3"
                 ),
+                coordinator_mode="compatibility",
             )
             context = gate.build_local_execution_context(request)
             assert context is not None

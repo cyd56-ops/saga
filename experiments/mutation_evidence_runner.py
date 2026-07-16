@@ -132,7 +132,7 @@ def mutation_specs() -> tuple[MutationSpec, ...]:
         ),
         MutationSpec(
             mutation_id="skip_replay_reserve",
-            description="Return from consume_request before replay reserve/consume state.",
+            description="Return from the Coordinator commit primitive before replay reserve state.",
             patches=(
                 MutationPatch(
                     relative_path="saga/execution_gate.py",

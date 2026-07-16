@@ -6,7 +6,7 @@ import base64
 import binascii
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 import json
@@ -39,6 +39,7 @@ T = TypeVar("T")
 ActionScopeSpec = str | tuple[str, ...] | Callable[..., str | tuple[str, ...]]
 AUDIT_CHAIN_GENESIS_HASH = "0" * 64
 ExecutionInvariantStatus = Literal["authorized", "violation"]
+CoordinatorMode = Literal["strict", "compatibility"]
 
 
 class EnforcementMode(str, Enum):
@@ -116,6 +117,8 @@ class ExecutionGateDecision:
     """Whether non-strict enforcement allowed a request that strict mode would reject."""
     would_reject_reason: str | None = None
     """Strict-mode reject reason preserved when permissive mode continues execution."""
+    local_execution_context: LocalExecutionContext | None = None
+    """Coordinator commit 成功后生成的执行上下文；纯 evaluate 永远不填充。"""
 
     def with_formula_values(
         self,
@@ -1093,6 +1096,8 @@ class LocalExecutionContext:
     request_envelope: RequestEnvelope
     pq_signature: bytes
     capability_state_store: CapabilityStateStore | None = None
+    coordinator_committed: bool = False
+    """仅 Coordinator 完成 replay reserve 后设置，strict Agent 只接受该状态。"""
 
     def authorize_action(
         self,
@@ -1745,15 +1750,23 @@ class SignedRequestExecutionGate:
         capability_state_store: CapabilityStateStore | None = None,
         revocation_store: RevocationStore | None = None,
         parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None = None,
+        coordinator_mode: CoordinatorMode = "strict",
     ) -> None:
-        """Store a CAN gate, trusted public keys, and optional shared replay state."""
+        """Store gate dependencies and select strict or explicit compatibility mode.
+
+        strict 模式禁止旧 authorize/consume/direct Context helper 成为执行授权入口；
+        compatibility 只用于历史测试、离线诊断或显式降级路径。
+        """
         if replay_state_dir is not None and replay_state_store is not None:
             raise ValueError("configure either replay_state_dir or replay_state_store, not both")
+        if coordinator_mode not in ("strict", "compatibility"):
+            raise ValueError("coordinator_mode must be strict or compatibility")
         self.can_gate = can_gate
         self.trusted_public_keys = dict(trusted_public_keys)
         self.capability_state_store = capability_state_store
         self.revocation_store = revocation_store
         self.parent_capability_store = _normalize_parent_capability_store(parent_capability_store)
+        self.coordinator_mode = coordinator_mode
         self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
         self._seen_request_ids: set[str] = set()
         self._replay_lock = threading.Lock()
@@ -1762,9 +1775,12 @@ class SignedRequestExecutionGate:
             self._replay_state_store = FileReplayStateStore(replay_state_dir)
         if self._replay_state_store is not None:
             self._load_persisted_request_ids()
+        self.runtime_auth_coordinator = RuntimeAuthCoordinator(self)
 
     def authorize(self, request: ExecutionGateRequest) -> bool:
-        """Return ``True`` only when the signed request envelope verifies."""
+        """兼容性布尔检查；strict 模式要求调用 Coordinator，因而始终拒绝。"""
+        if self.coordinator_mode == "strict":
+            return False
         return self.evaluate_request(request).allowed
 
     def evaluate_request(
@@ -1988,8 +2004,17 @@ class SignedRequestExecutionGate:
         self,
         request: ExecutionGateRequest,
     ) -> ExecutionGateDecision:
-        """验证并消费一次签名信封，重复 envelope 会被 replay 拒绝。"""
+        """兼容性消费入口；strict 模式禁止绕过 Coordinator 创建执行授权。"""
+        if self.coordinator_mode == "strict":
+            return ExecutionGateDecision(False, "runtime_auth_coordinator_required")
         decision = self.evaluate_request(request)
+        return self._commit_evaluated_request(decision)
+
+    def _commit_evaluated_request(
+        self,
+        decision: ExecutionGateDecision,
+    ) -> ExecutionGateDecision:
+        """原子 reserve 已重新验证的信封；只供 Coordinator 或兼容入口调用。"""
         if not decision.allowed:
             return decision
 
@@ -2021,30 +2046,46 @@ class SignedRequestExecutionGate:
         request: ExecutionGateRequest,
         decision: ExecutionGateDecision,
     ) -> LocalExecutionContext | None:
-        """从已验证的 gate decision 构造本地执行上下文，不重复消费 replay 状态。"""
-        if not decision.allowed:
+        """兼容性 Context helper；strict 模式禁止未 reserve replay 的直接构造。"""
+        if self.coordinator_mode == "strict":
             return None
-
-        if decision.request_envelope is None or decision.pq_signature is None:
-            return None
-        return LocalExecutionContext(
-            sender_aid=request.sender_aid,
-            receiver_aid=request.receiver_aid,
-            request_envelope=decision.request_envelope,
-            pq_signature=decision.pq_signature,
-            capability_state_store=self.capability_state_store,
+        return self._build_context_from_committed_decision(
+            decision,
+            coordinator_committed=False,
         )
 
     def build_local_execution_context(
         self,
         request: ExecutionGateRequest,
     ) -> LocalExecutionContext | None:
-        """Build a validated execution context for downstream local actions."""
+        """兼容性 validate-only Context helper；strict 模式必须使用 Coordinator。"""
+        if self.coordinator_mode == "strict":
+            return None
         decision = self.evaluate_request(request)
         if not decision.allowed:
             return None
 
         return self.build_local_execution_context_from_decision(request, decision)
+
+    def _build_context_from_committed_decision(
+        self,
+        decision: ExecutionGateDecision,
+        *,
+        coordinator_committed: bool,
+    ) -> LocalExecutionContext | None:
+        """从完整 decision 构造 Context，并显式标记是否经过 Coordinator commit。"""
+        if not decision.allowed:
+            return None
+        if decision.request_envelope is None or decision.pq_signature is None:
+            return None
+        return LocalExecutionContext(
+            sender_aid=decision.request_envelope.sender_aid,
+            receiver_aid=decision.request_envelope.receiver_aid,
+            request_envelope=decision.request_envelope,
+            pq_signature=decision.pq_signature,
+            capability_state_store=self.capability_state_store,
+            coordinator_committed=coordinator_committed,
+        )
 
     def _coerce_signature_bytes(self, signature: str | bytes) -> bytes:
         """Decode a transported detached signature into raw bytes."""
@@ -2065,6 +2106,216 @@ class SignedRequestExecutionGate:
         return envelope.hex_digest()
 
 
+@dataclass(frozen=True)
+class RouteEvidence:
+    """记录单条认证路线的纯评估结果及其请求绑定。"""
+
+    route_id: str
+    decision: ExecutionGateDecision
+    request_fingerprint: str | None
+    request: ExecutionGateRequest = field(repr=False, compare=False)
+
+    @property
+    def accepted(self) -> bool:
+        """仅当该路线 decision 明确允许时返回 ``True``。"""
+        return self.decision.allowed
+
+
+@dataclass(frozen=True)
+class CompositeEvidence:
+    """汇总无本地状态提交的 route evidence，供唯一 commit 入口消费。"""
+
+    mode: Literal["single_route_strict"]
+    routes: tuple[RouteEvidence, ...]
+    decision: ExecutionGateDecision
+    accepted: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class RuntimeAuthCommitResult:
+    """记录 Coordinator commit 是否成功及其唯一 committed Context。"""
+
+    committed: bool
+    reason: str
+    decision: ExecutionGateDecision
+    context: LocalExecutionContext | None = None
+
+
+class RuntimeAuthCoordinator:
+    """统一认证评估与 replay reserve/Context 创建的唯一 strict 提交入口。"""
+
+    def __init__(
+        self,
+        gate: SignedRequestExecutionGate,
+        *,
+        route_id: str = "signed_request_gate_v1",
+    ) -> None:
+        """绑定单个 gate；本阶段只实现 shared-core single-route skeleton。"""
+        if not route_id:
+            raise ValueError("route_id must be non-empty")
+        self._gate = gate
+        self.route_id = route_id
+
+    def evaluate(self, request: ExecutionGateRequest) -> CompositeEvidence:
+        """纯评估请求并生成绑定 fingerprint，不 reserve replay 或创建 Context。"""
+        decision = self._gate.evaluate_request(request)
+        request_fingerprint: str | None = None
+        if decision.allowed:
+            try:
+                request_fingerprint = _runtime_auth_request_fingerprint(request, decision)
+            except (TypeError, ValueError):
+                decision = replace(
+                    decision,
+                    allowed=False,
+                    reason="runtime_auth_request_not_canonical",
+                )
+        route = RouteEvidence(
+            route_id=self.route_id,
+            decision=decision,
+            request_fingerprint=request_fingerprint,
+            request=request,
+        )
+        return CompositeEvidence(
+            mode="single_route_strict",
+            routes=(route,),
+            decision=decision,
+            accepted=decision.allowed,
+            reason=decision.reason,
+        )
+
+    def commit(self, evidence: CompositeEvidence) -> RuntimeAuthCommitResult:
+        """重新验证 evidence、reserve replay，并且只在成功后创建 committed Context。"""
+        invalid_decision = ExecutionGateDecision(False, "invalid_composite_evidence")
+        if not isinstance(evidence, CompositeEvidence):
+            return RuntimeAuthCommitResult(
+                False,
+                invalid_decision.reason,
+                invalid_decision,
+            )
+        if evidence.mode != "single_route_strict" or len(evidence.routes) != 1:
+            return RuntimeAuthCommitResult(
+                False,
+                invalid_decision.reason,
+                invalid_decision,
+            )
+        route = evidence.routes[0]
+        if (
+            not isinstance(route, RouteEvidence)
+            or not isinstance(route.request, ExecutionGateRequest)
+            or not isinstance(evidence.decision, ExecutionGateDecision)
+            or route.route_id != self.route_id
+            or evidence.decision != route.decision
+            or type(evidence.accepted) is not bool
+            or evidence.accepted != route.accepted
+            or evidence.reason != route.decision.reason
+            or route.decision.local_execution_context is not None
+            or (
+                route.accepted
+                and not isinstance(route.request_fingerprint, str)
+            )
+            or (
+                not route.accepted
+                and route.request_fingerprint is not None
+            )
+        ):
+            return RuntimeAuthCommitResult(
+                False,
+                invalid_decision.reason,
+                invalid_decision,
+            )
+        if not evidence.accepted or not route.accepted or not evidence.decision.allowed:
+            return RuntimeAuthCommitResult(
+                False,
+                route.decision.reason,
+                route.decision,
+            )
+
+        decision = self._gate.evaluate_request(route.request)
+        if not decision.allowed:
+            return RuntimeAuthCommitResult(False, decision.reason, decision)
+        try:
+            current_fingerprint = _runtime_auth_request_fingerprint(route.request, decision)
+        except (TypeError, ValueError):
+            changed = replace(
+                decision,
+                allowed=False,
+                reason="runtime_auth_request_not_canonical",
+            )
+            return RuntimeAuthCommitResult(False, changed.reason, changed)
+        if current_fingerprint != route.request_fingerprint:
+            changed = replace(
+                decision,
+                allowed=False,
+                reason="runtime_auth_evidence_changed",
+            )
+            return RuntimeAuthCommitResult(False, changed.reason, changed)
+
+        committed_decision = self._gate._commit_evaluated_request(decision)
+        if not committed_decision.allowed:
+            return RuntimeAuthCommitResult(
+                False,
+                committed_decision.reason,
+                committed_decision,
+            )
+        context = self._gate._build_context_from_committed_decision(
+            committed_decision,
+            coordinator_committed=True,
+        )
+        if context is None:
+            failed = replace(
+                committed_decision,
+                allowed=False,
+                reason="local_execution_context_creation_failed",
+            )
+            return RuntimeAuthCommitResult(False, failed.reason, failed)
+        committed_decision = replace(
+            committed_decision,
+            local_execution_context=context,
+        )
+        return RuntimeAuthCommitResult(
+            True,
+            committed_decision.reason,
+            committed_decision,
+            context,
+        )
+
+
+def _runtime_auth_request_fingerprint(
+    request: ExecutionGateRequest,
+    decision: ExecutionGateDecision,
+) -> str:
+    """绑定 commit 所需的公开请求事实，防止 evaluate 后可变参数或 payload 漂移。"""
+    if decision.request_envelope is None or decision.pq_signature is None:
+        raise ValueError("allowed route evidence requires envelope and signature")
+    parameters = dict(request.parameters or {})
+    parameters_json = json.dumps(
+        parameters,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    payload = {
+        "action_scope": request.action_scope,
+        "envelope_digest": decision.request_envelope.hex_digest(),
+        "message_digest": sha256_hex(request.message.encode("utf-8")),
+        "parameters": parameters_json,
+        "receiver_aid": request.receiver_aid,
+        "sender_aid": request.sender_aid,
+        "signature_digest": sha256_hex(decision.pq_signature),
+        "token_digest": sha256_hex(request.token.encode("utf-8")),
+    }
+    return sha256_hex(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    )
+
+
 def build_toy_lwe_execution_gate(
     scheme: ToyLWESignatureScheme,
     trusted_public_keys: Mapping[str, bytes],
@@ -2076,12 +2327,14 @@ def build_toy_lwe_execution_gate(
     replay_state_store: ReplayStateStore | None = None,
     revocation_store: RevocationStore | None = None,
     parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None = None,
+    coordinator_mode: CoordinatorMode = "strict",
 ) -> SignedRequestExecutionGate:
     """Build a signed execution gate for the research-only toy LWE scheme.
 
     This helper centralizes the current prototype wiring so real agent/runtime
     entry points do not need to manually assemble ``CAN`` plus verifier objects.
-    replay_state_dir 或 replay_state_store 提供时，会把已消费信封持久化到共享 replay 后端。
+    replay_state_dir 或 replay_state_store 提供时，会把已消费信封持久化到共享 replay 后端；
+    coordinator_mode 默认 strict，compatibility 只供显式离线/历史 harness 使用。
     """
     # toy/PQ-CAN 依赖只在启用 research runtime auth 时加载，保持 SAGA 核心导入路径轻量。
     from neural import CAN, CompiledToyLWEVerifier
@@ -2106,6 +2359,7 @@ def build_toy_lwe_execution_gate(
         replay_state_store=replay_state_store,
         revocation_store=revocation_store,
         parent_capability_store=parent_capability_store,
+        coordinator_mode=coordinator_mode,
     )
 
 

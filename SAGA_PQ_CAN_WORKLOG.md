@@ -568,6 +568,13 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - route A V1 只允许明确标注 research-only 的 toy LWE direct profile；route B V1 只允许 ML-DSA-44/65/87 与 pure 或显式 HashML-DSA profile
   - HashML-DSA 的 SHA-256/SHA-512/SHAKE128/SHAKE256 prehash 由后续 vetted backend 按 profile 执行，调用方不得手工预哈希后冒充标准 HashML-DSA
   - 未知、重复、乱序、错误宽度、截断、尾随或超长编码均在 backend 选择和验签前 fail-closed
+- 双路线 R4/R5 Runtime Auth Coordinator 已完成第一阶段：
+  - `RouteEvidence` / `CompositeEvidence` 是不可变的 evaluate 结果；evaluate 不 reserve replay，也不创建 `LocalExecutionContext`
+  - `RuntimeAuthCoordinator.commit(...)` 会重新验证当前请求、时间窗和撤销状态，核对绑定 envelope/signature/transport/runtime parameters 的 canonical fingerprint，再 reserve replay 并创建唯一 Coordinator-marked Context
+  - 同一 evidence 的重复或并发 commit 至多生成一个 Context；evidence 变化、非 canonical 参数、replay backend 故障和无效 composite 均 fail-closed
+  - `SignedRequestExecutionGate` 默认使用 strict Coordinator mode；旧 `authorize()`、`consume_request()` 和 direct Context helper 不能在 strict 模式授予可执行 authority
+  - 显式 `compatibility` mode 只保留历史测试、离线诊断和已声明降级路径；其 Context 标记为 uncommitted，strict Agent prompt 路径会拒绝
+  - 当前仍不是 replay/revocation/capability/audit 的跨后端事务；file-marker 在 reserve 后崩溃可能永久拒绝合法重试，该限制保留给 R17
 - 当前仓库已新增 canonical request envelope 模块：
   - `saga/messages.py`
 - 当前仓库已新增最小 `neural/` 实现：
@@ -607,12 +614,11 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `request_envelope / pq_signature` 已进入实际消息格式
   - `tool` 已有实际包装 gate
   - `memory` 已至少有一个真实写入点走 gate
-- 当前 `SignedRequestExecutionGate` 的状态与 Context 入口尚未收口为新 Coordinator 契约：
-  - `consume_request(...)` 会在验证通过后原子 reserve replay id
-  - `build_local_execution_context(...)` 当前只调用 `evaluate_request(...)`，可以在未 reserve replay 的情况下构造 Context
-  - 主 Agent strict 路径通常先 consume 再从 decision 构造 Context，但旧公开 helper、legacy gate 与测试路径仍可直接调用
-  - replay reserve、revocation、decision/capability 持久化和 audit 目前也不是一条跨后端事务
-  - 双路线实现前必须建立唯一 `RuntimeAuthCoordinator.commit(...)` / Context 创建入口，并为 research 与 production-facing profile 分别声明崩溃恢复语义
+- 当前 `SignedRequestExecutionGate` 的 strict 状态提交与 Context 入口已收口到第一版 Coordinator 契约：
+  - `RuntimeAuthCoordinator.evaluate(...)` 保持无本地状态提交，`commit(...)` 是支持的 strict replay reserve / Context 创建入口
+  - `Agent` receiving-side 与 initiating-side strict 路径均执行 Coordinator evaluate -> commit，并且只接受 `coordinator_committed=True` 的 Context
+  - private reserve/context primitive 仅属于 runtime security kernel 实现细节，不是受支持的公开授权 API
+  - replay reserve、revocation、decision/capability 持久化和 audit 目前仍不是一条跨后端事务；更强崩溃恢复语义属于 R17
 - 当前 `saga/security_kernel.py` 已从 entry-centric 清单升级为第一版 sink-centric audit：
   - 新增 `ProtectedSinkAudit`
   - 新增论文级命题 `Execute(surface) => N_verify=1 AND scope_ok AND replay_ok AND delegation_ok AND policy_ok`
@@ -1169,13 +1175,11 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（shared core 实现已启动：`research/runtime-auth-core` 从已验证提交 `1917836` 创建，R2 strict adapter 与 R3 `SignatureBindingV1` 已完成；R4/R5 尚未开始）
+- 双路线认证研究与论文选择：`进行中`（shared core R2-R5 第一阶段已完成并形成通过规定测试的 `core-api-v1` 固定 checkpoint；下一步从同一提交创建 A/B/integration 分支）
 
 ### 3.4 阻塞 / 风险
 
 - 双路线实现前 P0 阻塞项：
-  - `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator` 尚未实现
-  - strict 模式尚未禁止旧 `authorize()` / 直接 Context helper 绕过唯一 commit
   - 路线 B 尚无真实 vetted ML-DSA backend wiring，也没有 fixed authorization circuit
   - 路线 A 当前仅为 A0 部分编译，不能作为纯验签神经元完成态
   - 文件 marker 只能原子 reserve replay，不能保证 replay / revocation / capability / audit 整条提交链事务化
@@ -1207,6 +1211,15 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `.venv/bin/python -m pytest -q tests/test_signature_binding.py` -> `15 passed, 19 subtests passed`
   - `.venv/bin/python -m pytest -q tests/test_signature_binding.py tests/test_toy_lwe.py tests/test_encoding.py` -> `56 passed, 22 subtests passed`
   - `.venv/bin/python -m pytest -q` -> `487 passed, 91 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
+
+- 已于 `2026-07-16` 完成 R4/R5 Runtime Auth Coordinator 后回归验证：
+  - `.venv/bin/python -m pytest -q tests/test_runtime_auth_coordinator.py` -> `12 passed, 5 subtests passed`
+  - `.venv/bin/python experiments/negative_injection_runner.py --output-dir /tmp/saga-r4-negative-smoke` -> `15/15 PASS`
+  - `.venv/bin/python -m pytest -q` -> `499 passed, 96 subtests passed`
   - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
   - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
   - `git diff --check` -> no output
@@ -2304,11 +2317,11 @@ protected sinks 至少覆盖：
 ### R. 双路线认证与论文选择
 
 - R0. 固定双路线职责、运行模式、论文归因与非降级安全边界：`已完成`（设计阶段：A0-A2、B0-B3、B-enforced+A-shadow、Dual 研究模式和多维实验已写入本文档）
-- R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（`research/runtime-auth-core` 已从验证基线 `1917836` 创建；A/B/integration 仍须等待 `core-api-v1`）
+- R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（`research/runtime-auth-core` 已从验证基线 `1917836` 创建并形成 `core-api-v1`；A/B/integration 尚未创建，下一步从该固定提交分出）
 - R2. 收紧 generic `MLDSAAdapter.verify(...)` 返回类型并定义 backend error evidence：`已完成`（第一阶段：只接受内建 `bool` 的 `True`；缺 backend、接口畸形、异常、truthy 非布尔结果均形成稳定拒绝 evidence）
 - R3. 定义无歧义 `SignatureBindingV1`、profile / digest semantics 与拒绝规则：`已完成`（第一阶段：严格有序 TLV、golden bytes、typed enum、pure/HashML-DSA profile、固定 context、digest/canonicalization 版本和未知/重复/乱序/错误宽度/超长拒绝已落地）
-- R4. 定义 `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator`，并收口唯一 commit / Context 入口：`未开始`
-- R5. 将旧 `authorize()` / direct Context helper 收进 compatibility 边界并补 strict bypass 测试：`未开始`
+- R4. 定义 `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator`，并收口唯一 commit / Context 入口：`已完成`（第一阶段：evaluate 无状态提交；commit 重验 current facts、核对 canonical fingerprint、reserve replay 并创建 Coordinator-marked Context；重复/并发 commit 至多一个成功）
+- R5. 将旧 `authorize()` / direct Context helper 收进 compatibility 边界并补 strict bypass 测试：`已完成`（第一阶段：gate 默认 strict；旧 authorize/consume/direct Context helper 无法授予 authority；显式 compatibility Context 标记为 uncommitted 并被 strict Agent 拒绝）
 - R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`未开始`
 - R7. 路线 B0.5：实现 typed layout、fact provenance、predicate IR、reference policy、trace 与 complexity manifest：`未开始`
 - R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`未开始`
@@ -2332,8 +2345,8 @@ protected sinks 至少覆盖：
    - 路线 A 推进 `A0 -> A0.5 reusable toolchain -> A1 toy circuit closure -> A2 module-lattice ring convolution`，追求神经密码学创新，但不承担默认真实执行安全保证。
    - 路线 B 推进 `B0 strict ML-DSA -> B0.5 typed toolchain -> B1/B1.5 -> B2 raw relations -> B3 portable policy compiler`，作为默认真实执行安全锚点。
    - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
-   - 第一实现优先级不是立即编写 A/B 算法，而是先完成 R2-R5 P0/shared core：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口。
-   - shared core 通过测试并形成 `core-api-v1` 后，才从同一提交分出 A、B 与 integration，避免三条分支同时重构公共 gate。
+   - R2-R5 P0/shared core 第一阶段已完成：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口均已落地。
+   - 通过规定测试的 `core-api-v1` checkpoint 已形成；下一步从同一提交分出 A、B 与 integration，避免三条分支同时重构公共 gate。
    - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
 
@@ -2372,16 +2385,18 @@ protected sinks 至少覆盖：
    - `enable_toy_lwe_runtime_auth(...)` 默认设置 `agent.strict_execution_gate=True`
    - `ToyRuntimeAuthConfig.enforcement_mode` 默认 `strict`；旧 `strict_execution_gate=False` 只作为兼容字段保留，并会规范化为必须带 `downgrade_reason` 的 permissive 降级
    - strict 模式下缺失 `execution_gate` -> `missing_execution_gate`
+   - strict 模式下 gate 缺失 Coordinator -> `missing_runtime_auth_coordinator`
    - strict 模式下缺失 `LocalExecutionContext` -> `missing_local_execution_context`
+   - strict 模式下 compatibility 创建的 Context -> `uncommitted_local_execution_context`
 9. initiating-side inbound response 验签已完成第一版接入：
    - `Agent.initiate_conversation(...)` 收到 peer response 后先执行 execution gate
    - response 必须绑定 `sender_aid=r_aid`、`receiver_aid=self.aid`、同一 token、message digest 和 `llm_prompt` scope
    - gate reject 会记录结构化 `AUDIT` 并阻止 initiating-side `local_agent.run()`
    - 已覆盖 valid signed response、missing envelope/signature、tampered response message、wrong trusted key
 10. seen-request replay 防护已完成第一版接入：
-   - `SignedRequestExecutionGate.consume_request(...)` 负责执行路径上的 validate-and-consume
-   - `evaluate_request(...)` 保持纯检查，不改变 replay 状态，方便测试和诊断读取
-   - `Agent.receive_conversation(...)` / `Agent.initiate_conversation(...)` 实际执行前均使用 consume 路径
+   - `RuntimeAuthCoordinator.evaluate(...)` 保持无本地状态提交，方便测试和诊断读取
+   - `RuntimeAuthCoordinator.commit(...)` 负责 strict 执行路径上的 current-fact 重验、evidence fingerprint 核对、replay reserve 与 Context 创建
+   - `Agent.receive_conversation(...)` / `Agent.initiate_conversation(...)` 实际执行前均使用 Coordinator evaluate -> commit 路径
    - 重复 envelope digest 会以 `replayed_request_envelope` 拒绝，且不会触发本地 agent
    - 标准 toy runtime helper 会把 replay marker 写入 agent workdir 下的 `audit/replay/`，跨 gate 实例恢复后仍拒绝同一 envelope
    - replay 状态写入失败时以 `replay_state_persistence_failed` fail-closed，不静默放行
@@ -2398,7 +2413,7 @@ protected sinks 至少覆盖：
      - `agent_runtime_replayed_envelope`
      - `agent_runtime_scope_escalation_tool`
    - 默认输出 JSONL 与 summary 到 ignored `experiments/runs/`
-   - `.venv/bin/python experiments/negative_injection_runner.py --output-dir /tmp/saga-negative-runner-runtime-smoke` 已确认 `14/14` PASS
+   - `.venv/bin/python experiments/negative_injection_runner.py --output-dir /tmp/saga-r4-negative-smoke` 已确认 `15/15` PASS
 13. 离线消融、微开销和真实端到端统计已完成第一版：
    - `experiments/ablation_overhead_runner.py`
    - 比较 `saga_only / ordinary_pq_middleware / naive_neural_verifier / shamir_secured_pq_can`
@@ -2488,11 +2503,10 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 当前 `research/runtime-auth-core` 已完成 R2 strict adapter 与 R3 `SignatureBindingV1`；保持 A/B/integration 分支尚未创建。
-2. 完成 R4/R5：引入无本地状态提交的 Route / Composite Evidence 与 Coordinator skeleton；让 strict coordinator 成为唯一 commit / replay reserve / Context 创建入口，并把旧 helper 收进 compatibility 边界。
-3. 对 shared core 运行规定测试并形成 `core-api-v1` 固定提交；只有该 checkpoint 通过后，才创建 A、B 和 integration 三个分支 / worktree。
-4. A/B 并行第一阶段：B 按 R6-R8 完成 B0/B0.5/B1 shadow 与 BG1-BG6；A 按 R12-R14 完成 A0/A0.5、tiny ring smoke 和 preliminary AG evidence，不提前进入强制 B1.5 或声称 A1/A2。
-5. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与 shared-core P0 混在同一 patch。
+1. 当前 `research/runtime-auth-core` 已完成 R2-R5 shared core 第一阶段，并形成通过规定测试的 `core-api-v1` 固定 checkpoint；A/B/integration 分支尚未创建。
+2. 下一步从同一 `core-api-v1` 提交创建 A、B 和 integration 三个分支 / worktree，不在分支创建时混入功能代码。
+3. A/B 并行第一阶段：B 按 R6-R8 完成 B0/B0.5/B1 shadow 与 BG1-BG6；A 按 R12-R14 完成 A0/A0.5、tiny ring smoke 和 preliminary AG evidence，不提前进入强制 B1.5 或声称 A1/A2。
+4. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与 shared-core P0 混在同一 patch。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2529,6 +2543,75 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-16 R4/R5 Runtime Auth Coordinator Session
+
+目标：
+
+- 完成 R4/R5 shared core 第一阶段：把无状态评估与唯一状态提交分离，并阻止 strict runtime 通过旧 helper 绕过 replay reserve 后的 Context 创建。
+- 保持改动限于进程内授权入口收口，不提前声称 replay/revocation/capability/audit 已形成跨后端事务。
+
+已做工作：
+
+- 更新 `saga/execution_gate.py`：
+  - 新增不可变 `RouteEvidence`、`CompositeEvidence`、`RuntimeAuthCommitResult` 与 `RuntimeAuthCoordinator`。
+  - `evaluate(...)` 只生成 evidence；`commit(...)` 重新验证请求、时间窗和撤销状态，核对 canonical request fingerprint，reserve replay 后才创建 `coordinator_committed=True` 的 Context。
+  - gate 默认 `coordinator_mode="strict"`；旧 `authorize()`、`consume_request()` 和 direct Context helper 在 strict 模式无法授予可执行 authority。
+  - 显式 `compatibility` mode 保留旧测试/离线 harness，但其 Context 标记为 uncommitted。
+- 更新 `saga/agent.py`：
+  - receiving-side 和 initiating-side strict 路径统一使用 Coordinator evaluate -> commit。
+  - strict 模式缺少 Coordinator 时在调用 legacy gate 前以 `missing_runtime_auth_coordinator` 拒绝。
+  - prompt sink 只接受 Coordinator committed Context；compatibility Context 以 `uncommitted_local_execution_context` 拒绝。
+- 更新 security kernel 与实验 harness：
+  - replay protected-sink、mutation、refinement 和 compatibility evidence 指向 Coordinator commit primitive。
+  - 离线负向 runner 的 replay/valid-context fixture 迁移到 Coordinator。
+  - 离线 ablation 明确声明 `compatibility`，因为该 harness 重复使用 validate-only 样本，不属于 strict runtime security claim。
+- 新增 `tests/test_runtime_auth_coordinator.py`，覆盖纯 evaluate、首次/重复/并发 commit、evaluate 后参数漂移、撤销竞态、replay backend 故障、无效 evidence、非 canonical 参数、strict helper bypass、uncommitted Context 和 frozen evidence。
+- 更新 Agent、factory、integration 和 security-kernel 测试，使 strict 正向路径通过 Coordinator，compatibility 单元测试显式声明降级边界。
+- 更新 `SECURITY.md`，记录 Coordinator 不变量、稳定拒绝原因和 R17 crash-consistency 限制。
+
+已验证：
+
+- `.venv/bin/python -m pytest -q tests/test_runtime_auth_coordinator.py` -> `12 passed, 5 subtests passed`
+- `.venv/bin/python experiments/negative_injection_runner.py --output-dir /tmp/saga-r4-negative-smoke` -> `15/15 PASS`
+- `.venv/bin/python -m pytest -q` -> `499 passed, 96 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `git diff --check` -> no output
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
+
+安全边界：
+
+- 本轮没有新增生产密码实现；toy LWE / compiled verifier 仍明确是 research-only，真实 vetted ML-DSA backend wiring 属于 R6。
+- Coordinator 保证受支持的 strict 进程内路径只在 replay reserve 后创建 Context，但不是跨 backend transaction。reserve 后进程崩溃可能造成合法重试被永久拒绝；durable state machine 与 audit outbox 属于 R17。
+
+当前 checkpoint 待提交文件范围：
+
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `SECURITY.md`
+- `experiments/ablation_overhead_runner.py`
+- `experiments/mutation_evidence_runner.py`
+- `experiments/negative_injection_runner.py`
+- `saga/agent.py`
+- `saga/execution_gate.py`
+- `saga/security_kernel.py`
+- `tests/integration/test_baseline_agent_flow.py`
+- `tests/integration/test_experiment_runtime_auth_entrypoints.py`
+- `tests/test_agent_runtime_auth.py`
+- `tests/test_execution_gate.py`
+- `tests/test_execution_gate_factory.py`
+- `tests/test_runtime_auth_coordinator.py`
+- `tests/test_security_kernel.py`
+
+敏感文件审查：
+
+- 待提交文件只包含源码、测试和文档。
+- 不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`；smoke 产物位于 `/tmp`，不进入提交范围。
+
+Git / checkpoint 状态：
+
+- 本节与 R2/R3 checkpoint 共同构成 R2-R5 `core-api-v1` 固定提交；最终提交以 `git log -1 --oneline --decorate` 为准。
+- 本轮不自动推送研究分支，也不创建 A/B/integration 分支；下一步从该固定提交创建三条分支 / worktree。
 
 ### 2026-07-16 R3 Signature Binding V1 Session
 

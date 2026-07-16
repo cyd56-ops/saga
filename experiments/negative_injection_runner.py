@@ -400,8 +400,10 @@ class NegativeInjectionHarness:
         """验证同一签名信封只能被执行路径消费一次。"""
         gate = self._new_gate()
         fixture = self._signed_request()
-        first = gate.consume_request(fixture.request)
-        second = gate.consume_request(fixture.request)
+        coordinator = gate.runtime_auth_coordinator
+        evidence = coordinator.evaluate(fixture.request)
+        first = coordinator.commit(evidence).decision
+        second = coordinator.commit(evidence).decision
         return NegativeInjectionResult(
             scenario="replayed_envelope",
             category="replay",
@@ -423,11 +425,10 @@ class NegativeInjectionHarness:
         """构造已验签的本地执行上下文，用于下游执行面越权测试。"""
         gate = self._new_gate()
         fixture = self._signed_request(authorized_scopes=authorized_scopes)
-        decision = gate.evaluate_request(fixture.request)
-        context = gate.build_local_execution_context_from_decision(
-            fixture.request,
-            decision,
-        )
+        coordinator = gate.runtime_auth_coordinator
+        result = coordinator.commit(coordinator.evaluate(fixture.request))
+        decision = result.decision
+        context = result.context
         if context is None:
             raise RuntimeError(f"valid fixture was unexpectedly rejected: {decision.reason}")
         return context

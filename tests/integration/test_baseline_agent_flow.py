@@ -436,8 +436,8 @@ class BaselineAgentFlowTests(unittest.TestCase):
             ]
             self.assertEqual(rows[-1]["reason"], "missing_execution_gate")
 
-    def test_strict_execution_gate_rejects_missing_local_execution_context(self) -> None:
-        """Strict runtime-auth mode must reject legacy gates without context support."""
+    def test_strict_execution_gate_rejects_missing_runtime_auth_coordinator(self) -> None:
+        """Strict runtime-auth mode must reject legacy gates without Coordinator support."""
         token = "enc-token"
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = Agent.__new__(Agent)
@@ -473,13 +473,13 @@ class BaselineAgentFlowTests(unittest.TestCase):
 
             self.assertTrue(ended_from_receiver)
             self.assertEqual(local_agent.run_calls, 0)
-            self.assertEqual(len(gate.requests), 1)
+            self.assertEqual(len(gate.requests), 0)
             audit_path = Path(tmpdir) / "audit" / "execution_gate.jsonl"
             rows = [
                 json.loads(line)
                 for line in audit_path.read_text(encoding="utf-8").splitlines()
             ]
-            self.assertEqual(rows[-1]["reason"], "missing_local_execution_context")
+            self.assertEqual(rows[-1]["reason"], "missing_runtime_auth_coordinator")
 
     def test_initiate_conversation_attaches_signed_envelope_when_configured(self) -> None:
         """Outgoing transport messages should carry the signed request envelope."""
@@ -667,8 +667,8 @@ class BaselineAgentFlowTests(unittest.TestCase):
             ]
             self.assertEqual(rows[-1]["reason"], "missing_execution_gate")
 
-    def test_initiating_side_strict_mode_rejects_legacy_gate_without_context(self) -> None:
-        """Strict initiating-side response processing must reject legacy gates without context support."""
+    def test_initiating_side_strict_mode_rejects_gate_without_coordinator(self) -> None:
+        """Strict initiating-side processing must reject gates without Coordinator support."""
         token = "enc-token"
         receiver_aid = "bob@example.com:email_agent"
         response_payload = {
@@ -698,13 +698,13 @@ class BaselineAgentFlowTests(unittest.TestCase):
 
             self.assertFalse(ended_from_receiver)
             self.assertEqual(local_agent.run_calls, 0)
-            self.assertEqual(len(gate.requests), 1)
+            self.assertEqual(len(gate.requests), 0)
             audit_path = Path(tmpdir) / "audit" / "execution_gate.jsonl"
             rows = [
                 json.loads(line)
                 for line in audit_path.read_text(encoding="utf-8").splitlines()
             ]
-            self.assertEqual(rows[-1]["reason"], "missing_local_execution_context")
+            self.assertEqual(rows[-1]["reason"], "missing_runtime_auth_coordinator")
 
     def test_initiating_side_accepts_valid_signed_response_and_runs_local_agent(self) -> None:
         """A valid signed response should pass the initiating-side inbound gate."""
@@ -1105,6 +1105,7 @@ class BaselineAgentFlowTests(unittest.TestCase):
             CAN(CompiledToyLWEVerifier(scheme, message_bytes=32)),
             {sender_aid: sender_keys.public_key},
             now_fn=lambda: now,
+            coordinator_mode="compatibility",
         )
         message_dict = self._signed_prompt_payload(
             scheme=scheme,
@@ -1901,7 +1902,8 @@ class BaselineAgentFlowTests(unittest.TestCase):
             request_envelope=payload["request_envelope"],
             pq_signature=payload["pq_signature"],
         )
-        context = gate.build_local_execution_context(request)
+        coordinator = gate.runtime_auth_coordinator
+        context = coordinator.commit(coordinator.evaluate(request)).context
 
         self.assertIsNotNone(context)
         assert context is not None

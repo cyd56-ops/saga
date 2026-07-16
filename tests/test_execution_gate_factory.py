@@ -10,8 +10,10 @@ import unittest
 
 from pq import ToyLWESignatureScheme
 from saga.execution_gate import (
+    ExecutionGateDecision,
     ExecutionGateRequest,
     FileReplayStateStore,
+    SignedRequestExecutionGate,
     build_toy_lwe_execution_gate,
 )
 from saga.messages import build_request_envelope
@@ -55,6 +57,15 @@ class ExecutionGateFactoryTests(unittest.TestCase):
             pq_signature=base64.b64encode(signature).decode("utf-8"),
         )
 
+    def _commit_request(
+        self,
+        gate: SignedRequestExecutionGate,
+        request: ExecutionGateRequest,
+    ) -> ExecutionGateDecision:
+        """通过 strict Coordinator 评估并提交请求。"""
+        coordinator = gate.runtime_auth_coordinator
+        return coordinator.commit(coordinator.evaluate(request)).decision
+
     def test_compiled_factory_authorizes_valid_request(self) -> None:
         """The compiled helper should accept a valid signed request."""
         gate = build_toy_lwe_execution_gate(
@@ -64,7 +75,10 @@ class ExecutionGateFactoryTests(unittest.TestCase):
             now_fn=lambda: self.now,
         )
 
-        self.assertTrue(gate.authorize(self._build_request()))
+        decision = self._commit_request(gate, self._build_request())
+
+        self.assertTrue(decision.allowed)
+        self.assertIsNotNone(decision.local_execution_context)
 
     def test_wrapper_factory_authorizes_valid_request(self) -> None:
         """The wrapper helper should remain available for comparison testing."""
@@ -75,7 +89,10 @@ class ExecutionGateFactoryTests(unittest.TestCase):
             now_fn=lambda: self.now,
         )
 
-        self.assertTrue(gate.authorize(self._build_request()))
+        decision = self._commit_request(gate, self._build_request())
+
+        self.assertTrue(decision.allowed)
+        self.assertIsNotNone(decision.local_execution_context)
 
     def test_factory_accepts_shared_replay_store(self) -> None:
         """Factory 传入的共享 replay store 应跨 gate 实例拒绝重复信封。"""
@@ -95,8 +112,8 @@ class ExecutionGateFactoryTests(unittest.TestCase):
             )
             request = self._build_request()
 
-            self.assertTrue(first_gate.consume_request(request).allowed)
-            replay_decision = second_gate.consume_request(request)
+            self.assertTrue(self._commit_request(first_gate, request).allowed)
+            replay_decision = self._commit_request(second_gate, request)
 
             self.assertFalse(replay_decision.allowed)
             self.assertEqual(replay_decision.reason, "replayed_request_envelope")

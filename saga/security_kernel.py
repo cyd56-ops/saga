@@ -286,13 +286,23 @@ SECURITY_KERNEL_ENTRIES: tuple[SecurityKernelEntry, ...] = (
         surface="legacy_fallback:legacy_prompt_without_execution_context",
         in_security_kernel=False,
         status="compat_excluded",
-        code_paths=("saga.agent.Agent._evaluate_prompt_surface_request",),
+        code_paths=(
+            "saga.agent.Agent._evaluate_execution_request",
+            "saga.agent.Agent._build_local_execution_context",
+            "saga.agent.Agent._evaluate_prompt_surface_request",
+            "saga.execution_gate.RuntimeAuthCoordinator.commit",
+        ),
         gate_mechanism=(
-            "Strict mode rejects with missing_local_execution_context; non-strict "
-            "compatibility mode can still allow legacy_prompt_without_execution_context "
+            "Strict mode rejects a legacy gate as missing_runtime_auth_coordinator before "
+            "calling it, rejects a missing committed Context as missing_local_execution_context, "
+            "and rejects compatibility-created Context as uncommitted_local_execution_context; "
+            "non-strict compatibility mode can still allow legacy_prompt_without_execution_context "
             "on receiving and initiating response paths"
         ),
-        evidence_tests=("tests/integration/test_baseline_agent_flow.py",),
+        evidence_tests=(
+            "tests/integration/test_baseline_agent_flow.py",
+            "tests/test_runtime_auth_coordinator.py",
+        ),
         residual_risk=(
             "Prompt execution without LocalExecutionContext is excluded from the "
             "security runtime kernel."
@@ -331,7 +341,8 @@ SECURITY_KERNEL_ENTRIES: tuple[SecurityKernelEntry, ...] = (
         code_paths=(
             "saga.agent.enable_toy_lwe_runtime_auth",
             "saga.agent.enable_toy_lwe_runtime_auth_from_config",
-            "saga.execution_gate.SignedRequestExecutionGate.consume_request",
+            "saga.execution_gate.RuntimeAuthCoordinator.commit",
+            "saga.execution_gate.SignedRequestExecutionGate._commit_evaluated_request",
             "saga.execution_gate.FileReplayStateStore",
             "saga.execution_gate.SQLiteReplayStateStore",
             "saga.execution_gate.RedisReplayStateStore",
@@ -339,7 +350,8 @@ SECURITY_KERNEL_ENTRIES: tuple[SecurityKernelEntry, ...] = (
         gate_mechanism=(
             "Strict runtime-auth helper requires persistent replay state through "
             "the agent workdir marker store or an injected ReplayStateStore; "
-            "consume_request reserves request ids under a per-gate lock and "
+            "RuntimeAuthCoordinator.commit revalidates evidence and reserves request ids "
+            "under a per-gate lock before creating a committed LocalExecutionContext; it "
             "rejects duplicate envelopes as replayed_request_envelope"
         ),
         evidence_tests=(
@@ -414,7 +426,9 @@ PROTECTED_SINK_AUDITS: tuple[ProtectedSinkAudit, ...] = (
             "saga.agent.Agent.receive_conversation",
             "saga.agent.Agent.initiate_conversation",
             "saga.agent.Agent._evaluate_execution_request(consume=True)",
-            "saga.execution_gate.SignedRequestExecutionGate.consume_request",
+            "saga.execution_gate.RuntimeAuthCoordinator.evaluate",
+            "saga.execution_gate.RuntimeAuthCoordinator.commit",
+            "saga.execution_gate.SignedRequestExecutionGate._commit_evaluated_request",
             "saga.agent.Agent._build_local_execution_context",
             "saga.agent.Agent._evaluate_prompt_surface_request",
             "saga.agent.Agent._evaluate_local_agent_context_support",
@@ -585,8 +599,10 @@ PROTECTED_SINK_AUDITS: tuple[ProtectedSinkAudit, ...] = (
         ),
         allowed_call_path=(
             "saga.agent.Agent._evaluate_execution_request(consume=True)",
-            "saga.execution_gate.SignedRequestExecutionGate.consume_request",
+            "saga.execution_gate.RuntimeAuthCoordinator.evaluate",
+            "saga.execution_gate.RuntimeAuthCoordinator.commit",
             "saga.execution_gate.SignedRequestExecutionGate.evaluate_request",
+            "saga.execution_gate.SignedRequestExecutionGate._commit_evaluated_request",
             "saga.execution_gate.ReplayStateStore.reserve_request",
         ),
         required_predicate=(
@@ -594,6 +610,7 @@ PROTECTED_SINK_AUDITS: tuple[ProtectedSinkAudit, ...] = (
             "delegation checks pass when applicable, and replay reservation returns reserved"
         ),
         evidence_tests=(
+            "tests/test_runtime_auth_coordinator.py",
             "tests/test_execution_gate.py",
             "tests/test_execution_gate_factory.py",
             "tests/test_agent_runtime_auth.py",
@@ -706,6 +723,8 @@ NO_SIDE_EFFECT_ORACLES: tuple[NoSideEffectOracle, ...] = (
             "and does not enter local execution"
         ),
         evidence_tests=(
+            "tests/test_runtime_auth_coordinator.py::test_second_commit_of_same_evidence_is_replay_rejected",
+            "tests/test_runtime_auth_coordinator.py::test_concurrent_commit_allows_exactly_one_context",
             "tests/test_execution_gate.py::test_consume_request_rejects_replayed_envelope",
             "tests/test_execution_gate.py::test_consume_request_allows_only_one_concurrent_consumer",
             "tests/test_agent_runtime_auth.py::test_config_default_workdir_replay_store_survives_restart",
@@ -750,8 +769,10 @@ MUTATION_EVIDENCE: tuple[MutationEvidence, ...] = (
     MutationEvidence(
         mutation_id="skip_replay_reserve",
         sink_ids=("replay_reserve_consume", "prompt_local_agent_run"),
-        mutated_control="skip ReplayStateStore.reserve_request inside consume_request",
+        mutated_control="skip ReplayStateStore.reserve_request inside Coordinator commit primitive",
         expected_test_failures=(
+            "tests/test_runtime_auth_coordinator.py::RuntimeAuthCoordinatorTests::test_second_commit_of_same_evidence_is_replay_rejected",
+            "tests/test_runtime_auth_coordinator.py::RuntimeAuthCoordinatorTests::test_concurrent_commit_allows_exactly_one_context",
             "tests/test_execution_gate.py::SignedRequestExecutionGateTests::test_consume_request_rejects_replayed_envelope",
             "tests/test_execution_gate.py::SignedRequestExecutionGateTests::test_consume_request_allows_only_one_concurrent_consumer",
             "tests/test_agent_runtime_auth.py::AgentRuntimeAuthTests::test_config_default_workdir_replay_store_survives_restart",
@@ -939,13 +960,16 @@ MODEL_REFINEMENT_MAPPINGS: tuple[ModelRefinementMapping, ...] = (
             "A signed envelope digest is reserved exactly once before protected execution."
         ),
         python_symbols=(
-            "saga.execution_gate.SignedRequestExecutionGate.consume_request",
+            "saga.execution_gate.RuntimeAuthCoordinator.commit",
+            "saga.execution_gate.SignedRequestExecutionGate._commit_evaluated_request",
             "saga.execution_gate.ReplayStateStore.reserve_request",
             "saga.execution_gate.FileReplayStateStore.reserve_request",
             "saga.execution_gate.SQLiteReplayStateStore.reserve_request",
             "saga.execution_gate.RedisReplayStateStore.reserve_request",
         ),
         evidence_tests=(
+            "tests/test_runtime_auth_coordinator.py::test_second_commit_of_same_evidence_is_replay_rejected",
+            "tests/test_runtime_auth_coordinator.py::test_concurrent_commit_allows_exactly_one_context",
             "tests/test_execution_gate.py::test_consume_request_rejects_replayed_envelope",
             "tests/test_execution_gate.py::test_consume_request_allows_only_one_concurrent_consumer",
             "tests/test_execution_gate.py::test_sqlite_replay_store_reserves_request_id_atomically",
@@ -953,7 +977,7 @@ MODEL_REFINEMENT_MAPPINGS: tuple[ModelRefinementMapping, ...] = (
             "tests/test_agent_runtime_auth.py::test_config_default_workdir_replay_store_survives_restart",
         ),
         tcb_assumptions=(
-            "execution paths use consume_request rather than pure evaluate_request",
+            "strict execution paths use RuntimeAuthCoordinator.commit rather than pure evaluate_request",
             "injected replay stores implement reserve_request atomically",
             "external Redis or SQL deployment provides the consistency promised by its adapter",
         ),
@@ -1207,11 +1231,15 @@ LAYER_REFINEMENT_MAPPINGS: tuple[LayerRefinementMapping, ...] = (
         guard_terms=STRICT_RUNTIME_AUTH_GUARD_TERMS,
         python_symbols=(
             "saga.agent.Agent._evaluate_execution_request",
-            "saga.execution_gate.SignedRequestExecutionGate.consume_request",
+            "saga.execution_gate.RuntimeAuthCoordinator.evaluate",
+            "saga.execution_gate.RuntimeAuthCoordinator.commit",
+            "saga.execution_gate.SignedRequestExecutionGate._commit_evaluated_request",
             "saga.execution_gate.SignedRequestExecutionGate.evaluate_request",
             "saga.execution_gate.ReplayStateStore.reserve_request",
         ),
         evidence_tests=(
+            "tests/test_runtime_auth_coordinator.py::test_second_commit_of_same_evidence_is_replay_rejected",
+            "tests/test_runtime_auth_coordinator.py::test_concurrent_commit_allows_exactly_one_context",
             "tests/test_execution_gate.py::test_consume_request_rejects_replayed_envelope",
             "tests/test_execution_gate.py::test_consume_request_allows_only_one_concurrent_consumer",
             "tests/test_agent_runtime_auth.py::test_config_default_workdir_replay_store_survives_restart",

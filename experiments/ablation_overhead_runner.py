@@ -166,6 +166,7 @@ class AblationOverheadHarness:
             self.scheme,
             {DEFAULT_SENDER_AID: self.key_pair.public_key},
             now_fn=lambda: self.now,
+            coordinator_mode="compatibility",
         )
         self.valid_material = self._signed_material()
 

@@ -92,10 +92,12 @@ conservative:
   memory reads/writes, and the first-class delegation helper.
 - Compatibility fallbacks such as `no_execution_gate` and
   `legacy_prompt_without_execution_context` are excluded from PQ-CAN security
-  claims. In strict mode they must fail closed as `missing_execution_gate` or
-  `missing_local_execution_context` before either receiving-side prompt
-  execution or initiating-side response prompt execution can call
-  `local_agent.run()`.
+  claims. In strict mode a missing gate fails as `missing_execution_gate`, a
+  gate without the shared Coordinator fails as `missing_runtime_auth_coordinator`,
+  a missing committed Context fails as `missing_local_execution_context`, and a
+  compatibility-created Context fails as `uncommitted_local_execution_context`.
+  These checks occur before either receiving-side or response-side prompt
+  execution can call `local_agent.run()`.
 - Custom `LocalAgent` implementations in strict runtime-auth mode must declare
   `supports_execution_context() == True` before `local_agent.run()` is called.
   Context-ignoring implementations fail closed with
@@ -107,6 +109,38 @@ conservative:
   retain legacy helper code used for reproduction or adversary scenarios; those
   copies are not evidence of an allowed bypass in the strict runtime-auth
   protected-sink claim.
+
+### Runtime Auth Coordinator
+
+Strict runtime auth separates evaluation from state commit:
+
+- `RuntimeAuthCoordinator.evaluate(request)` returns immutable `RouteEvidence`
+  and `CompositeEvidence`. It may read verification, policy, time-window, and
+  revocation facts, but it does not reserve replay state or create a
+  `LocalExecutionContext`.
+- `RuntimeAuthCoordinator.commit(evidence)` re-evaluates the request, rechecks
+  current revocation and time-window facts, compares a fingerprint covering the
+  envelope, signature, transport bindings, and runtime parameters, atomically
+  reserves replay state, and only then creates a Coordinator-marked Context.
+- A repeated or concurrent commit can create at most one Context. Replay-store
+  failure, changed evidence, non-canonical runtime parameters, invalid composite
+  evidence, or Context construction failure is fail-closed.
+
+`SignedRequestExecutionGate` defaults to strict Coordinator mode. In this mode,
+legacy `authorize(...)`, `consume_request(...)`, direct
+`build_local_execution_context(...)`, and direct Context-from-decision helpers
+cannot grant executable authority. Explicit `compatibility` mode retains those
+APIs only for historical tests, diagnostics, and declared non-strict paths; its
+Contexts are marked uncommitted and are rejected by strict prompt enforcement.
+The private commit/context primitives are implementation details inside the
+security runtime kernel, not supported public authorization entry points.
+
+This first Coordinator closes the supported in-process bypass but is not yet a
+cross-backend transaction. With file-marker replay state, a crash after replay
+reserve but before Context delivery can permanently reject a legitimate retry.
+Atomic persistence of replay, revocation version, decision/capability state, and
+audit outbox remains R17 work and is required before stronger crash-consistency
+or multi-host availability claims.
 
 Experiment, paper-reproduction, and demonstration code is not part of the
 mandatory runtime security boundary for the PQ-CAN prototype. In particular,

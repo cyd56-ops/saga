@@ -1060,6 +1060,27 @@ class Agent:
             token=token,
             message_dict=message_dict,
         )
+        coordinator = getattr(execution_gate, "runtime_auth_coordinator", None)
+        if coordinator is not None:
+            evidence = coordinator.evaluate(request)
+            coordinator_decision = evidence.decision
+            if consume:
+                coordinator_decision = coordinator.commit(evidence).decision
+            return self._apply_enforcement_mode(
+                self._attach_protocol_allow(
+                    coordinator_decision,
+                    protocol_allow=protocol_allow,
+                ),
+                enforcement_mode=enforcement_mode,
+                downgrade_reason=downgrade_reason,
+            )
+        if consume and enforcement_mode is EnforcementMode.STRICT:
+            return ExecutionGateDecision(
+                False,
+                "missing_runtime_auth_coordinator",
+                protocol_allow=protocol_allow,
+                enforcement_mode=enforcement_mode.value,
+            )
         if consume and hasattr(execution_gate, "consume_request"):
             return self._apply_enforcement_mode(
                 self._attach_protocol_allow(
@@ -1167,9 +1188,18 @@ class Agent:
         message_dict: dict,
         decision: ExecutionGateDecision | None = None,
     ) -> LocalExecutionContext | None:
-        """Build a local execution context for downstream tool/memory gating."""
+        """只接受 Coordinator committed Context；非 strict 模式保留兼容 helper。"""
         execution_gate = getattr(self, "execution_gate", None)
-        if execution_gate is None or not hasattr(execution_gate, "build_local_execution_context"):
+        if execution_gate is None:
+            return None
+
+        if decision is not None and decision.local_execution_context is not None:
+            context = decision.local_execution_context
+            if context.coordinator_committed:
+                return context
+        if _agent_enforcement_mode(self) is EnforcementMode.STRICT:
+            return None
+        if not hasattr(execution_gate, "build_local_execution_context"):
             return None
 
         request = self._build_execution_gate_request(
@@ -1249,6 +1279,23 @@ class Agent:
                     if _agent_has_explicit_enforcement_mode(self)
                     else None
                 ),
+            )
+        if (
+            enforcement_mode is EnforcementMode.STRICT
+            and not execution_context.coordinator_committed
+        ):
+            return ExecutionGateDecision(
+                False,
+                "uncommitted_local_execution_context",
+                protocol_allow=protocol_allow,
+                request_envelope_valid=request_envelope_valid,
+                pq_signature_valid=pq_signature_valid,
+                can_accept=can_accept,
+                execution_scope_allowed=False,
+                internal_policy_accept=False,
+                request_envelope=execution_context.request_envelope,
+                pq_signature=execution_context.pq_signature,
+                enforcement_mode=enforcement_mode.value,
             )
         if execution_context.authorize_action("llm_prompt"):
             return ExecutionGateDecision(
