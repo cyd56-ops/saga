@@ -49,11 +49,17 @@ To address this gap, we propose SAGA, a scalable Security Architecture for Gover
 
 ## Requirements
 
-Install the `saga` package:
+SAGA requires Python 3.11 or newer. Install the `saga` package:
 
 ```bash
 pip install -e .
 ```
+
+`requirements.txt` is the single source of runtime dependency constraints used
+by both direct requirements installs and `setup.py`. SAGA requires
+`smolagents>=1.19.0,<2.0.0`: 1.14 introduced `InferenceClientModel`, while 1.19
+is the first tested release that also provides the runtime diagnostics API used
+by this repository.
 
 Make sure that `mongoDB` is installed on the Provider side and the mongoDB server is up and running.
 

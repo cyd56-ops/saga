@@ -10469,3 +10469,55 @@ GitHub / checkpoint 状态：
 GitHub / checkpoint 状态：
 
 - 当前工作区改动尚未形成 checkpoint commit；需在规定测试通过后执行最终 git 状态检查。
+
+### 2026-07-16 Dependency Contract Unification Session
+
+目标：
+
+- 修复 `smolagents` 最低版本声明过低和 `requirements.txt` / `setup.py` 依赖漂移问题。
+
+已做工作：
+
+- 将 `requirements.txt` 设为运行时依赖的唯一来源，`setup.py` 直接读取同一清单。
+- 将 `smolagents` 约束收紧为 `>=1.19.0,<2.0.0`：
+  - 1.14 首次提供代码直接导入的 `InferenceClientModel`。
+  - 1.17 首次提供 `Timing`，但 `ActionStep` 仍缺少 `is_final_answer`。
+  - 1.18 仍缺少 `ActionStep.is_final_answer`，相关诊断测试失败。
+  - 1.19 在隔离加载下通过 agent wrapper、配置和 runtime diagnostics 相关测试。
+- 用 PyPI 发布版 `simple-parsing>=0.1.8,<0.2.0` 替换未固定提交的 Git 依赖。
+- 补齐代码直接使用的 `requests`、`PyYAML` 和 `pymongo`，移除未被代码导入的 `Flask-SQLAlchemy` 与 `Authlib`。
+- 将包元数据的 Python 要求与项目规则统一为 3.11+。
+- 新增 `tests/test_dependency_metadata.py`，锁定依赖单一来源、最低版本边界、无 VCS 依赖和源码包清单。
+- 新增 `MANIFEST.in`，确保源码包携带 `requirements.txt`。
+
+最低版本验证：
+
+- `smolagents 1.14.0`：`InferenceClientModel` 可导入，但缺少 `smolagents.monitoring.Timing`。
+- `smolagents 1.17.0`：29 passed、9 subtests passed，1 failed（缺少 `ActionStep.is_final_answer`）。
+- `smolagents 1.18.0`：29 passed、9 subtests passed，1 failed（缺少 `ActionStep.is_final_answer`）。
+- `smolagents 1.19.0`：30 passed、9 subtests passed。
+
+已验证：
+
+- `.venv/bin/python -m pytest -q tests/test_dependency_metadata.py tests/test_agent_backend_config.py tests/test_agent_wrapper_gate.py tests/test_runtime_diagnostics.py` -> `30 passed, 9 subtests passed`
+- `.venv/bin/python -m pytest -q` -> `502 passed, 96 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `.venv/bin/python -m pip check` -> `No broken requirements found`
+- `setup.py egg_info --egg-base <tempdir>` -> success，生成依赖包含 `smolagents<2.0.0,>=1.19.0`
+- `git diff --check` -> success
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` 或 `mypy .`。
+
+当前 checkpoint 待提交文件范围：
+
+- `MANIFEST.in`
+- `README.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `requirements.txt`
+- `setup.py`
+- `tests/test_dependency_metadata.py`
+
+敏感文件审查：
+
+- 待提交文件不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+- 最低版本验证只在 `/tmp` 使用临时安装目录，测试后均已删除。

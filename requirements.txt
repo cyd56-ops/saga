@@ -1,8 +1,12 @@
-smolagents>=1.11.0
-flask>=3.1.0
-flask_bcrypt>=1.0.1
-flask_jwt_extended>=4.7.1
-flask_pymongo>=3.0.1
+# setup.py reads this file as the single source of runtime dependencies.
+smolagents>=1.19.0,<2.0.0
+Flask>=3.1.0
+Flask-Bcrypt>=1.0.1
+Flask-JWT-Extended>=4.7.1
+Flask-PyMongo>=3.0.1
 openai>=1.0.0
-git+https://github.com/lebrice/SimpleParsing.git
+simple-parsing>=0.1.8,<0.2.0
 cryptography>=43.0.3
+requests>=2.32.4
+PyYAML>=6.0.1
+pymongo>=4.0.0
