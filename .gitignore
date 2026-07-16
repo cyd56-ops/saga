@@ -180,6 +180,7 @@ cython_debug/
 saga/user/*/*.json
 .codex
 .codex/
+.worktrees/
 .mongodb/
 .mongodata/
 experiments/results/

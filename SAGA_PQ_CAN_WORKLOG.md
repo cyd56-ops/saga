@@ -1175,7 +1175,7 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（shared core R2-R5 第一阶段已完成并形成通过规定测试的 `core-api-v1` 固定 checkpoint；下一步从同一提交创建 A/B/integration 分支）
+- 双路线认证研究与论文选择：`进行中`（shared core R2-R5 第一阶段已完成并形成 `core-api-v1`；A/B/integration 三条本地分支与独立 worktree 已从同一提交创建，下一步进入隔离的路线实现）
 
 ### 3.4 阻塞 / 风险
 
@@ -2317,7 +2317,7 @@ protected sinks 至少覆盖：
 ### R. 双路线认证与论文选择
 
 - R0. 固定双路线职责、运行模式、论文归因与非降级安全边界：`已完成`（设计阶段：A0-A2、B0-B3、B-enforced+A-shadow、Dual 研究模式和多维实验已写入本文档）
-- R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（`research/runtime-auth-core` 已从验证基线 `1917836` 创建并形成 `core-api-v1`；A/B/integration 尚未创建，下一步从该固定提交分出）
+- R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（core 与 A/B/integration 四条本地分支均已建立；三条路线分支和 worktree 从同一 `core-api-v1` 提交 `4bdda66` 创建）
 - R2. 收紧 generic `MLDSAAdapter.verify(...)` 返回类型并定义 backend error evidence：`已完成`（第一阶段：只接受内建 `bool` 的 `True`；缺 backend、接口畸形、异常、truthy 非布尔结果均形成稳定拒绝 evidence）
 - R3. 定义无歧义 `SignatureBindingV1`、profile / digest semantics 与拒绝规则：`已完成`（第一阶段：严格有序 TLV、golden bytes、typed enum、pure/HashML-DSA profile、固定 context、digest/canonicalization 版本和未知/重复/乱序/错误宽度/超长拒绝已落地）
 - R4. 定义 `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator`，并收口唯一 commit / Context 入口：`已完成`（第一阶段：evaluate 无状态提交；commit 重验 current facts、核对 canonical fingerprint、reserve replay 并创建 Coordinator-marked Context；重复/并发 commit 至多一个成功）
@@ -2346,7 +2346,7 @@ protected sinks 至少覆盖：
    - 路线 B 推进 `B0 strict ML-DSA -> B0.5 typed toolchain -> B1/B1.5 -> B2 raw relations -> B3 portable policy compiler`，作为默认真实执行安全锚点。
    - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
    - R2-R5 P0/shared core 第一阶段已完成：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口均已落地。
-   - 通过规定测试的 `core-api-v1` checkpoint 已形成；下一步从同一提交分出 A、B 与 integration，避免三条分支同时重构公共 gate。
+   - 通过规定测试的 `core-api-v1` checkpoint 已形成，A、B 与 integration 已从同一提交分出并使用独立 worktree，后续公共 gate 修复仍回 core 处理。
    - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
 
@@ -2503,10 +2503,11 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 当前 `research/runtime-auth-core` 已完成 R2-R5 shared core 第一阶段，并形成通过规定测试的 `core-api-v1` 固定 checkpoint；A/B/integration 分支尚未创建。
-2. 下一步从同一 `core-api-v1` 提交创建 A、B 和 integration 三个分支 / worktree，不在分支创建时混入功能代码。
-3. A/B 并行第一阶段：B 按 R6-R8 完成 B0/B0.5/B1 shadow 与 BG1-BG6；A 按 R12-R14 完成 A0/A0.5、tiny ring smoke 和 preliminary AG evidence，不提前进入强制 B1.5 或声称 A1/A2。
-4. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与 shared-core P0 混在同一 patch。
+1. 当前 `research/runtime-auth-core` 已完成 R2-R5 shared core 第一阶段，并形成通过规定测试的 `core-api-v1` 固定 checkpoint `4bdda66`。
+2. `research/route-a-neural-verifier`、`research/route-b-fixed-auth` 与 `research/dual-route-integration` 已从 `4bdda66` 创建，各自使用 `/home/kali/saga/.worktrees/` 下被 Git 忽略的独立 worktree；当前均无功能改动。
+3. 下一步在路线 B worktree 先执行 R6：显式接入 vetted external ML-DSA backend contract，固定 backend/version/profile/context/error/timeout 的 fail-closed wiring；不在缺少真实 backend 时回退到 toy。
+4. 随后在路线 A worktree 执行 R12-R14 的 A0/A0.5、tiny ring smoke 和 preliminary AG evidence；路线独有改动不得直接写入另一条路线分支。
+5. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与路线初始 patch 混在一起。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2543,6 +2544,41 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-16 Dual-Route Worktree Initialization Session
+
+目标：
+
+- 从同一个已验证 `core-api-v1` 提交建立路线 A、路线 B 和 integration 的本地分支 / worktree。
+- 分支初始化阶段不混入任何功能代码，不推送远端研究分支。
+
+已做工作：
+
+- 从 `4bdda665f18a31cb8baa74f376129ac62dba19e7` 创建：
+  - `research/route-a-neural-verifier` -> `/home/kali/saga/.worktrees/route-a-neural-verifier`
+  - `research/route-b-fixed-auth` -> `/home/kali/saga/.worktrees/route-b-fixed-auth`
+  - `research/dual-route-integration` -> `/home/kali/saga/.worktrees/dual-route-integration`
+- 保留 `research/runtime-auth-core` 主 worktree 于 `/home/kali/saga`。
+- 初始同级 worktree 因不在当前会话可写根目录内，已通过 `git worktree move` 迁入仓库内的 ignored `.worktrees/`；分支引用与 HEAD 未改变。
+- `.gitignore` 新增 `.worktrees/`，避免嵌套 worktree 污染 core 工作区状态。
+- 三条新分支只建立引用与独立工作目录，未修改 tracked files，也未创建远端分支。
+
+已验证：
+
+- `git worktree list --porcelain` 显示四个 worktree 均绑定预期本地分支。
+- `git branch --list 'research/*'` 显示四条分支均指向 `4bdda66`。
+- core、route A、route B、integration 四个 worktree 的 `git status --short --branch` 均无文件改动。
+
+安全与同步边界：
+
+- 本轮没有密码实现、运行时行为或测试逻辑变更，因此未重复运行代码测试。
+- 未推送任何研究分支；`origin/backup/repro-local` 仍停留在已验证基线 `1917836`。
+- 后续公共缺陷先回 `research/runtime-auth-core` 修复；路线特有改动留在所属 worktree，integration 只做组合和实验。
+
+Git / checkpoint 状态：
+
+- 本节将作为 core 分支上的文档 checkpoint；三条路线分支继续固定在 `core-api-v1` 提交 `4bdda66`。
+- 下一步进入 `/home/kali/saga/.worktrees/route-b-fixed-auth` 执行 R6。
 
 ### 2026-07-16 R4/R5 Runtime Auth Coordinator Session
 
