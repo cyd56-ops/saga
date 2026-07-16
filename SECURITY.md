@@ -332,6 +332,35 @@ an invalid backend result type, or an ordinary invalid signature. Diagnostic
 exception messages are not copied into this evidence. This strict adapter
 contract does not itself constitute a vetted ML-DSA backend integration.
 
+### Signature Binding V1
+
+Dual-route signatures use `SignatureBindingV1` as the complete message supplied
+to a signature profile. Its canonical binary representation is an ordered,
+length-prefixed TLV structure with a fixed magic, version, and field count. It
+binds the route, algorithm, opaque key ID, signature profile, envelope digest
+algorithm, envelope canonicalization version, and envelope digest. Signature
+bytes are not part of the envelope digest or this binding message.
+
+V1 fixes the envelope side to SHA-256 over SAGA request-envelope canonical JSON
+V1. Key IDs are non-empty opaque byte strings of at most 64 bytes. The decoder
+rejects unknown versions, fields, routes, algorithms, profiles, digest or
+canonicalization identifiers; duplicate or out-of-order fields; non-canonical
+field widths; truncated or trailing data; and oversized material.
+
+Route A currently accepts only the explicitly non-production toy LWE research
+relation and its direct profile. Route B accepts only ML-DSA-44, ML-DSA-65, or
+ML-DSA-87 with either the pure ML-DSA profile or an explicit HashML-DSA profile
+for SHA-256, SHA-512, SHAKE128, or SHAKE256. The ML-DSA application context is
+fixed as `SAGA-PQ-CAN-SignatureBindingV1`.
+
+For the pure profile, the vetted backend receives the canonical binding bytes
+directly through its pure ML-DSA interface. For a HashML-DSA profile, the vetted
+backend must apply the profile's standard pre-hash to those same binding bytes.
+Callers must not manually pre-hash the binding and then label that operation as
+HashML-DSA. The current module only fixes this protocol contract; R6 still must
+provide an explicit backend shim that enforces the selected profile, parameter
+set, context, backend version, and fail-closed error behavior.
+
 The current compiled toy verifier has a deliberately narrow boundary:
 
 - fixed circuit: public matrix projections over the decoded signature and

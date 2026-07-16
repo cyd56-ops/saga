@@ -561,6 +561,13 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - backend 缺失、异常、接口或返回类型错误均 fail-closed 为 `False`
   - evidence 只记录稳定 reason、返回类型或异常类型，不复制可能包含实现细节的异常消息
   - backend-specific 非标准返回仍只能由后续显式 shim 转换；真实 vetted backend wiring 与版本契约属于 R6
+- 双路线 R3 `SignatureBindingV1` 已完成第一阶段：
+  - 新增 `pq/signature_binding.py`，使用固定 magic/version/field count 与严格有序 length-prefixed TLV
+  - 绑定 route、algorithm、opaque key ID、signature profile、envelope digest algorithm、canonicalization ID 与 envelope digest；signature bytes 不进入 binding 或 envelope digest
+  - V1 固定 SHA-256 envelope digest 与 SAGA request-envelope canonical JSON v1，key ID 上限为 64 字节，最大 wire 长度为 132 字节
+  - route A V1 只允许明确标注 research-only 的 toy LWE direct profile；route B V1 只允许 ML-DSA-44/65/87 与 pure 或显式 HashML-DSA profile
+  - HashML-DSA 的 SHA-256/SHA-512/SHAKE128/SHAKE256 prehash 由后续 vetted backend 按 profile 执行，调用方不得手工预哈希后冒充标准 HashML-DSA
+  - 未知、重复、乱序、错误宽度、截断、尾随或超长编码均在 backend 选择和验签前 fail-closed
 - 当前仓库已新增 canonical request envelope 模块：
   - `saga/messages.py`
 - 当前仓库已新增最小 `neural/` 实现：
@@ -1162,12 +1169,11 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（shared core 实现已启动：`research/runtime-auth-core` 从已验证提交 `1917836` 创建，R2 strict ML-DSA adapter 与 backend evidence 已完成；R3-R5 尚未开始）
+- 双路线认证研究与论文选择：`进行中`（shared core 实现已启动：`research/runtime-auth-core` 从已验证提交 `1917836` 创建，R2 strict adapter 与 R3 `SignatureBindingV1` 已完成；R4/R5 尚未开始）
 
 ### 3.4 阻塞 / 风险
 
 - 双路线实现前 P0 阻塞项：
-  - `SignatureBindingV1` 尚未定义无歧义 TLV / 固定二进制编码与 pure / HashML-DSA profile
   - `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator` 尚未实现
   - strict 模式尚未禁止旧 `authorize()` / 直接 Context helper 绕过唯一 commit
   - 路线 B 尚无真实 vetted ML-DSA backend wiring，也没有 fixed authorization circuit
@@ -1191,6 +1197,16 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `.venv/bin/python -m py_compile pq/mldsa_adapter.py tests/test_toy_lwe.py` -> success
   - `.venv/bin/python -m pytest -q tests/test_toy_lwe.py` -> `11 passed, 3 subtests passed`
   - `.venv/bin/python -m pytest -q` -> `472 passed, 72 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
+
+- 已于 `2026-07-16` 完成 R3 `SignatureBindingV1` 后回归验证：
+  - `.venv/bin/python -m py_compile pq/signature_binding.py pq/__init__.py tests/test_signature_binding.py` -> success
+  - `.venv/bin/python -m pytest -q tests/test_signature_binding.py` -> `15 passed, 19 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/test_signature_binding.py tests/test_toy_lwe.py tests/test_encoding.py` -> `56 passed, 22 subtests passed`
+  - `.venv/bin/python -m pytest -q` -> `487 passed, 91 subtests passed`
   - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
   - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
   - `git diff --check` -> no output
@@ -2290,7 +2306,7 @@ protected sinks 至少覆盖：
 - R0. 固定双路线职责、运行模式、论文归因与非降级安全边界：`已完成`（设计阶段：A0-A2、B0-B3、B-enforced+A-shadow、Dual 研究模式和多维实验已写入本文档）
 - R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（`research/runtime-auth-core` 已从验证基线 `1917836` 创建；A/B/integration 仍须等待 `core-api-v1`）
 - R2. 收紧 generic `MLDSAAdapter.verify(...)` 返回类型并定义 backend error evidence：`已完成`（第一阶段：只接受内建 `bool` 的 `True`；缺 backend、接口畸形、异常、truthy 非布尔结果均形成稳定拒绝 evidence）
-- R3. 定义无歧义 `SignatureBindingV1`、profile / digest semantics 与拒绝规则：`未开始`
+- R3. 定义无歧义 `SignatureBindingV1`、profile / digest semantics 与拒绝规则：`已完成`（第一阶段：严格有序 TLV、golden bytes、typed enum、pure/HashML-DSA profile、固定 context、digest/canonicalization 版本和未知/重复/乱序/错误宽度/超长拒绝已落地）
 - R4. 定义 `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator`，并收口唯一 commit / Context 入口：`未开始`
 - R5. 将旧 `authorize()` / direct Context helper 收进 compatibility 边界并补 strict bypass 测试：`未开始`
 - R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`未开始`
@@ -2472,12 +2488,11 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 当前 `research/runtime-auth-core` 已从验证基线 `1917836` 创建，R2 strict adapter 已完成；保持 A/B/integration 分支尚未创建。
-2. 完成 R3：冻结 `SignatureBindingV1` 的固定二进制或 length-prefixed TLV 编码、pure / HashML-DSA profile、digest/canonicalization 版本和重复/未知/超长字段拒绝规则。
-3. 完成 R4/R5：引入无副作用 Route / Composite Evidence 与 Coordinator skeleton；让 strict coordinator 成为唯一 commit / replay reserve / Context 创建入口，并把旧 helper 收进 compatibility 边界。
-4. 对 shared core 运行规定测试并形成 `core-api-v1` 固定提交；只有该 checkpoint 通过后，才创建 A、B 和 integration 三个分支 / worktree。
-5. A/B 并行第一阶段：B 按 R6-R8 完成 B0/B0.5/B1 shadow 与 BG1-BG6；A 按 R12-R14 完成 A0/A0.5、tiny ring smoke 和 preliminary AG evidence，不提前进入强制 B1.5 或声称 A1/A2。
-6. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与 shared-core P0 混在同一 patch。
+1. 当前 `research/runtime-auth-core` 已完成 R2 strict adapter 与 R3 `SignatureBindingV1`；保持 A/B/integration 分支尚未创建。
+2. 完成 R4/R5：引入无本地状态提交的 Route / Composite Evidence 与 Coordinator skeleton；让 strict coordinator 成为唯一 commit / replay reserve / Context 创建入口，并把旧 helper 收进 compatibility 边界。
+3. 对 shared core 运行规定测试并形成 `core-api-v1` 固定提交；只有该 checkpoint 通过后，才创建 A、B 和 integration 三个分支 / worktree。
+4. A/B 并行第一阶段：B 按 R6-R8 完成 B0/B0.5/B1 shadow 与 BG1-BG6；A 按 R12-R14 完成 A0/A0.5、tiny ring smoke 和 preliminary AG evidence，不提前进入强制 B1.5 或声称 A1/A2。
+5. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与 shared-core P0 混在同一 patch。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2514,6 +2529,59 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-16 R3 Signature Binding V1 Session
+
+目标：
+
+- 完成 R3：冻结无歧义 signature binding wire format、ML-DSA profile 语义、digest/canonicalization 版本与 fail-closed 解析边界。
+- 保持本轮只建立共享协议对象，不接入真实 ML-DSA backend，也不提前实现 R4/R5 Coordinator。
+
+已做工作：
+
+- 新增 `pq/signature_binding.py`：
+  - 定义 `SignatureBindingV1`、route/algorithm/profile/digest/canonicalization typed enum 与固定 application context。
+  - 使用 `SAGA-SIG` magic、版本 1、固定 7 字段和严格有序 `tag + uint16 length + value` TLV。
+  - 固定 SHA-256 envelope digest、request-envelope canonical JSON v1、64 字节 key ID 上限与 132 字节 wire 上限。
+  - route A 只允许 research-only toy LWE direct profile；route B 只允许 ML-DSA-44/65/87 与 pure 或显式 HashML-DSA profile，禁止标准路线降级到 toy。
+  - 未知版本/字段/route/algorithm/profile/digest/canonicalization、重复或乱序字段、非规范宽度、截断、尾随和超长材料全部拒绝。
+- 更新 `pq/__init__.py`，导出 shared-core binding 类型和固定 ML-DSA context。
+- 新增 `tests/test_signature_binding.py`：
+  - 固定 golden bytes 与 round-trip canonical encoding。
+  - 覆盖 pure ML-DSA 与 SHA-256/SHA-512/SHAKE128/SHAKE256 HashML-DSA profile。
+  - 覆盖 typed 输入、最大 key ID/wire 边界、route/profile 降级和全部解析负向规则。
+- 更新 `SECURITY.md`：
+  - 记录 signature bytes 不进入 binding/envelope digest、pure 与 HashML-DSA backend 输入语义和禁止调用方手工双重哈希。
+  - 明确当前只冻结协议；R6 仍需显式 vetted backend shim 强制 parameter set、profile、context、backend version 与 fail-closed error contract。
+
+已验证：
+
+- `.venv/bin/python -m py_compile pq/signature_binding.py pq/__init__.py tests/test_signature_binding.py` -> success
+- `.venv/bin/python -m pytest -q tests/test_signature_binding.py` -> `15 passed, 19 subtests passed`
+- `.venv/bin/python -m pytest -q tests/test_signature_binding.py tests/test_toy_lwe.py tests/test_encoding.py` -> `56 passed, 22 subtests passed`
+- `.venv/bin/python -m pytest -q` -> `487 passed, 91 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `git diff --check` -> no output
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
+
+当前 checkpoint 待提交文件范围：
+
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `pq/__init__.py`
+- `pq/signature_binding.py`
+- `tests/test_signature_binding.py`
+
+敏感文件审查：
+
+- 待提交文件只包含源码、测试和文档。
+- 不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+
+Git / checkpoint 状态：
+
+- 本节随 R3 本地 checkpoint 一起提交；最终提交以 `git log -1 --oneline --decorate` 为准。
+- 研究分支是否推送远端需用户另行确认，本轮不自动推送研究分支，也不改写 `origin/backup/repro-local`。
 
 ### 2026-07-16 R2 Strict ML-DSA Adapter Session
 
