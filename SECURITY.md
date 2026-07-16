@@ -324,6 +324,14 @@ future production-facing adapter path:
 external ML-DSA implementation. This repository must not implement production
 ML-DSA from scratch.
 
+The generic adapter accepts a verification result only when the backend returns
+the built-in `bool` value `True`. It does not coerce strings, integers, arrays,
+or other truthy objects. `verify_with_evidence(...)` records a stable,
+fail-closed reason for an unavailable or malformed backend, a backend exception,
+an invalid backend result type, or an ordinary invalid signature. Diagnostic
+exception messages are not copied into this evidence. This strict adapter
+contract does not itself constitute a vetted ML-DSA backend integration.
+
 The current compiled toy verifier has a deliberately narrow boundary:
 
 - fixed circuit: public matrix projections over the decoded signature and

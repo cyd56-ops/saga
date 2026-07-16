@@ -524,7 +524,7 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 
 ## 3. 当前状态面板
 
-最后更新日期：`2026-07-14`
+最后更新日期：`2026-07-16`
 
 ### 3.1 代码实际状态
 
@@ -554,11 +554,13 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `pq/toy_lwe.py`
   - `pq/mldsa_adapter.py`
 - `ToyLWESignatureScheme` 已实现为明确标注 `non-production` 的研究/测试用 toy 方案。
-- `MLDSAAdapter` 当前为 fail-closed 外部 backend adapter；若未接入外部审查过的 backend，会明确报错，接入时只委托 `keygen/sign/verify`，不在仓库内实现 ML-DSA。
-- `MLDSAAdapter.verify(...)` 当前仍使用 `bool(backend.verify(...))` 收敛返回值：
-  - 非空字符串、非零整数或其他 truthy 畸形对象可能被误解释为成功
-  - 双路线 P0 必须把 generic adapter 收紧为只接受严格布尔结果
-  - backend-specific 非标准返回只能由显式 shim 转换，异常、超时、进程退出与版本不匹配均需形成 fail-closed evidence
+- `MLDSAAdapter` 当前为 fail-closed 外部 backend adapter；接入时只委托 `keygen/sign/verify`，不在仓库内实现 ML-DSA。
+- 双路线 R2 strict adapter 已完成第一阶段：
+  - `verify(...)` 只接受 backend 返回的内建 `bool` 值 `True`，不再对字符串、整数或其他 truthy 对象执行布尔强制转换
+  - `verify_with_evidence(...)` 返回不可变 `MLDSAVerificationEvidence`，区分签名合法、普通签名无效、backend 缺失、接口畸形、backend 异常和返回类型畸形
+  - backend 缺失、异常、接口或返回类型错误均 fail-closed 为 `False`
+  - evidence 只记录稳定 reason、返回类型或异常类型，不复制可能包含实现细节的异常消息
+  - backend-specific 非标准返回仍只能由后续显式 shim 转换；真实 vetted backend wiring 与版本契约属于 R6
 - 当前仓库已新增 canonical request envelope 模块：
   - `saga/messages.py`
 - 当前仓库已新增最小 `neural/` 实现：
@@ -1160,12 +1162,11 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（设计阶段：A0-A2 与 B0-B3 边界、AG1-AG8 / BG1-BG8 工具链门槛、默认 B-enforced + asynchronous A-shadow、唯一 Coordinator、无歧义签名绑定、分支拓扑、实验归因和论文选择门槛已写入本文档；尚未开始代码实现或创建研究分支）
+- 双路线认证研究与论文选择：`进行中`（shared core 实现已启动：`research/runtime-auth-core` 从已验证提交 `1917836` 创建，R2 strict ML-DSA adapter 与 backend evidence 已完成；R3-R5 尚未开始）
 
 ### 3.4 阻塞 / 风险
 
 - 双路线实现前 P0 阻塞项：
-  - generic `MLDSAAdapter.verify(...)` 尚未严格验证 backend 返回类型
   - `SignatureBindingV1` 尚未定义无歧义 TLV / 固定二进制编码与 pure / HashML-DSA profile
   - `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator` 尚未实现
   - strict 模式尚未禁止旧 `authorize()` / 直接 Context helper 绕过唯一 commit
@@ -1185,6 +1186,15 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
   - `git diff --check` -> no output
   - 未发现 `pyproject.toml`、`setup.cfg`、`tox.ini`、`ruff.toml`、`.ruff.toml`、`mypy.ini`、`.mypy.ini` 或 `pyrightconfig.json`，因此未运行 `ruff check .` / `mypy .`
+
+- 已于 `2026-07-16` 完成双路线 R2 strict adapter 后回归验证：
+  - `.venv/bin/python -m py_compile pq/mldsa_adapter.py tests/test_toy_lwe.py` -> success
+  - `.venv/bin/python -m pytest -q tests/test_toy_lwe.py` -> `11 passed, 3 subtests passed`
+  - `.venv/bin/python -m pytest -q` -> `472 passed, 72 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
 
 - 已在本环境实际跑通：
   - Python 依赖导入
@@ -2278,8 +2288,8 @@ protected sinks 至少覆盖：
 ### R. 双路线认证与论文选择
 
 - R0. 固定双路线职责、运行模式、论文归因与非降级安全边界：`已完成`（设计阶段：A0-A2、B0-B3、B-enforced+A-shadow、Dual 研究模式和多维实验已写入本文档）
-- R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（设计阶段；尚未创建分支）
-- R2. 收紧 generic `MLDSAAdapter.verify(...)` 返回类型并定义 backend error evidence：`未开始`
+- R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（`research/runtime-auth-core` 已从验证基线 `1917836` 创建；A/B/integration 仍须等待 `core-api-v1`）
+- R2. 收紧 generic `MLDSAAdapter.verify(...)` 返回类型并定义 backend error evidence：`已完成`（第一阶段：只接受内建 `bool` 的 `True`；缺 backend、接口畸形、异常、truthy 非布尔结果均形成稳定拒绝 evidence）
 - R3. 定义无歧义 `SignatureBindingV1`、profile / digest semantics 与拒绝规则：`未开始`
 - R4. 定义 `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator`，并收口唯一 commit / Context 入口：`未开始`
 - R5. 将旧 `authorize()` / direct Context helper 收进 compatibility 边界并补 strict bypass 测试：`未开始`
@@ -2462,13 +2472,12 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 从当前已同步的 `origin/backup/repro-local` 建立本地 `research/runtime-auth-core`；在执行前先再次确认工作区干净并记录 base commit。
-2. 在 core 分支完成 R2：修复 generic `MLDSAAdapter.verify(...)` truthy 返回问题，定义严格 backend result / error evidence，并补畸形返回、异常和缺 backend 测试。
-3. 完成 R3：冻结 `SignatureBindingV1` 的固定二进制或 length-prefixed TLV 编码、pure / HashML-DSA profile、digest/canonicalization 版本和重复/未知/超长字段拒绝规则。
-4. 完成 R4/R5：引入无副作用 Route / Composite Evidence 与 Coordinator skeleton；让 strict coordinator 成为唯一 commit / replay reserve / Context 创建入口，并把旧 helper 收进 compatibility 边界。
-5. 对 shared core 运行规定测试并形成 `core-api-v1` 固定提交；只有该 checkpoint 通过后，才创建 A、B 和 integration 三个分支 / worktree。
-6. A/B 并行第一阶段：B 按 R6-R8 完成 B0/B0.5/B1 shadow 与 BG1-BG6；A 按 R12-R14 完成 A0/A0.5、tiny ring smoke 和 preliminary AG evidence，不提前进入强制 B1.5 或声称 A1/A2。
-7. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与 shared-core P0 混在同一 patch。
+1. 当前 `research/runtime-auth-core` 已从验证基线 `1917836` 创建，R2 strict adapter 已完成；保持 A/B/integration 分支尚未创建。
+2. 完成 R3：冻结 `SignatureBindingV1` 的固定二进制或 length-prefixed TLV 编码、pure / HashML-DSA profile、digest/canonicalization 版本和重复/未知/超长字段拒绝规则。
+3. 完成 R4/R5：引入无副作用 Route / Composite Evidence 与 Coordinator skeleton；让 strict coordinator 成为唯一 commit / replay reserve / Context 创建入口，并把旧 helper 收进 compatibility 边界。
+4. 对 shared core 运行规定测试并形成 `core-api-v1` 固定提交；只有该 checkpoint 通过后，才创建 A、B 和 integration 三个分支 / worktree。
+5. A/B 并行第一阶段：B 按 R6-R8 完成 B0/B0.5/B1 shadow 与 BG1-BG6；A 按 R12-R14 完成 A0/A0.5、tiny ring smoke 和 preliminary AG evidence，不提前进入强制 B1.5 或声称 A1/A2。
+6. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与 shared-core P0 混在同一 patch。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2505,6 +2514,55 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-16 R2 Strict ML-DSA Adapter Session
+
+目标：
+
+- 从已验证的 `origin/backup/repro-local` 基线启动 shared-core 分支。
+- 完成 R2：消除 generic ML-DSA adapter 的 truthy 返回误接受风险，并定义稳定 backend error evidence。
+- 不提前实现 R3 SignatureBinding 或 R4/R5 Coordinator。
+
+已做工作：
+
+- 创建本地 `research/runtime-auth-core`，base commit 为 `1917836`。
+- 更新 `pq/mldsa_adapter.py`：
+  - 新增不可变 `MLDSAVerificationEvidence`。
+  - 新增不提交本地授权状态的 `verify_with_evidence(...)`；外部 backend 自身行为仍属于后续接入审计边界。
+  - `verify(...)` 现在只在 backend 返回内建 `bool` 的 `True` 时接受。
+  - backend 缺失、接口畸形、异常、字符串/整数/对象等非布尔返回全部 fail-closed。
+  - evidence 不保存 backend 异常消息，只保留稳定 reason、异常类型或返回类型。
+- 更新 `pq/__init__.py`，导出新的 evidence 类型。
+- 扩展 `tests/test_toy_lwe.py`，覆盖严格 True/False、truthy 畸形返回、backend 异常、backend 缺失和接口不完整。
+- 更新 `SECURITY.md`，固定 strict backend result 与 error evidence 安全不变量，并明确这不等于已经接入真实 vetted ML-DSA backend。
+
+已验证：
+
+- `.venv/bin/python -m py_compile pq/mldsa_adapter.py tests/test_toy_lwe.py` -> success
+- `.venv/bin/python -m pytest -q tests/test_toy_lwe.py` -> `11 passed, 3 subtests passed`
+- `.venv/bin/python -m pytest -q` -> `472 passed, 72 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `git diff --check` -> no output
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
+
+当前 checkpoint 待提交文件范围：
+
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `pq/__init__.py`
+- `pq/mldsa_adapter.py`
+- `tests/test_toy_lwe.py`
+
+敏感文件审查：
+
+- 待提交文件只包含源码、测试和文档。
+- 不包含 secrets、生成凭据、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+
+Git / checkpoint 状态：
+
+- 本节随 R2 本地 checkpoint 一起提交；最终提交以 `git log -1 --oneline --decorate` 为准。
+- 研究分支是否推送远端需用户另行确认，本轮不自动推送研究分支，也不改写 `origin/backup/repro-local`。
 
 ### 2026-07-14 Dual-Route Research Plan and Branching Strategy Session
 
