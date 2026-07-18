@@ -21,6 +21,7 @@ from neural import (
     FixedProjector,
     FixedRangeNormCheck,
     TinyNegacyclicProjector,
+    UnitIntervalInputGuard,
 )
 
 
@@ -120,15 +121,23 @@ def _build_gadget_evidence() -> dict[str, object]:
 def _build_input_boundary_evidence() -> dict[str, object]:
     """验证二进制、实数、NaN/Inf、类型和越界输入均有明确结果。"""
     guard = BinaryInputGuard()
+    unit_guard = UnitIntervalInputGuard()
     equality = FixedEquality(max_abs=2)
     projector = DenseFixedProjector(((1, 2),), max_input_abs=2)
     checks = {
         "binary_integer_domain": guard((0, 1)) == (0, 1),
         "binary_real_endpoints": guard((0.0, 1.0)) == (0, 1),
+        "unit_interval_midpoint": unit_guard((0.5,)) == (0.5,),
         "reject_real_midpoint": _is_rejected(lambda: guard((0.5,))),
         "reject_nan": _is_rejected(lambda: guard((float("nan"),))),
         "reject_positive_inf": _is_rejected(lambda: guard((float("inf"),))),
         "reject_negative_inf": _is_rejected(lambda: guard((float("-inf"),))),
+        "reject_unit_interval_below_zero": _is_rejected(
+            lambda: unit_guard((-0.01,))
+        ),
+        "reject_unit_interval_above_one": _is_rejected(
+            lambda: unit_guard((1.01,))
+        ),
         "reject_bool": _is_rejected(lambda: guard((True,))),
         "reject_equality_float": _is_rejected(lambda: equality(1.0, 1)),
         "reject_equality_out_of_range": _is_rejected(lambda: equality(3, 1)),

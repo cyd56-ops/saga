@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import math
 import unittest
 
 from neural import BitLayout, CAN, SignatureVerifierWrapper, bytes_to_bits
@@ -84,6 +85,14 @@ class CANTests(unittest.TestCase):
         bits = [float(bit) for bit in self._compound_bits()]
         bits[-1] = 1.0 / 3.0
         self.assertEqual(self.can.can_accept_compound_bits(bits), 0)
+
+    def test_can_rejects_non_finite_out_of_range_and_bool_inputs(self) -> None:
+        """Shamir 前置软件域必须拒绝 NaN/Inf、区间外数值和 bool。"""
+        for invalid in (-1.0, 2.0, math.nan, math.inf, -math.inf, True):
+            with self.subTest(invalid=invalid):
+                bits = [float(bit) for bit in self._compound_bits()]
+                bits[-1] = invalid
+                self.assertEqual(self.can.can_accept_compound_bits(bits), 0)
 
     def test_private_key_not_in_can_state(self) -> None:
         """The CAN module must not retain signing secret material."""

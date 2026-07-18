@@ -391,9 +391,9 @@ For the pure profile, the vetted backend receives the canonical binding bytes
 directly through its pure ML-DSA interface. For a HashML-DSA profile, the vetted
 backend must apply the profile's standard pre-hash to those same binding bytes.
 Callers must not manually pre-hash the binding and then label that operation as
-HashML-DSA. The current module only fixes this protocol contract; R6 still must
-provide an explicit backend shim that enforces the selected profile, parameter
-set, context, backend version, and fail-closed error behavior.
+HashML-DSA. The explicit Route B shim and cryptography/OpenSSL backend live on
+the independent Route B branch; integration must still preserve the selected
+profile, parameter set, context, backend version, and fail-closed behavior.
 
 The current compiled toy verifier has a deliberately narrow boundary:
 
@@ -435,6 +435,38 @@ and `FixedModReduce` explicitly uses ordinary Python `%` as a deterministic
 hard gate. Consequently, the current report is migration and toolchain
 evidence, not proof of a complete fixed-circuit verifier and not production
 post-quantum authentication.
+
+Route A A1 adds `FullReLUToyLWEVerifier` and a complete claimed toy arithmetic
+core after preprocessing. The core uses the shared dense projector, fixed
+subtraction, `FixedBoundedModulo`, fixed equality, range/L1 checks, and fixed
+Boolean aggregation. `FixedBoundedModulo` expands a finite integer domain into
+a construction-time fixed number of ReLU thresholds; it rejects configurations
+above 65,536 thresholds rather than allocating unbounded circuit state.
+
+The A1 boundary is deliberately narrower than the byte-level verifier API:
+
+- strict byte decoding, bit packing, and domain-separated SHA-256 challenge
+  derivation are deterministic preprocessing, not claimed neural circuits;
+- software guards enforce exact widths, built-in numeric types, finite
+  `[0,1]` CAN inputs, binary bit vectors, and bounded integer vectors;
+- the claimed arithmetic evaluator list is statically audited for Python `%`,
+  ordinary `==/!=`, data-dependent `if/while/match`, and calls to a reference
+  `verify()` method;
+- numeric manifests bound every compiled projection/modulo intermediate below
+  the exact IEEE-754 integer limit used by the fixed Linear implementation;
+- the A1 object contains public toy parameters only and no signing private key.
+
+The current A1 gate report passes AG1-AG8 with 20,736 exhaustive tiny relation
+cases, 32 deterministic default-parameter differential cases, 1,025 bounded
+modulo cases, two projector backends, and six deletion witnesses. This is a
+testable closure of the declared toy arithmetic core, not a proof of toy scheme
+security, a neural SHA-256 implementation, or production post-quantum security.
+The A1 verifier is not wired as execution authority; Route B and the shared
+Coordinator remain the production-facing enforcement direction.
+
+`CAN` now applies a finite `[0,1]` software guard before Shamir MASK. Values
+inside the interval but outside the binary set still reach MASK and reject;
+bool, NaN, Inf, and values below zero or above one reject before fixed layers.
 
 Current PQ-CAN request signing protects request authentication only. Unless a
 separate post-quantum key exchange or PQ TLS story is added, this repository

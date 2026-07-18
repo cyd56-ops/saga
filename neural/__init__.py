@@ -1,6 +1,15 @@
 """Fixed neural building blocks for the SAGA-PQ-CAN research prototype."""
 
 from neural.can import CAN
+from neural.a1_toy_verifier import (
+    A1SourceClosureReport,
+    A1ToyVerificationTrace,
+    A1ToyVerifierBoundary,
+    A1ToyVerifierComplexity,
+    FixedToyLWEVerifierCore,
+    FullReLUToyLWEVerifier,
+    audit_a1_claimed_source,
+)
 from neural.compiled_lwe_dnn import (
     CompiledVerifierBoundary,
     CompiledToyLWEVerifier,
@@ -17,12 +26,15 @@ from neural.fixed_circuit import (
 )
 from neural.fixed_toolchain import (
     FIXED_PROJECTOR_CORE_ID,
+    MAX_FIXED_MODULO_THRESHOLDS,
     MAX_EXACT_FLOAT_INTEGER,
     BinaryInputGuard,
     DenseFixedProjector,
+    FixedBoundedModulo,
     FixedBooleanAggregator,
     FixedEquality,
     FixedModReduce,
+    FixedModuloComplexity,
     FixedProjector,
     FixedProjectorCore,
     FixedRangeNormCheck,
@@ -33,6 +45,7 @@ from neural.fixed_toolchain import (
     ProjectorTrace,
     RangeNormTrace,
     TinyNegacyclicProjector,
+    UnitIntervalInputGuard,
 )
 from neural.shamir_layers import (
     MASK,
@@ -63,6 +76,10 @@ from neural.verifier_wrapper import (
 )
 
 __all__ = [
+    "A1SourceClosureReport",
+    "A1ToyVerificationTrace",
+    "A1ToyVerifierBoundary",
+    "A1ToyVerifierComplexity",
     "BitLayout",
     "A0ShadowEvidence",
     "A0ShadowEvidenceOutbox",
@@ -79,6 +96,7 @@ __all__ = [
     "CompoundBitVerifier",
     "DenseFixedProjector",
     "FIXED_PROJECTOR_CORE_ID",
+    "FixedBoundedModulo",
     "FixedBooleanAggregator",
     "FixedEquality",
     "FixedEqualityAggregator",
@@ -86,16 +104,20 @@ __all__ = [
     "FixedLinear",
     "FixedMatrixProjector",
     "FixedModReduce",
+    "FixedModuloComplexity",
     "FixedModSubtractor",
     "FixedProjector",
     "FixedProjectorCore",
     "FixedRangeNormCheck",
     "FixedReLU",
     "FixedSum",
+    "FixedToyLWEVerifierCore",
+    "FullReLUToyLWEVerifier",
     "InMemoryA0ShadowOutbox",
     "GadgetBoundary",
     "MAX_A0_SHADOW_MATERIAL_BYTES",
     "MAX_EXACT_FLOAT_INTEGER",
+    "MAX_FIXED_MODULO_THRESHOLDS",
     "STEP13",
     "RECT13",
     "MASK",
@@ -108,8 +130,10 @@ __all__ = [
     "TrainableStateFinding",
     "SignatureVerifierWrapper",
     "assert_fixed_circuit",
+    "audit_a1_claimed_source",
     "bits_to_bytes",
     "bytes_to_bits",
     "find_trainable_state",
     "TinyNegacyclicProjector",
+    "UnitIntervalInputGuard",
 ]

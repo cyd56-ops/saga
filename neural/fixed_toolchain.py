@@ -10,6 +10,7 @@ from neural.shamir_layers import FixedLinear, FixedReLU, FixedSum
 
 
 MAX_EXACT_FLOAT_INTEGER = (1 << 53) - 1
+MAX_FIXED_MODULO_THRESHOLDS = 1 << 16
 FIXED_PROJECTOR_CORE_ID = "fixed-linear-projector-core-v1"
 
 
@@ -76,6 +77,34 @@ class BinaryInputGuard:
         )
 
 
+class UnitIntervalInputGuard:
+    """校验 Shamir MASK 前的软件实数域，只允许有限的 ``[0,1]`` 值。"""
+
+    requires_grad = False
+
+    def __call__(self, values: Sequence[int | float]) -> tuple[float, ...]:
+        """接受有限数值端点/中间值，拒绝 bool、NaN、Inf 和区间外输入。"""
+        normalized: list[float] = []
+        for value in values:
+            if type(value) not in (int, float):
+                raise TypeError("unit interval input must contain int or float values")
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                raise ValueError("unit interval input must be finite")
+            if numeric < 0.0 or numeric > 1.0:
+                raise ValueError("unit interval input must stay inside [0, 1]")
+            normalized.append(numeric)
+        return tuple(normalized)
+
+    def boundary(self) -> GadgetBoundary:
+        """声明有限 ``[0,1]`` 检查属于 Shamir 电路之前的软件边界。"""
+        return GadgetBoundary(
+            fixed_circuit_steps=(),
+            software_guard_steps=("finite_unit_interval_validation",),
+            deterministic_hard_gate_steps=(),
+        )
+
+
 class FixedModReduce:
     """提供有界整数模约简；A0.5 中仍明确属于普通 Python hard gate。"""
 
@@ -107,6 +136,159 @@ class FixedModReduce:
         )
 
 
+@dataclass(frozen=True)
+class FixedModuloComplexity:
+    """记录有界 ReLU 模约简的阈值数、层调用数与固定参数量。"""
+
+    threshold_count: int
+    fixed_layer_depth: int
+    fixed_linear_calls: int
+    fixed_relu_calls: int
+    fixed_parameter_count: int
+    min_input: int
+    max_input: int
+    max_intermediate_abs: int
+
+    def as_dict(self) -> dict[str, int]:
+        """导出有界模约简的结构与数值复杂度。"""
+        return {
+            "threshold_count": self.threshold_count,
+            "fixed_layer_depth": self.fixed_layer_depth,
+            "fixed_linear_calls": self.fixed_linear_calls,
+            "fixed_relu_calls": self.fixed_relu_calls,
+            "fixed_parameter_count": self.fixed_parameter_count,
+            "min_input": self.min_input,
+            "max_input": self.max_input,
+            "max_intermediate_abs": self.max_intermediate_abs,
+        }
+
+
+class _FixedIntegerStepAtLeast:
+    """在整数输入上用两个 ReLU 实现 ``value >= threshold``。"""
+
+    requires_grad = False
+
+    def __init__(self, threshold: int) -> None:
+        self.threshold = threshold
+        self.shift_previous = FixedLinear(
+            (1.0,),
+            bias=-float(threshold - 1),
+        )
+        self.shift_threshold = FixedLinear((1.0,), bias=-float(threshold))
+        self.relu = FixedReLU()
+        self.combine = FixedLinear((1.0, -1.0))
+
+    def _evaluate_fixed(self, value: int | float) -> int:
+        # 整数域相邻 ReLU 的差在阈值前为 0、从阈值起恒为 1。
+        return int(
+            self.combine(
+                (
+                    self.relu(self.shift_previous(value)),
+                    self.relu(self.shift_threshold(value)),
+                )
+            )
+        )
+
+    def __call__(self, value: int) -> int:
+        """返回固定整数阶跃结果，并检查输出保持硬二进制。"""
+        result = self._evaluate_fixed(value)
+        if result not in (0, 1):
+            raise ArithmeticError("fixed integer step left the binary range")
+        return result
+
+    def submodules(self) -> tuple[object, ...]:
+        """返回整数阶跃使用的固定 Linear/ReLU 子模块。"""
+        return (
+            self.shift_previous,
+            self.shift_threshold,
+            self.relu,
+            self.combine,
+        )
+
+
+class FixedBoundedModulo:
+    """在声明的有限整数域内用固定 ReLU 阈值和实现模约简。"""
+
+    requires_grad = False
+
+    def __init__(self, modulus: int, *, min_input: int, max_input: int) -> None:
+        """编译固定数量阈值，使运行期不使用 Python ``%`` 或数据相关循环。"""
+        self.modulus = _require_positive_int(modulus, name="modulus")
+        if type(min_input) is not int or type(max_input) is not int:
+            raise TypeError("modulo bounds must be built-in integers")
+        if min_input > max_input:
+            raise ValueError("min_input cannot exceed max_input")
+        if max(abs(min_input), abs(max_input)) > MAX_EXACT_FLOAT_INTEGER:
+            raise ValueError("modulo input bound exceeds the exact integer range")
+        self.min_input = min_input
+        self.max_input = max_input
+        offset_multiplier = max(0, (-min_input + self.modulus - 1) // self.modulus)
+        self.offset = offset_multiplier * self.modulus
+        self.max_shifted_input = max_input + self.offset
+        if self.max_shifted_input > MAX_EXACT_FLOAT_INTEGER:
+            raise ValueError("shifted modulo input exceeds the exact integer range")
+        threshold_count = self.max_shifted_input // self.modulus
+        if threshold_count > MAX_FIXED_MODULO_THRESHOLDS:
+            raise ValueError("bounded modulo exceeds the fixed threshold budget")
+        self.shift_input = FixedLinear((1.0,), bias=float(self.offset))
+        self.steps = tuple(
+            _FixedIntegerStepAtLeast(index * self.modulus)
+            for index in range(1, threshold_count + 1)
+        )
+        self.sum_steps = FixedSum()
+        self.combine = FixedLinear((1.0, -float(self.modulus)))
+
+    def _evaluate_fixed(self, value: int) -> int:
+        # 阈值数在构造期固定；运行期路径长度与输入值无关。
+        shifted = self.shift_input(value)
+        quotient = self.sum_steps(
+            step._evaluate_fixed(shifted) for step in self.steps
+        )
+        return int(self.combine((shifted, quotient)))
+
+    def __call__(self, value: int) -> int:
+        """校验有界整数输入并返回无 Python ``%`` 的固定 ReLU 模结果。"""
+        if type(value) is not int:
+            raise TypeError("bounded modulo input must be a built-in integer")
+        if value < self.min_input or value > self.max_input:
+            raise ValueError("bounded modulo input exceeds the compiled domain")
+        result = self._evaluate_fixed(value)
+        if result < 0 or result >= self.modulus:
+            raise ArithmeticError("fixed bounded modulo left its canonical range")
+        return result
+
+    def boundary(self) -> GadgetBoundary:
+        """声明运行期模约简完全由固定 Linear/ReLU/求和组成。"""
+        return GadgetBoundary(
+            fixed_circuit_steps=("bounded_integer_modulo_relu",),
+            software_guard_steps=("compiled_integer_interval_validation",),
+            deterministic_hard_gate_steps=(),
+        )
+
+    def complexity(self) -> FixedModuloComplexity:
+        """返回模约简阈值展开后的层调用、参数与数值界限。"""
+        threshold_count = len(self.steps)
+        return FixedModuloComplexity(
+            threshold_count=threshold_count,
+            fixed_layer_depth=6,
+            fixed_linear_calls=(3 * threshold_count) + 2,
+            fixed_relu_calls=2 * threshold_count,
+            fixed_parameter_count=(7 * threshold_count) + 5,
+            min_input=self.min_input,
+            max_input=self.max_input,
+            max_intermediate_abs=self.max_shifted_input,
+        )
+
+    def submodules(self) -> tuple[object, ...]:
+        """返回输入平移、整数阶跃、固定求和与最终组合层。"""
+        return (
+            self.shift_input,
+            *self.steps,
+            self.sum_steps,
+            self.combine,
+        )
+
+
 class FixedEquality:
     """用固定 Linear/ReLU 在有界整数域计算精确等值比特。"""
 
@@ -132,22 +314,28 @@ class FixedEquality:
             name="right",
             max_abs=self.max_abs,
         )
-        difference = self.subtract((left_value, right_value))
+        result = self._evaluate_fixed(left_value, right_value)
+        if result not in (0, 1):
+            raise ArithmeticError("fixed equality left the hard binary range")
+        return result
+
+    def _evaluate_fixed(self, left: int, right: int) -> int:
+        # 输入经过软件域校验后，固定 ReLU 核心不再按数据值分支。
+        difference = self.subtract((left, right))
         magnitude = self.absolute_sum(
             (
                 self.relu(difference),
                 self.relu(self.negate(difference)),
             )
         )
-        result = self.combine(
-            (
-                self.relu(magnitude),
-                self.relu(self.shift_one(magnitude)),
+        return int(
+            self.combine(
+                (
+                    self.relu(magnitude),
+                    self.relu(self.shift_one(magnitude)),
+                )
             )
         )
-        if result not in (0.0, 1.0):
-            raise ArithmeticError("fixed equality left the hard binary range")
-        return int(result)
 
     def boundary(self) -> GadgetBoundary:
         """声明等值核心由固定 Linear/ReLU 组成，类型与范围检查在电路外。"""
@@ -194,16 +382,22 @@ class FixedBooleanAggregator:
         if len(bits) != self.width:
             raise ValueError(f"expected {self.width} bits, received {len(bits)}")
         normalized = self.guard(bits)
-        total = self.sum_layer(normalized)
-        result = self.combine(
-            (
-                self.relu(self.shift_accept(total)),
-                self.relu(self.shift_saturate(total)),
+        result = self._evaluate_fixed(normalized)
+        if result not in (0, 1):
+            raise ArithmeticError("fixed Boolean aggregation left the binary range")
+        return result
+
+    def _evaluate_fixed(self, bits: Sequence[int]) -> int:
+        # 该路径假定宽度与二进制域已由软件 guard 验证。
+        total = self.sum_layer(bits)
+        return int(
+            self.combine(
+                (
+                    self.relu(self.shift_accept(total)),
+                    self.relu(self.shift_saturate(total)),
+                )
             )
         )
-        if result not in (0.0, 1.0):
-            raise ArithmeticError("fixed Boolean aggregation left the binary range")
-        return int(result)
 
     def boundary(self) -> GadgetBoundary:
         """声明聚合核心和前置二进制 guard 的边界。"""
@@ -238,15 +432,21 @@ class _FixedLessEqual:
         self.combine = FixedLinear((-1.0, 1.0), bias=1.0)
 
     def __call__(self, value: int) -> int:
-        result = self.combine(
-            (
-                self.relu(self.shift_bound(value)),
-                self.relu(self.shift_next(value)),
+        result = self._evaluate_fixed(value)
+        if result not in (0, 1):
+            raise ArithmeticError("fixed less-equal left the binary range")
+        return result
+
+    def _evaluate_fixed(self, value: int) -> int:
+        # 整数域上该饱和阶跃在 bound 及以下为 1，其余为 0。
+        return int(
+            self.combine(
+                (
+                    self.relu(self.shift_bound(value)),
+                    self.relu(self.shift_next(value)),
+                )
             )
         )
-        if result not in (0.0, 1.0):
-            raise ArithmeticError("fixed less-equal left the binary range")
-        return int(result)
 
     def submodules(self) -> tuple[object, ...]:
         return (
@@ -330,6 +530,10 @@ class FixedRangeNormCheck:
             )
             for index, value in enumerate(values)
         )
+        return self._trace_fixed(checked)
+
+    def _trace_fixed(self, values: Sequence[int]) -> RangeNormTrace:
+        # 软件入口完成类型/宽度界定后，范围与范数路径只调用固定层。
         absolute_values = tuple(
             int(
                 self.absolute_sum(
@@ -339,14 +543,15 @@ class FixedRangeNormCheck:
                     )
                 )
             )
-            for value in checked
+            for value in values
         )
         coordinate_bits = tuple(
-            self.coordinate_check(value) for value in absolute_values
+            self.coordinate_check._evaluate_fixed(value)
+            for value in absolute_values
         )
         l1_norm = int(self.sum_layer(absolute_values))
-        l1_bit = self.l1_check(l1_norm)
-        accept = self.aggregator((*coordinate_bits, l1_bit))
+        l1_bit = self.l1_check._evaluate_fixed(l1_norm)
+        accept = self.aggregator._evaluate_fixed((*coordinate_bits, l1_bit))
         return RangeNormTrace(
             absolute_values=absolute_values,
             coordinate_bits=coordinate_bits,
@@ -574,13 +779,17 @@ class FixedProjectorCore:
             )
             for index, value in enumerate(values)
         )
+        projected_values = self._project_fixed(checked)
         output: list[int] = []
-        for row in self.rows:
-            projected = row(checked)
+        for projected in projected_values:
             if not math.isfinite(projected) or not projected.is_integer():
                 raise ArithmeticError("projector left the exact integer domain")
             output.append(int(projected))
         return tuple(output)
+
+    def _project_fixed(self, values: Sequence[int]) -> tuple[float, ...]:
+        # 矩阵和宽度在构造/软件 guard 阶段固定，电路内只执行固定行投影。
+        return tuple(row(values) for row in self.rows)
 
     def complexity(self) -> ProjectorComplexity:
         """返回共享 core 的层数、固定参数量和数值上界。"""

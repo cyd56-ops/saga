@@ -11,15 +11,18 @@ import unittest
 from neural import (
     FIXED_PROJECTOR_CORE_ID,
     MAX_EXACT_FLOAT_INTEGER,
+    MAX_FIXED_MODULO_THRESHOLDS,
     MASK,
     BinaryInputGuard,
     DenseFixedProjector,
+    FixedBoundedModulo,
     FixedBooleanAggregator,
     FixedEquality,
     FixedModReduce,
     FixedProjector,
     FixedRangeNormCheck,
     TinyNegacyclicProjector,
+    UnitIntervalInputGuard,
     assert_fixed_circuit,
 )
 
@@ -86,6 +89,36 @@ class FixedToolchainGadgetTests(unittest.TestCase):
             gadget(cast(int, 1.0))
         with self.assertRaises(ValueError):
             gadget(21)
+
+    def test_fixed_bounded_modulo_matches_signed_domain_exhaustively(self) -> None:
+        """A1 ReLU modulo 在含负数的完整编译域内与整数 reference 一致。"""
+        gadget = FixedBoundedModulo(7, min_input=-20, max_input=20)
+        for value in range(-20, 21):
+            self.assertEqual(gadget(value), value % 7)
+        self.assertEqual(gadget.boundary().deterministic_hard_gate_steps, ())
+        self.assertGreater(gadget.complexity().threshold_count, 0)
+        with self.assertRaises(TypeError):
+            gadget(cast(int, 1.0))
+        with self.assertRaises(ValueError):
+            gadget(21)
+        assert_fixed_circuit(gadget)
+        with self.assertRaises(ValueError):
+            FixedBoundedModulo(
+                2,
+                min_input=0,
+                max_input=2 * (MAX_FIXED_MODULO_THRESHOLDS + 1),
+            )
+
+    def test_unit_interval_guard_accepts_mask_domain_and_rejects_hazards(
+        self,
+    ) -> None:
+        """Shamir 软件 guard 接受有限 [0,1] 实数并拒绝特殊值与区间外值。"""
+        guard = UnitIntervalInputGuard()
+        self.assertEqual(guard((0, 0.25, 1.0)), (0.0, 0.25, 1.0))
+        for invalid in (True, -0.01, 1.01, math.nan, math.inf, -math.inf):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises((TypeError, ValueError)):
+                    guard((cast(int | float, invalid),))
 
     def test_fixed_equality_matches_reference_exhaustively(self) -> None:
         """固定 ReLU 等值 gadget 在有界整数笛卡尔积上精确输出 0/1。"""

@@ -388,9 +388,24 @@ gate report is available with:
 
 The report measures gadget/projector equivalence, numeric bounds, mutation
 witnesses, latency, and Python peak memory. It deliberately leaves AG2 and AG3
-open: there is no end-to-end A1 verifier closure yet, and `FixedModReduce`
-still declares ordinary Python modulo as an A0.5 hard gate. These components
-are not production cryptography and do not authorize execution.
+open because `FixedModReduce` still declares ordinary Python modulo as an A0.5
+hard gate.
+
+The separate A1 research verifier closes the declared post-parse arithmetic
+core with fixed Linear/ReLU projector, bounded modulo, equality, range/norm,
+and Boolean aggregation modules. Run its final gate report with:
+
+```bash
+.venv/bin/python -m experiments.route_a_a1_gate_runner
+```
+
+The checked A1 report covers 20,736 exhaustive tiny relation cases, 32 seeded
+default-parameter differential cases, 1,025 signed modulo cases, and a static
+audit of the eight claimed evaluator symbols. It currently reports AG1-AG8 as
+passed. Byte parsing and domain-separated SHA-256 challenge derivation remain
+explicit preprocessing outside the claim. `FullReLUToyLWEVerifier` is still
+toy/research-only, is not the default execution authority, and is not a
+production post-quantum signature implementation.
 
 The current `experiments/schedule_meeting.py`, `experiments/expense_report.py`,
 and `experiments/create_blogpost.py` entrypoints will automatically call the
