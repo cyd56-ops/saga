@@ -40,6 +40,7 @@ Going forward, keep only the most recent seven work-date logs in the active work
 
 ### 1.1 会话开始时
 
+- 多 worktree 场景下，以 `git worktree list --porcelain` 第一项对应的主工作树日志作为跨分支进度唯一全局事实来源；路线分支内的同名日志只记录该路线 checkpoint 细节。
 - 先读取本文件的：
   - “2. 项目目标”
   - “3. 当前状态面板”
@@ -48,6 +49,7 @@ Going forward, keep only the most recent seven work-date logs in the active work
   - “7. 当前工作焦点”
   - “8. 工作日志”
 - 如果代码与旧文档冲突，以代码实际状态为准，并把差异写回本文档。
+- 如果任一关联 worktree 的实际 HEAD 与第 7 节登记表不一致，先同步主工作树日志，再决定下一项实现工作。
 - 如果用户新提出目标，先更新“2. 项目目标”或“9. 目标调整记录”，再开始实现。
 
 ### 1.2 会话结束前
@@ -59,6 +61,8 @@ Going forward, keep only the most recent seven work-date logs in the active work
   - “8. 工作日志”
 - 如果本次工作改变了顺序、范围、假设或风险，必须更新“9. 目标调整记录”。
 - 如果有未跑通的测试、未验证的假设、环境阻塞，必须显式写入“阻塞 / 风险”。
+- 如果本次在非主 worktree 形成 checkpoint，必须返回主工作树更新第 3、6、7、8 节及第 7 节机器可读 HEAD 登记表；路线本地日志不能替代该步骤。
+- 必须运行 `python scripts/check_worktree_progress.py`；仍有未登记或 HEAD 不一致时不得把会话标记为完成。
 - 必须执行一次 `git` 同步检查：
   - 查看 `git status --short`
   - 确认本次会话应同步的文件范围
@@ -524,7 +528,7 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 
 ## 3. 当前状态面板
 
-最后更新日期：`2026-07-16`
+最后更新日期：`2026-07-18`
 
 ### 3.1 代码实际状态
 
@@ -575,6 +579,11 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `SignedRequestExecutionGate` 默认使用 strict Coordinator mode；旧 `authorize()`、`consume_request()` 和 direct Context helper 不能在 strict 模式授予可执行 authority
   - 显式 `compatibility` mode 只保留历史测试、离线诊断和已声明降级路径；其 Context 标记为 uncommitted，strict Agent prompt 路径会拒绝
   - 当前仍不是 replay/revocation/capability/audit 的跨后端事务；file-marker 在 reserve 后崩溃可能永久拒绝合法重试，该限制保留给 R17
+- 双路线关联 worktree 当前实际进度：
+  - Route B HEAD `f53e4ae9d7a76fcaa276b7f7fc2c6727e2e71b20` 已完成 R6-R8 第一阶段：strict cryptography/OpenSSL ML-DSA backend、typed fixed-policy toolchain、trusted fact compiler、组件级 BG1-BG6 与真实 ML-DSA-44 八场景 shadow corpus
+  - Route A HEAD `3c250e6eabe2a0ca47314aa3229917352e98ffe9` 已完成 R12-R15 第一阶段：有界异步 shadow、A0.5 reusable toolchain、dense/tiny-negacyclic migration smoke、A1 toy arithmetic closure 与 AG1-AG8 gate
+  - Integration HEAD `4bdda665f18a31cb8baa74f376129ac62dba19e7` 仍保持 `core-api-v1`，尚无组合模式功能改动
+  - 路线实现仍只存在于各自分支；主工作树只汇总状态，不因日志同步而合并路线功能代码
 - 当前仓库已新增 canonical request envelope 模块：
   - `saga/messages.py`
 - 当前仓库已新增最小 `neural/` 实现：
@@ -1169,24 +1178,24 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - PQ/LWE 签名抽象：`已完成`（第一阶段：toy LWE research backend 与 fail-closed ML-DSA external adapter 边界已落地；真实 ML-DSA backend 接线属于后续增强）
 - canonical request context / request envelope：`已完成`（第一阶段：sender/receiver/token/message/scope/time/capability/delegation/replay 绑定已接入 runtime gate）
 - Shamir STEP/RECT/MASK：`已完成`
-- compiled DNN verifier：`已完成`（第一阶段：toy LWE 公开矩阵投影与 deterministic preprocessing 边界固定；更细粒度算术 gadget 神经化属于后续增强）
+- compiled DNN verifier：`已完成`（Route A A1 已完成 post-parse fixed-ReLU toy arithmetic core 与 AG1-AG8 gate；parse/hash 仍是显式 deterministic preprocessing，A1 仍为 research-only）
 - CNN + Ring/Module-LWE verifier：`未开始`（明确后置增强方向，不是当前 strict runtime-auth proof closure 的前置条件）
 - SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（shared core R2-R5 第一阶段已完成并形成 `core-api-v1`；A/B/integration 三条本地分支与独立 worktree 已从同一提交创建，下一步进入隔离的路线实现）
+- 双路线认证研究与论文选择：`进行中`（shared core R2-R5、Route B R6-R8、Route A R12-R15 第一阶段已完成；下一步为 Route A R16/A2，Route B R9-R11 与 integration 后续推进）
 
 ### 3.4 阻塞 / 风险
 
-- 双路线实现前 P0 阻塞项：
-  - 路线 B 尚无真实 vetted ML-DSA backend wiring，也没有 fixed authorization circuit
-  - 路线 A 当前仅为 A0 部分编译，不能作为纯验签神经元完成态
+- 双路线当前阶段阻塞项：
+  - 路线 B 已有 strict ML-DSA backend 和 fixed-policy shadow，但尚无 B1.5 enforcement、Coordinator 集成或持续负载证据
+  - 路线 A A1 已关闭 declared toy arithmetic core 的 AG1-AG8，但 parse/hash 不在 claim 内，且 A1 仍是 toy/research-only；A2 环关系尚未开始
   - 文件 marker 只能原子 reserve replay，不能保证 replay / revocation / capability / audit 整条提交链事务化
-  - A shadow 尚无有界异步队列、资源预算、drop evidence 与 late discrepancy audit
+  - A shadow queue 已在 Route A 组件层完成，但尚未在 integration 分支接到 B-enforced 运行模式
 - 当前最大论文风险：
   - 路线 B 若只把预计算布尔值改写成 ReLU AND，工程可行但创新性不足；B0.5 必须建立 typed layout / provenance / predicate IR / trace，B2 必须直接计算原始授权关系，B3 必须用第二 policy profile 证明迁移能力
-  - 路线 A 若停留在 A0，只适合作为 exploratory shadow artifact；A0.5 必须以第二 projector backend 证明工具链可迁移，A1/A2 需要完整 verifier 电路、环结构、复杂度数据和相对既有 secure-DNN transformation 的新增贡献
+  - 路线 A 的 toy arithmetic closure 已完成；当前风险转为 A2 能否在 module-lattice/ring relation 上复用工具链，并形成相对既有 secure-DNN transformation 的新增贡献
   - A 的单个 toy verifier 能运行、B 的单个 fixed policy 能运行，都不能单独作为“工具链完成”证据；必须分别通过 AG1-AG8 与 BG1-BG8
   - A/B 不能作为只改变一个变量的直接对照；签名 verifier、authorization evaluator 与 integration mode 必须分三个实验维度评估
 - 已于 `2026-07-14` 完成双路线工作文档更新后回归验证：
@@ -1859,7 +1868,7 @@ origin/backup/repro-local
 - 论文结果报告 A/B 四象限、reference equivalence、误拒绝、延迟、backlog、crash recovery、replay 与 protected-sink side effects。
 - toy / A0-A2 的非生产边界明确；路线 B 只通过 vetted external ML-DSA backend 获得 production-facing signature claim。
 
-状态：`进行中`（设计已完成第一版；代码、分支与实验尚未开始）
+状态：`进行中`（shared core R2-R5、Route B R6-R8、Route A R12-R15 第一阶段已完成；R9-R11、R16-R18 尚未开始）
 
 ## Phase U0：定义安全内核边界
 
@@ -2322,16 +2331,16 @@ protected sinks 至少覆盖：
 - R3. 定义无歧义 `SignatureBindingV1`、profile / digest semantics 与拒绝规则：`已完成`（第一阶段：严格有序 TLV、golden bytes、typed enum、pure/HashML-DSA profile、固定 context、digest/canonicalization 版本和未知/重复/乱序/错误宽度/超长拒绝已落地）
 - R4. 定义 `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator`，并收口唯一 commit / Context 入口：`已完成`（第一阶段：evaluate 无状态提交；commit 重验 current facts、核对 canonical fingerprint、reserve replay 并创建 Coordinator-marked Context；重复/并发 commit 至多一个成功）
 - R5. 将旧 `authorize()` / direct Context helper 收进 compatibility 边界并补 strict bypass 测试：`已完成`（第一阶段：gate 默认 strict；旧 authorize/consume/direct Context helper 无法授予 authority；显式 compatibility Context 标记为 uncommitted 并被 strict Agent 拒绝）
-- R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`未开始`
-- R7. 路线 B0.5：实现 typed layout、fact provenance、predicate IR、reference policy、trace 与 complexity manifest：`未开始`
-- R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`未开始`
+- R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`已完成`（第一阶段：Route B `0163bfd` 已接入 cryptography/OpenSSL pure ML-DSA strict contract，并通过本机 ML-DSA-44 实签 round trip）
+- R7. 路线 B0.5：实现 typed layout、fact provenance、predicate IR、reference policy、trace 与 complexity manifest：`已完成`（第一阶段：Route B `4a1a5da` / `f53e4ae` 已实现六项 typed facts、内部 provenance、版本化 IR、trace、complexity 与 trusted fact compiler）
+- R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`已完成`（第一阶段：组件级 BG1-BG6、64 项穷举/固定种子差分、6/6 mutation 与真实 ML-DSA-44 八场景 shadow corpus 已通过；不授予 authority）
 - R9. 路线 B1.5：通过 BG1-BG6 后把 fixed policy 正式纳入 B 的 AND，同时保留电路外标准验签必要条件：`未开始`
 - R10. 路线 B2：实现原始 scope / flow / delegation / time / digest 关系电路：`未开始`
 - R11. 路线 B3：用第二 policy / execution-surface profile 证明 PolicyCompiler / circuit profile 可迁移并完成 BG1-BG8：`未开始`
-- R12. 路线 A0：将 `partially_compiled_toy_shadow` 接入有界异步 shadow queue / outbox：`未开始`
-- R13. 路线 A0.5：实现 reusable arithmetic / Boolean gadget、scheme-independent projector、trace / boundary / complexity manifest：`未开始`
-- R14. 路线 A0.5 migration smoke：dense 与 tiny negacyclic projector 复用同一 core，并形成 AG1 / AG4-AG8 preliminary evidence：`未开始`
-- R15. 路线 A1：完成 fixed ReLU toy verifier core、关闭 AG2/AG3、汇总 AG1-AG8 gate report，并明确 parse / hash / numeric / real-valued claim 边界：`未开始`
+- R12. 路线 A0：将 `partially_compiled_toy_shadow` 接入有界异步 shadow queue / outbox：`已完成`（第一阶段：有界 queue/outbox、timeout、drop/error/disagreement late evidence 与无 authority contract 已通过）
+- R13. 路线 A0.5：实现 reusable arithmetic / Boolean gadget、scheme-independent projector、trace / boundary / complexity manifest：`已完成`（第一阶段：严格输入 guard、mod/equality/range/norm/aggregation、共享 projector core 与 manifest 已落地）
+- R14. 路线 A0.5 migration smoke：dense 与 tiny negacyclic projector 复用同一 core，并形成 AG1 / AG4-AG8 preliminary evidence：`已完成`（第一阶段：dense 与 tiny-negacyclic projector 共用接口，preliminary gate 已通过）
+- R15. 路线 A1：完成 fixed ReLU toy verifier core、关闭 AG2/AG3、汇总 AG1-AG8 gate report，并明确 parse / hash / numeric / real-valued claim 边界：`已完成`（第一阶段：20,736 tiny exhaustive、32 normal differential、1,025 modulo cases 零 mismatch，AG1-AG8 全部通过；仍为 toy/research-only）
 - R16. 路线 A2：实现 research-only module-lattice / module-SIS-style fixed negacyclic-convolution verifier：`未开始`
 - R17. 定义并实现 durable authorization state machine 与 audit outbox；记录 file-marker profile 的 availability 限制：`未开始`
 - R18. 完成 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare`、公平实验、A/B 四象限统计与论文路线选择：`未开始`
@@ -2346,7 +2355,8 @@ protected sinks 至少覆盖：
    - 路线 B 推进 `B0 strict ML-DSA -> B0.5 typed toolchain -> B1/B1.5 -> B2 raw relations -> B3 portable policy compiler`，作为默认真实执行安全锚点。
    - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
    - R2-R5 P0/shared core 第一阶段已完成：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口均已落地。
-   - 通过规定测试的 `core-api-v1` checkpoint 已形成，A、B 与 integration 已从同一提交分出并使用独立 worktree，后续公共 gate 修复仍回 core 处理。
+   - Route B R6-R8 与 Route A R12-R15 已在独立 worktree 完成第一阶段；integration 仍保持 `core-api-v1`，后续公共 gate 修复仍回 core 处理。
+   - 主工作树日志现在通过完整 HEAD 登记表和 `scripts/check_worktree_progress.py` 检查跨 worktree 进度，路线 checkpoint 后必须另做主日志汇总。
    - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
 
@@ -2499,15 +2509,29 @@ protected sinks 至少覆盖：
    - 旧 raw OTK-only 签名和跨 AID 签名均会 fail closed
    - receiving-side 本地 OTK 消费已抽成 `_consume_local_otk(...)`，并测试并发下同一 OTK 只能消费一次
 
+### 关联 worktree 进度登记
+
+下面的 JSON 是退出检查器读取的机器可读事实。每个非主、非 detached worktree 形成新 checkpoint 后，必须在主工作树更新对应完整 HEAD。
+
+<!-- worktree-progress:start -->
+```json
+{
+  "refs/heads/research/dual-route-integration": "4bdda665f18a31cb8baa74f376129ac62dba19e7",
+  "refs/heads/research/route-a-neural-verifier": "3c250e6eabe2a0ca47314aa3229917352e98ffe9",
+  "refs/heads/research/route-b-fixed-auth": "f53e4ae9d7a76fcaa276b7f7fc2c6727e2e71b20"
+}
+```
+<!-- worktree-progress:end -->
+
 ### 当前下一步
 
 下一步建议直接执行：
 
-1. 当前 `research/runtime-auth-core` 已完成 R2-R5 shared core 第一阶段，并形成通过规定测试的 `core-api-v1` 固定 checkpoint `4bdda66`。
-2. `research/route-a-neural-verifier`、`research/route-b-fixed-auth` 与 `research/dual-route-integration` 已从 `4bdda66` 创建，各自使用 `/home/kali/saga/.worktrees/` 下被 Git 忽略的独立 worktree；当前均无功能改动。
-3. 下一步在路线 B worktree 先执行 R6：显式接入 vetted external ML-DSA backend contract，固定 backend/version/profile/context/error/timeout 的 fail-closed wiring；不在缺少真实 backend 时回退到 toy。
-4. 随后在路线 A worktree 执行 R12-R14 的 A0/A0.5、tiny ring smoke 和 preliminary AG evidence；路线独有改动不得直接写入另一条路线分支。
-5. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与路线初始 patch 混在一起。
+1. Route A R15 已通过规定测试并形成 checkpoint `3c250e6`；下一步进入 `/home/kali/saga/.worktrees/route-a-neural-verifier` 执行 R16/A2。
+2. R16 先定义明确标注 research-only 的 module-lattice/module-SIS-style verification relation，复用 fixed negacyclic projector/toolchain；不继续扩大 toy 参数，也不优先神经化 SHA-256。
+3. A2 必须独立建立环关系 reference equivalence、输入/数值边界、复杂度 manifest、mutation 与 real-valued rejection 证据；A1 的 AG1-AG8 不能自动外推到 A2。
+4. Route B R6-R8 已完成组件级 BG1-BG6；其后按 R9-R11 推进 B1.5 enforcement、raw authorization relations 与第二 policy profile，始终保留电路外标准 ML-DSA 必要条件和 Coordinator 唯一 Context commit。
+5. R17 durable state、J11 threat model 与 R18 integration/fair experiments 继续后置，避免与 A2 初始 relation/circuit patch 混合。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2534,16 +2558,69 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 除非明确阻塞，每次结束前都执行：
 
 1. 更新本工作文档。
-2. 检查 `git status --short`。
-3. 整理当前 checkpoint 摘要与待提交文件列表。
-4. 形成本地 checkpoint；若未命中敏感路径，则推送到 `backup/repro-local`。
-5. 在工作日志中记录：
+2. 如果任一非主 worktree 形成了 checkpoint，返回主工作树更新第 3、6、7、8 节和完整 HEAD 登记表。
+3. 运行 `python scripts/check_worktree_progress.py`，确认所有关联分支 HEAD 均已登记。
+4. 检查 `git status --short`。
+5. 整理当前 checkpoint 摘要与待提交文件列表。
+6. 形成本地 checkpoint；若未命中敏感路径，则推送到 `backup/repro-local`。
+7. 在工作日志中记录：
    - 本次变更目的
    - 是否形成了本地 checkpoint
    - 是否成功推送备份分支
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-18 Primary Worktree Progress Synchronization Guard Session
+
+目标：
+
+- 修复 Route A/B 独立 worktree 已前进、但主工作树全局日志仍停留在 R6 前的进度漂移。
+- 把跨 worktree 日志同步从人工约定升级为可执行的退出门禁，防止路线本地日志再次被误当成全局事实来源。
+
+已做工作：
+
+- 更新 `AGENTS.md`：
+  - 明确 `git worktree list --porcelain` 第一项对应的主工作树日志是跨分支进度唯一全局事实来源。
+  - 非主 worktree checkpoint 后必须返回主工作树更新第 3、6、7、8 节和完整 HEAD 登记表。
+  - 路线功能代码不得仅为同步文档而合并进 core；主工作树使用小型纯文档/流程 checkpoint。
+- 新增 `scripts/check_worktree_progress.py`：
+  - 读取 Git porcelain worktree 清单和主工作树日志中的机器可读 JSON 登记表。
+  - 逐项比较所有非主、非 detached worktree 的完整 branch/HEAD；未登记或 commit 不一致时返回非零状态。
+  - 检查器只读，不切分支、不提交、不合并、不推送。
+- 新增 `tests/test_worktree_progress_check.py`，覆盖 porcelain 解析、完整 commit 约束、missing/stale 检出以及仓库退出规则接线。
+- 同步主工作树 `SAGA_PQ_CAN_WORKLOG.md`：
+  - Route B R6-R8 标记为第一阶段已完成，登记 HEAD `f53e4ae9d7a76fcaa276b7f7fc2c6727e2e71b20`。
+  - Route A R12-R15 标记为第一阶段已完成，登记 HEAD `3c250e6eabe2a0ca47314aa3229917352e98ffe9`。
+  - Integration 登记 HEAD `4bdda665f18a31cb8baa74f376129ac62dba19e7`，仍无组合功能改动。
+  - 全局下一步切换到 Route A R16/A2，Route B R9-R11、R17/R18 继续后置。
+
+已验证：
+
+- `.venv/bin/python -m pytest -q tests/test_worktree_progress_check.py` -> `4 passed`
+- `.venv/bin/python scripts/check_worktree_progress.py` -> 所有关联 branch HEAD 与主日志登记一致
+- `.venv/bin/python -m pytest -q` -> `506 passed, 96 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
+
+安全与范围边界：
+
+- 本轮没有修改密码实现、授权决策或 protected sink，也没有生成或提交任何密钥、凭据、数据库、模型 checkpoint、实验结果或 `paper/` 文件。
+- 主工作树只汇总路线状态；Route A/B 功能提交仍留在所属研究分支，integration 分支未改变。
+- detached worktree 没有稳定 branch 身份，检查器不把它纳入 branch-to-HEAD 登记；任何正式路线 checkpoint 必须位于具名分支。
+
+当前 checkpoint 待提交文件范围：
+
+- `AGENTS.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `scripts/check_worktree_progress.py`
+- `tests/test_worktree_progress_check.py`
+
+Git / checkpoint 状态：
+
+- 本节将与规则、检查器、测试和主日志汇总形成 `research/runtime-auth-core` 本地 checkpoint；最终 commit 以 `git log -1 --oneline` 为准。
+- 本轮不合并路线功能提交，也不推送研究分支或改写 `origin/backup/repro-local`。
 
 ### 2026-07-16 Dual-Route Worktree Initialization Session
 

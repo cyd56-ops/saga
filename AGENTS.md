@@ -125,6 +125,28 @@ SAGA-PQ-CAN = SAGA 风格的智能体治理架构 + 后量子签名验签 + 经�
 
 ---
 
+## Multi-worktree worklog synchronization / 多工作树日志同步
+
+**English**
+
+- The `SAGA_PQ_CAN_WORKLOG.md` in the primary worktree (the first entry from `git worktree list --porcelain`) is the only aggregate source of truth for cross-branch progress.
+- A route worktree may update its branch-local worklog for checkpoint details, but that update does not replace synchronization of the primary worktree worklog.
+- After a non-primary worktree creates a checkpoint, Codex must return to the primary worktree and update Sections 3, 6, 7, and 8 with the route status, exact full HEAD commit, global next step, tests, and residual risks.
+- Route-specific source commits must not be merged into the core branch merely to synchronize documentation. The primary worktree should receive a small documentation-only checkpoint instead.
+- Before ending any session that changed a linked worktree, run `python scripts/check_worktree_progress.py`. The session is not complete while the checker reports an unrecorded or mismatched worktree HEAD.
+- If the primary worktree cannot be updated safely, record the mismatch and blocker in both the route-local worklog and the final response; do not describe the aggregate worklog as current.
+
+**中文**
+
+- 主工作树中的 `SAGA_PQ_CAN_WORKLOG.md`（以 `git worktree list --porcelain` 第一项为准）是跨分支进度唯一的全局事实来源。
+- 路线 worktree 可以更新其分支内工作日志来记录 checkpoint 细节，但不能用该更新替代主工作树日志同步。
+- 非主 worktree 形成 checkpoint 后，Codex 必须回到主工作树，在第 3、6、7、8 节登记路线状态、完整 HEAD commit、全局下一步、测试结果与遗留风险。
+- 不得为了同步文档而把路线功能提交合并进 core 分支；应在主工作树形成一个小型纯文档 checkpoint。
+- 任何修改了关联 worktree 的会话结束前，都必须运行 `python scripts/check_worktree_progress.py`。检查器仍报告未登记或 HEAD 不一致时，会话不能视为完成。
+- 如果主工作树无法安全更新，必须在路线本地日志和最终回复中同时记录差异与阻塞原因，不得声称全局工作日志已经是最新状态。
+
+---
+
 ## Testing commands / 测试命令
 
 Run before completion:
