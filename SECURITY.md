@@ -474,11 +474,30 @@ predicates is rejected during IR construction.
 inputs, a fixed-seed differential corpus, all six predicate-deletion mutations,
 inside/outside standard-signature consistency, exact 0/1 outputs, trace reason
 coverage, and absence of trainable state. It deliberately does not close the
-final BG1-BG6 enforcement gate: the corpus uses synthetic internally typed
-facts, not Agent runtime shadow traffic, and the provenance object is an
-in-process trusted-code contract rather than a cryptographic attestation against
-arbitrary code executing inside the trusted Python process. B1.5 remains
-forbidden until real shadow integration and final gate review are completed.
+BG1-BG6 gate by itself: the corpus uses synthetic internally typed facts, and
+the provenance object is an in-process trusted-code contract rather than a
+cryptographic attestation against arbitrary code executing inside the trusted
+Python process.
+
+`RouteBTrustedFactCompiler` and `RouteBFixedPolicyShadowRoute` add the trusted
+component boundary needed to close that gap. The adapter first calls the strict
+R6 verifier, then derives all six facts from the canonical binding/envelope,
+transport token/message digests, local scope constraints, flow labels, parent
+capability attenuation, and an explicit UTC observation time. The request does
+not carry caller-provided allow bits. Each fact provenance digest is
+domain-separated and contains only canonical digests, fixed metadata, check
+results, and stable reasons. Public keys, signatures, token/message plaintext,
+and backend exception messages are excluded from compiled evidence.
+
+`experiments.route_b_shadow_runner` executes eight in-memory signed-envelope
+cases with the real cryptography/OpenSSL ML-DSA-44 backend. The current corpus
+covers a valid request, scope/flow/time/transport/delegation rejection, valid
+delegation, and invalid signature. Its manifest requires reference/fixed
+equivalence, negative coverage for every fact, stable reason matching, and zero
+authority. This closes the component-level BG1-BG6 B1 shadow gate. It does not
+run the Agent network path, measure sustained shadow load, or approve B1.5:
+integration must still preserve external standard-signature necessity and the
+Coordinator's exclusive Context commit boundary.
 
 The current compiled toy verifier has a deliberately narrow boundary:
 

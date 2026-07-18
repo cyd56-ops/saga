@@ -582,19 +582,22 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - backend 异常、TimeoutError、wall timeout 与非内建 bool 结果均形成不含诊断消息的 fail-closed evidence；每个 verifier 最多保留一个在途 worker，避免超时重试无限创建线程
   - 新增 `pq/cryptography_mldsa.py` 与 `CryptographyMLDSABackend`，只委托 `cryptography>=48.0.1,<50.0.0` 的 OpenSSL pure ML-DSA + context API；不手工预哈希冒充 HashML-DSA
   - repo-local venv 已升级到 cryptography 49.0.0，其 wheel-provided OpenSSL 4.0.1 报告 `mldsa_supported=True`；本机已完成 real ML-DSA-44 keygen/sign/verify round trip（public key 1312 bytes、signature 2420 bytes）
-  - R6 尚未把 B0 evidence 接入 Agent config/Coordinator executable authority；该接线必须等待 R7/R8 typed authorization/reference-equivalence shadow 边界
+  - R6 evidence 已接入无状态 `RouteBFixedPolicyShadowRoute`，但仍未接入 Agent config 或 Coordinator executable authority；B1.5 前不得创建 Context
 - 路线 B R7 typed authorization toolchain 已完成第一阶段：
   - 新增 `neural/fixed_policy.py`，固定六项 V1 facts：标准签名、canonical envelope、scope、flow、delegation 与 time
   - 每个 `AuthorizationFact` 只接受内建 `bool`，且必须携带事实类型匹配的内部 validator source、稳定 source version 和 32-byte evidence digest
   - `AuthorizationInputLayout` 以固定顺序将事实编码为六个 uint8；raw mapping、整数/浮点/truthy object、NaN/Inf、错来源、缺失/重复字段、错误版本/长度和非 0/1 字节均拒绝
   - `AuthorizationPredicateIR` 将 layout/policy profile 与有序 `require_true` 谓词和稳定 reason mapping 绑定；canonical V1 必须包含完整六谓词，删除测试使用独立 research-mutation profile
   - `ReferenceAuthorizationPolicy`、`FixedPolicyTrace` 与 `FixedCircuitComplexity` 已落地；complexity 当前只声明结构层数/参数/输入尺寸，不替代 BG8 latency/memory 实测
-- 路线 B R8 `FixedPolicyAggregator` 已完成 preliminary shadow 第一阶段，最终 gate 仍进行中：
+- 路线 B R8 `FixedPolicyAggregator` shadow 已完成第一阶段组件级 BG1-BG6 收口：
   - 固定聚合器使用全一权重 Linear + 固定 ReLU 实现六谓词 AND，无训练状态，最终只接受内建整数 `1`
   - `FixedPolicyShadowEvaluator` 强制 reference/fixed 使用同一 layout/IR，并核对电路内 `standard_signature_valid` 与电路外 R6 evidence；所有 evidence 固定为 `shadow_only` / `authority_granted=False`
   - 新增 `experiments/fixed_policy_gate_runner.py`，输出机器可读 `B1_shadow_preliminary` BG1-BG6 报告
   - 当前 deterministic report 覆盖 64 项布尔穷举、256 项固定种子差分、6 项 predicate deletion mutation、reason coverage、精确 0/1 和无训练状态，结果 `all_passed=true`
-  - 该 report 使用 synthetic typed facts，尚无 Agent/runtime shadow traffic；provenance 是 trusted-process object contract 而非对任意进程内 Python 代码的密码学证明，因此不得据此进入 R9/B1.5
+  - 新增 `RouteBTrustedFactCompiler`，从 canonical binding/envelope、transport digest、scope constraints、flow labels、parent attenuation 与 UTC observed time 编译事实；请求方不能直接提供 allow bits
+  - 新增 `RouteBFixedPolicyShadowRoute`，固定执行 `R6 verify -> trusted fact compile -> reference/fixed shadow`，不暴露 commit/authorize/Context/sink API
+  - 新增真实 `experiments.route_b_shadow_runner`：cryptography 49/OpenSSL 4.0.1 ML-DSA-44 八场景 `8/8` 等价，六项 false fact 全覆盖，`authority_granted_count=0`
+  - 组件级 BG1-BG6 已关闭；Agent 网络路径、持续 shadow 负载、latency/memory/crash recovery 与 B1.5 enforcement 接线后置，不能由本阶段 evidence 直接授权执行
 - 当前仓库已新增 canonical request envelope 模块：
   - `saga/messages.py`
 - 当前仓库已新增最小 `neural/` 实现：
@@ -1262,6 +1265,21 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `/home/kali/saga/.venv/bin/python -m experiments.fixed_policy_gate_runner --output /tmp/saga-route-b-fixed-policy-gates.json` -> `all_passed=true`，BG1-BG6 preliminary 全部通过
   - `/home/kali/saga/.venv/bin/python -m pytest -q` -> `528 passed, 1 skipped, 219 subtests passed`
   - 唯一 skip：`tests/test_paper_tables.py:529`，原因是独立 worktree 不包含主工作区 ignored end-to-end summaries；与 R7/R8 功能无关
+  - `/home/kali/saga/.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `/home/kali/saga/.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `/home/kali/saga/.venv/bin/python -m pip check` -> `No broken requirements found.`
+  - `git diff --check` -> no output
+  - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
+
+- 已于 `2026-07-18` 完成路线 B R8 trusted fact compiler 与 real shadow corpus 后回归验证：
+  - `/home/kali/saga/.venv/bin/python -m py_compile neural/fixed_policy_runtime.py neural/__init__.py experiments/route_b_shadow_runner.py tests/test_fixed_policy_runtime.py tests/test_route_b_shadow_runner.py` -> success
+  - `/home/kali/saga/.venv/bin/python -m pytest -q tests/test_fixed_policy.py tests/test_fixed_policy_gate_runner.py tests/test_fixed_policy_runtime.py tests/test_route_b_shadow_runner.py tests/test_mldsa_route_b.py tests/test_cryptography_mldsa.py tests/test_fixed_circuit.py` -> `43 passed, 142 subtests passed`
+  - `/home/kali/saga/.venv/bin/python -m experiments.route_b_shadow_runner --output /tmp/saga-route-b-real-shadow.json` -> `all_passed=true`
+    - backend：cryptography `49.0.0` / OpenSSL `4.0.1` / ML-DSA-44 pure profile
+    - corpus：`8/8` equivalent，六项 false fact 全覆盖，`expected_reason_mismatches=[]`
+    - `signature_accepted_count=7`，`fixed_accepted_count=2`，`authority_granted_count=0`
+  - `/home/kali/saga/.venv/bin/python -m pytest -q` -> `536 passed, 1 skipped, 238 subtests passed`
+  - 唯一 skip：`tests/test_paper_tables.py:529`，原因是独立 worktree 不包含主工作区 ignored end-to-end summaries；与 R8 功能无关
   - `/home/kali/saga/.venv/bin/python -m pytest -q tests/security` -> `27 passed`
   - `/home/kali/saga/.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
   - `/home/kali/saga/.venv/bin/python -m pip check` -> `No broken requirements found.`
@@ -2367,7 +2385,7 @@ protected sinks 至少覆盖：
 - R5. 将旧 `authorize()` / direct Context helper 收进 compatibility 边界并补 strict bypass 测试：`已完成`（第一阶段：gate 默认 strict；旧 authorize/consume/direct Context helper 无法授予 authority；显式 compatibility Context 标记为 uncommitted 并被 strict Agent 拒绝）
 - R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`已完成`（第一阶段：cryptography 49/OpenSSL 4.0.1 pure ML-DSA shim、版本化 descriptor/contract、FIPS 长度检查、有界 timeout worker 与稳定 evidence 已落地；本机 real ML-DSA-44 positive round trip 已通过）
 - R7. 路线 B0.5：实现 typed layout、fact provenance、predicate IR、reference policy、trace 与 complexity manifest：`已完成`（第一阶段：六项严格 bool/uint8 layout、内部 validator provenance、版本化 IR/reference policy、稳定 trace 与结构 complexity manifest 已落地）
-- R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`进行中`（preliminary：fixed Linear+ReLU aggregator、64 项穷举、固定种子差分、6/6 mutation 与机器可读 preliminary gate report 已通过；尚缺真实 Agent/runtime shadow corpus 与最终 gate review）
+- R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`已完成`（第一阶段组件级：preliminary 64 项穷举/固定种子差分/6/6 mutation，加 real ML-DSA-44 八场景 trusted fact compiler/route shadow corpus 均通过；所有 evidence 零 authority，Agent 网络与 B1.5 接线不在本阶段）
 - R9. 路线 B1.5：通过 BG1-BG6 后把 fixed policy 正式纳入 B 的 AND，同时保留电路外标准验签必要条件：`未开始`
 - R10. 路线 B2：实现原始 scope / flow / delegation / time / digest 关系电路：`未开始`
 - R11. 路线 B3：用第二 policy / execution-surface profile 证明 PolicyCompiler / circuit profile 可迁移并完成 BG1-BG8：`未开始`
@@ -2389,6 +2407,7 @@ protected sinks 至少覆盖：
    - 路线 B 推进 `B0 strict ML-DSA -> B0.5 typed toolchain -> B1/B1.5 -> B2 raw relations -> B3 portable policy compiler`，作为默认真实执行安全锚点。
    - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
    - R2-R5 P0/shared core 第一阶段已完成：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口均已落地。
+   - 路线 B R6-R8 第一阶段组件级 gate 已完成：真实 ML-DSA-44 backend、typed toolchain、固定聚合 shadow、trusted fact compiler 与八场景 real shadow corpus 已形成零 authority evidence。
    - 通过规定测试的 `core-api-v1` checkpoint 已形成，A、B 与 integration 已从同一提交分出并使用独立 worktree，后续公共 gate 修复仍回 core 处理。
    - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
@@ -2547,11 +2566,11 @@ protected sinks 至少覆盖：
 下一步建议直接执行：
 
 1. 当前 `research/runtime-auth-core` 已完成 R2-R5 shared core 第一阶段，并形成通过规定测试的 `core-api-v1` 固定 checkpoint `4bdda66`。
-2. `research/route-a-neural-verifier`、`research/route-b-fixed-auth` 与 `research/dual-route-integration` 已从 `4bdda66` 创建并使用独立 worktree；route B 已完成 R6/R7 第一阶段并进入 R8，route A/integration 尚无功能改动。
-3. 路线 B R8 preliminary typed-fact shadow 已通过 synthetic BG1-BG6 report；下一步仍留在 route B worktree，把受信 fact compiler/evidence adapter 接到真实 Route B shadow corpus，复核 provenance、reason mapping 与 no-authority 边界后再关闭最终 BG1-BG6。
-4. R8 最终 gate 关闭前不得进入 R9/B1.5，不得把 `FixedPolicyAggregator` 接入 Coordinator commit 或 protected sink；标准 ML-DSA 必须保持电路内外双重必要条件。
-5. R8 最终 review 后进入路线 A worktree执行 R12-R14 的 A0/A0.5、tiny ring smoke 和 preliminary AG evidence；路线独有改动不得直接写入另一条路线分支。
-6. 路线 B 只有通过最终 BG1-BG6 才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与路线初始 patch 混在一起。
+2. `research/route-a-neural-verifier`、`research/route-b-fixed-auth` 与 `research/dual-route-integration` 已从 `4bdda66` 创建并使用独立 worktree；route B 已完成 R6-R8 第一阶段组件级 gate，route A/integration 尚无功能改动。
+3. 下一步按既定阶段顺序进入路线 A worktree 执行 R12-R14：先把现有 A0 接入有界异步 shadow，再建立 A0.5 reusable gadget/projector/trace/complexity toolchain，并完成 dense + tiny negacyclic migration smoke 与 preliminary AG evidence。
+4. 路线 A shadow 必须与 B 同步关键路径隔离；队列满、超时、异常和 disagreement 只形成 late evidence，不得改变 B 决策或形成 A OR B fallback。
+5. 路线 B 虽已通过组件级 BG1-BG6，但 R9/B1.5 enforcement 接线仍留在 route B/integration 后续阶段，必须保留电路外标准 ML-DSA 必要条件和 Coordinator 唯一 Context commit。
+6. 路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。R9-R11、J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与路线 A 初始 patch 混在一起。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2588,6 +2607,80 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-18 Route B R8 Trusted Fact Compiler and Real Shadow Corpus Session
+
+目标：
+
+- 将 R8 从 synthetic typed facts 推进到真实 R6 ML-DSA evidence + canonical runtime request facts。
+- 固定 `R6 verify -> trusted fact compiler -> reference/fixed shadow` 无状态 evidence adapter。
+- 生成不包含密钥/签名字节的真实 Route B shadow corpus manifest，完成第一阶段组件级 BG1-BG6 收口。
+
+已做工作：
+
+- 新增 `neural/fixed_policy_runtime.py`：
+  - `RouteBShadowRequest`：只保存 binding、canonical envelope、transport token/message digest、scope parameters、flow labels、UTC observed time 与可选 parent envelope
+  - `RouteBTrustedFactCompiler`：由受信代码计算标准签名、envelope、scope、flow、delegation 与 time 六项 facts
+  - 每项 fact provenance 以固定 domain、compiler version、输入摘要、稳定 reason 和结果生成 SHA-256；不复制 token/message 明文、公钥、签名或 backend 异常消息
+  - `RouteBFixedPolicyShadowRoute`：先调用严格 R6 verifier，再编译 facts 并比较 reference/fixed；不提供 commit、authorize、Context factory 或 sink callback
+  - `RouteBFixedPolicyShadowRouteEvidence` 固定 `authority_granted=False`
+  - `RouteBShadowCorpusManifest` 汇总 case、事实 false 覆盖、等价性、固定接受数和 authority 数
+- 新增 `experiments/route_b_shadow_runner.py`：
+  - 使用 cryptography/OpenSSL 实际 ML-DSA-44 pure profile
+  - 测试内存中生成短生命周期 key pair，只对 canonical binding bytes 签名
+  - 覆盖 `valid / scope_denied / flow_denied / time_expired / transport_digest_mismatch / delegation_parent_missing / valid_delegation / signature_invalid`
+  - 输出 backend/provider 元数据、稳定 reason 和 manifest，不输出公钥、私钥 seed 或签名字节
+- 新增：
+  - `tests/test_fixed_policy_runtime.py`
+  - `tests/test_route_b_shadow_runner.py`
+- 更新：
+  - `neural/__init__.py`
+  - `README.md`
+  - `SECURITY.md`
+  - `SAGA_PQ_CAN_WORKLOG.md`
+
+已验证：
+
+- `/home/kali/saga/.venv/bin/python -m py_compile neural/fixed_policy_runtime.py neural/__init__.py experiments/route_b_shadow_runner.py tests/test_fixed_policy_runtime.py tests/test_route_b_shadow_runner.py` -> success
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/test_fixed_policy_runtime.py tests/test_route_b_shadow_runner.py` -> `8 passed, 19 subtests passed`
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/test_fixed_policy.py tests/test_fixed_policy_gate_runner.py tests/test_fixed_policy_runtime.py tests/test_route_b_shadow_runner.py tests/test_mldsa_route_b.py tests/test_cryptography_mldsa.py tests/test_fixed_circuit.py` -> `43 passed, 142 subtests passed`
+- `/home/kali/saga/.venv/bin/python -m experiments.route_b_shadow_runner --output /tmp/saga-route-b-real-shadow.json` -> `all_passed=true`
+- `/home/kali/saga/.venv/bin/python -m pytest -q` -> `536 passed, 1 skipped, 238 subtests passed`
+- 唯一 skip 为独立 worktree 缺少 ignored 2026-05-27 end-to-end summaries，与本轮功能无关。
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `/home/kali/saga/.venv/bin/python -m pip check` -> `No broken requirements found.`
+- `git diff --check` -> no output
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
+
+安全边界：
+
+- 本轮没有实现或修改 ML-DSA 算法；真实密码操作仍只委托 cryptography/OpenSSL vetted backend。
+- 私钥 seed 与签名字节只存在于 runner/test 函数局部内存，不写入 JSON、仓库或 `/tmp` report。
+- `RouteBTrustedFactCompiler` 是 trusted-process adapter，防止网络请求/LLM 直接传入 allow bits；它不抵御已在受信 Python 进程内执行任意代码的攻击者。
+- 当前收口是路线组件级 B1 shadow BG1-BG6，不包含 Agent 网络路径、持续负载、latency/memory、crash recovery 或 B1.5 enforcement。
+- 任何未来 B1.5 接线仍必须把电路外标准 ML-DSA 结果作为必要条件，并且只能由 shared Coordinator 创建 Context。
+
+当前 checkpoint 待提交文件范围：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `experiments/route_b_shadow_runner.py`
+- `neural/__init__.py`
+- `neural/fixed_policy_runtime.py`
+- `tests/test_fixed_policy_runtime.py`
+- `tests/test_route_b_shadow_runner.py`
+
+敏感文件审查：
+
+- 待提交范围只包含源码、测试与文档，不包含 private keys、生成 secrets、本地 DB、模型 checkpoint、真实运行结果或 `paper/`。
+- 真实 shadow JSON 写入 `/tmp/saga-route-b-real-shadow.json`，不进入仓库 checkpoint，且不含公私钥或签名字节。
+
+Git / checkpoint 状态：
+
+- 本节与 R8 runtime compiler/runner 源码、测试和安全文档一起形成 route B 本地 checkpoint；最终 commit 以 `git log -1 --oneline` 为准。
+- 不自动推送研究分支；若后续需要备份，必须先按仓库规则展示精确文件列表并只使用 `origin/backup/repro-local`。
 
 ### 2026-07-18 Route B R7/R8 Typed Fixed-Policy Shadow Session
 

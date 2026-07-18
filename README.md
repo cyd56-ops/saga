@@ -408,6 +408,23 @@ runtime shadow traffic, does not include BG8 latency/memory measurements, and
 is not approval to enter B1.5 enforcement. Deletion mutations use an explicitly
 separate research profile; the canonical V1 IR cannot omit or reorder facts.
 
+The companion runner exercises the trusted fact compiler and shadow adapter
+with real cryptography/OpenSSL ML-DSA-44 signatures over canonical request
+envelopes:
+
+```bash
+/home/kali/saga/.venv/bin/python -m experiments.route_b_shadow_runner \
+  --output /tmp/saga-route-b-real-shadow.json
+```
+
+It covers valid execution, scope denial, flow denial, expiry, transport-digest
+mismatch, missing and valid parent delegation, and an invalid signature. The
+report contains backend/provider metadata, predicate coverage, stable reasons,
+equivalence counts, and authority counts. Generated private seeds, public keys,
+and signatures remain memory-only and are not included in the JSON. This closes
+the Route B component-level BG1-BG6 shadow gate, but it still does not wire B1
+into an Agent network path or authorize B1.5 enforcement.
+
 Legacy configs that omit `mode` continue to infer `toy_compiled_research` from
 `verifier_flavor: compiled` or `toy_wrapper` from `verifier_flavor: wrapper`.
 
