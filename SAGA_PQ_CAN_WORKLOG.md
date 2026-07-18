@@ -1189,23 +1189,23 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - canonical request context / request envelope：`已完成`（第一阶段：sender/receiver/token/message/scope/time/capability/delegation/replay 绑定已接入 runtime gate）
 - Shamir STEP/RECT/MASK：`已完成`
 - compiled DNN verifier：`已完成`（A0 部分编译兼容路径保留；A1 已完成 post-parse fixed-ReLU toy arithmetic core 与 AG1-AG8 gate，parse/hash 仍为显式 preprocessing）
-- CNN + Ring/Module-LWE verifier：`未开始`（明确后置增强方向，不是当前 strict runtime-auth proof closure 的前置条件）
+- CNN + Ring/Module-LWE verifier：`进行中`（A2 第一阶段 fixed negacyclic-convolution module-lattice relation 已完成；当前是构造期矩阵展开 + fixed Linear core，不包含 CNN、NTT、Module-SIS 安全证明或 ML-DSA 神经化）
 - SAGA + PQ-CAN 执行层集成：`已完成`（第一阶段：strict receiving/initiating prompt、tool、memory、delegation、replay protected sinks 与 proof-hardening 证据闭环已落地）
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（shared core R2-R5、路线 B R6-R8、路线 A R12-R15 已形成实现；A1 AG1-AG8 通过后下一步为 R16/A2，B1.5 与 integration 仍后置）
+- 双路线认证研究与论文选择：`进行中`（shared core R2-R5、路线 B R6-R8、路线 A R12-R16 第一阶段已形成实现；下一步进入路线 B R9/B1.5，integration 仍后置）
 
 ### 3.4 阻塞 / 风险
 
 - 双路线当前阶段阻塞项：
   - 路线 B 已有 strict ML-DSA backend 和 fixed policy shadow，但尚无 B1.5 enforcement、持续负载或 Coordinator 集成
-  - 路线 A A1 已关闭 declared toy arithmetic core 的 AG2/AG3，但 parse/hash 不在 claim 内，且 A1 仍是 toy/research-only，不是生产验签器
+  - 路线 A A2 已建立 fixed negacyclic module relation，但 reference 构造明确可伪造，尚无 Module-SIS 安全证明、CNN/NTT backend 或 ML-DSA 神经化
   - 文件 marker 只能原子 reserve replay，不能保证 replay / revocation / capability / audit 整条提交链事务化
   - A shadow queue 已在路线 A 组件层完成，但尚未在 integration 分支接到 B-enforced 运行模式
 - 当前最大论文风险：
   - 路线 B 若只把预计算布尔值改写成 ReLU AND，工程可行但创新性不足；B0.5 必须建立 typed layout / provenance / predicate IR / trace，B2 必须直接计算原始授权关系，B3 必须用第二 policy profile 证明迁移能力
-  - 路线 A 的 toy arithmetic closure 已完成；下一论文风险转为 A2 能否在 module-lattice/ring relation 上复用工具链，并形成相对既有 secure-DNN transformation 的新增贡献
+  - 路线 A 已证明 module-lattice/ring relation 可复用 fixed toolchain；下一论文风险是该 fixed-matrix 展开相对普通算术电路的新增贡献有限，不能把工程 relation 等价误写成 Module-SIS 安全贡献
   - A 的单个 toy verifier 能运行、B 的单个 fixed policy 能运行，都不能单独作为“工具链完成”证据；必须分别通过 AG1-AG8 与 BG1-BG8
   - A/B 不能作为只改变一个变量的直接对照；签名 verifier、authorization evaluator 与 integration mode 必须分三个实验维度评估
 - 已于 `2026-07-14` 完成双路线工作文档更新后回归验证：
@@ -1901,7 +1901,7 @@ origin/backup/repro-local
 - 论文结果报告 A/B 四象限、reference equivalence、误拒绝、延迟、backlog、crash recovery、replay 与 protected-sink side effects。
 - toy / A0-A2 的非生产边界明确；路线 B 只通过 vetted external ML-DSA backend 获得 production-facing signature claim。
 
-状态：`进行中`（设计已完成第一版；代码、分支与实验尚未开始）
+状态：`进行中`（shared core R2-R5、路线 B R6-R8、路线 A R12-R16 第一阶段已完成；R9-R11、R17-R18 尚未开始）
 
 ## Phase U0：定义安全内核边界
 
@@ -2374,7 +2374,7 @@ protected sinks 至少覆盖：
 - R13. 路线 A0.5：实现 reusable arithmetic / Boolean gadget、scheme-independent projector、trace / boundary / complexity manifest：`已完成`（第一阶段：严格 guard、mod/equality/range/norm/aggregation、共享 projector core 与 manifest 已落地）
 - R14. 路线 A0.5 migration smoke：dense 与 tiny negacyclic projector 复用同一 core，并形成 AG1 / AG4-AG8 preliminary evidence：`已完成`（第一阶段：preliminary report 通过，AG2/AG3 保持 open，未宣称 A1/A2）
 - R15. 路线 A1：完成 fixed ReLU toy verifier core、关闭 AG2/AG3、汇总 AG1-AG8 gate report，并明确 parse / hash / numeric / real-valued claim 边界：`已完成`（第一阶段：20,736 tiny exhaustive + 32 normal differential + 1,025 modulo cases 零 mismatch；AG3 source closure 与 AG1-AG8 final report 通过；仍为 toy/research-only）
-- R16. 路线 A2：实现 research-only module-lattice / module-SIS-style fixed negacyclic-convolution verifier：`未开始`
+- R16. 路线 A2：实现 research-only module-lattice / module-SIS-style fixed negacyclic-convolution verifier：`已完成`（第一阶段：`A(z-c) mod q=t` research relation、rank^2 tiny-negacyclic projector、fixed mod/equality/range/norm/one-hot/aggregation、2,025 tiny exhaustive、64 rank-2 differential、6/6 mutation 与机器可读 manifest 已落地；不声称 Module-SIS 安全、CNN/NTT 或 ML-DSA 神经化）
 - R17. 定义并实现 durable authorization state machine 与 audit outbox；记录 file-marker profile 的 availability 限制：`未开始`
 - R18. 完成 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare`、公平实验、A/B 四象限统计与论文路线选择：`未开始`
 
@@ -2388,7 +2388,7 @@ protected sinks 至少覆盖：
    - 路线 B 推进 `B0 strict ML-DSA -> B0.5 typed toolchain -> B1/B1.5 -> B2 raw relations -> B3 portable policy compiler`，作为默认真实执行安全锚点。
    - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
    - R2-R5 P0/shared core 第一阶段已完成：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口均已落地。
-   - `core-api-v1` 与 A/B/integration 独立 worktree 已形成；路线 B R6-R8 和路线 A R12-R15 实现互不直接合并。
+   - `core-api-v1` 与 A/B/integration 独立 worktree 已形成；路线 B R6-R8 和路线 A R12-R16 实现互不直接合并。
    - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
 
@@ -2545,11 +2545,11 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 先完成路线 A R15 的规定全量测试、敏感文件检查和本地 checkpoint；A1 即使 AG1-AG8 通过仍只能表述为 toy arithmetic closure。
-2. R15 checkpoint 后按门槛进入 R16/A2：定义 research-only module-lattice/module-SIS-style relation，并复用 fixed negacyclic projector/toolchain，不继续扩大 toy 参数或优先神经化 SHA-256。
-3. A2 必须重新建立环关系 reference equivalence、数值/复杂度 manifest 和新增贡献边界；A1 的通过不能自动证明 A2 正确。
-4. 路线 B R6-R8 已在独立分支完成组件级 BG1-BG6；R9/B1.5 enforcement、A-shadow 集成和运行模式应在各自分支 checkpoint 后推进，仍禁止 A OR B/fallback。
-5. R17 durable state、J11 threat model 与 R18 公平实验继续后置，避免与 A2 初始 relation/circuit patch 混在一起。
+1. 先完成路线 A R16 的规定全量测试、敏感文件检查和本地 checkpoint；A2 只能表述为 research-only fixed ring relation closure。
+2. Route A checkpoint 后必须返回主工作树，登记新的 Route A 完整 HEAD，并运行 `scripts/check_worktree_progress.py`，不能再次只更新路线本地日志。
+3. 下一实现步骤切换到路线 B R9/B1.5：把已通过组件级 BG1-BG6 的 fixed policy 正式纳入 `standard_signature_valid AND fixed_policy_accept`，同时保留电路外标准 ML-DSA 必要条件和 Coordinator 唯一 Context commit。
+4. 随后按 R10/R11 推进 raw authorization relations 和第二 policy profile；A2 不继续扩大 toy 参数，也不把 fixed-matrix 展开夸大为 CNN/NTT 或 Module-SIS 安全证明。
+5. R17 durable state、J11 threat model 与 R18 integration/fair experiments 继续后置，仍禁止 A OR B/fallback。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2586,6 +2586,80 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-18 Route A R16 A2 Module-Lattice Ring Relation Session
+
+目标：
+
+- 在 A1 AG1-AG8 通过后进入 R16，定义明确标注 research-only 的 module-lattice relation。
+- 复用 A0.5/A1 fixed toolchain，把 ``R_q = Z_q[x]/(x^n+1)`` 负循环卷积纳入固定验签算术 core。
+- 独立建立 A2 reference equivalence、数值/复杂度、real-valued rejection、mutation 与 claim boundary，不把 A1 结论直接外推到 A2。
+
+已做工作：
+
+- 新增 `pq/toy_module_lattice.py`：
+  - `ToyModuleLatticeParameters` 固定 power-of-two ring degree、module rank、modulus、公开 matrix seed 和 small secret bound。
+  - `ToyModuleLatticeSignatureScheme` 提供 ``A(z-c) mod q=t`` 的确定性 keygen/sign/reference verify，challenge 是 SHA-256 派生的 signed one-hot module vector。
+  - wire contract 使用 canonical uint16 public target 与 int16 signed response；错误长度、非 canonical public 系数、超响应范围/范数和非 one-hot challenge 均拒绝。
+  - 构造明确可伪造，只作为普通 Python reference oracle，不声称 Module-SIS 或生产后量子安全。
+- 新增 `neural/a2_module_lattice_verifier.py`：
+  - `A2ModuleLatticeVerifierCore` 为每个公开 module-matrix 多项式复用 `TinyNegacyclicProjector` / `FixedProjectorCore`。
+  - claimed runtime core 组合 fixed negacyclic projection、module sum、subtraction、`FixedBoundedModulo`、equality、response/challenge range/L1、challenge weight ``==1`` 和 Boolean aggregation。
+  - `FixedModuleLatticeVerifier` 提供 bytes/bits/compound-bits fail-closed wrapper；私钥不进入 verifier。
+  - byte parse、signed decode、SHA-256 challenge 和构造期 negacyclic matrix expansion 明确位于 claimed circuit 外。
+  - `audit_a2_claimed_source()` 继承 A1 八个 evaluator 并增加两个 A2 module/ring evaluator，检查 Python ``%``、普通 ``==/!=``、数据分支和 reference `verify()` 调用。
+- 新增 `experiments/route_a_a2_gate_runner.py`：
+  - degree=2/rank=1/q=3 全 public/response/challenge 定义域 2,025 cases 穷举，零 mismatch。
+  - degree=4/rank=2 默认 relation 64 个固定种子 valid/wrong-message/tampered/arbitrary cases，零 mismatch。
+  - A2G1-A2G8 覆盖 source closure、binary/real/wire contract、numeric bounds、6/6 mutation、fixed state、projector reuse 和机器可读 manifest。
+  - 报告明确 `research_only=true`、`production_ready=false`、`ntt_implemented=false`、`ml_dsa_neuralized=false`。
+- 新增单元测试：
+  - `tests/test_toy_module_lattice.py`
+  - `tests/test_a2_module_lattice_verifier.py`
+  - `tests/test_route_a_a2_gate_runner.py`
+- 更新 `pq/__init__.py`、`neural/__init__.py`、README、SECURITY 和本工作文档。
+
+已验证：
+
+- `/home/kali/saga/.venv/bin/python -m py_compile pq/toy_module_lattice.py neural/a2_module_lattice_verifier.py experiments/route_a_a2_gate_runner.py tests/test_toy_module_lattice.py tests/test_a2_module_lattice_verifier.py tests/test_route_a_a2_gate_runner.py` -> success
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/test_toy_module_lattice.py tests/test_a2_module_lattice_verifier.py tests/test_route_a_a2_gate_runner.py` -> `17 passed, 7 subtests passed`
+- `/home/kali/saga/.venv/bin/python -m experiments.route_a_a2_gate_runner --output /tmp/saga-route-a-a2-gates.json` -> A2G1-A2G8 全部 `pass`，两个 corpus 零 mismatch，mutation `6/6`
+- `/home/kali/saga/.venv/bin/python -m pytest -q` -> `553 passed, 1 skipped, 130 subtests passed`
+- 唯一 skip 为独立 worktree 缺少 ignored 2026-05-27 end-to-end summaries，与 R16 无关。
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
+
+安全与论文边界：
+
+- 本轮没有手写或修改生产密码实现；A2 reference relation 明确可伪造、非生产，Route B vetted ML-DSA 仍是 production-facing signature anchor。
+- A2 fixed core 不持有私钥，不创建 Context、不授予 authority，也未接入 Agent/runtime/integration。
+- 当前 fixed negacyclic backend 是构造期矩阵展开后执行 fixed Linear 行，不是 CNN、NTT、Module-SIS 安全证明、完整 neural hash 或 ML-DSA 神经化。
+- 报告证明 declared bounded relation 上的实现等价与负向边界，不证明密码不可伪造性或任意参数下的数学正确性。
+
+当前 checkpoint 待提交文件范围：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `experiments/route_a_a2_gate_runner.py`
+- `neural/__init__.py`
+- `neural/a2_module_lattice_verifier.py`
+- `pq/__init__.py`
+- `pq/toy_module_lattice.py`
+- `tests/test_a2_module_lattice_verifier.py`
+- `tests/test_route_a_a2_gate_runner.py`
+- `tests/test_toy_module_lattice.py`
+
+敏感文件审查：
+
+- 待提交范围只包含源码、测试和文档，不包含 private keys、生成 secrets、本地 DB、模型 checkpoint、真实运行结果或 `paper/`。
+- A2 runner 的 JSON/stdout 位于 `/tmp`；报告不含公钥、私钥、secret seed 或签名字节，不进入仓库 checkpoint。
+
+Git / checkpoint 状态：
+
+- 本节将与 R16 源码、测试和文档形成 Route A 本地 checkpoint；最终 commit 以 `git log -1 --oneline` 为准。
+- Route A checkpoint 后必须回主工作树更新完整 HEAD 登记并运行 worktree progress guard；本轮不推送研究分支。
 
 ### 2026-07-18 Route A R15 A1 Toy Arithmetic Closure Session
 

@@ -12,6 +12,13 @@ from pq.signature_binding import (
 )
 from pq.signature_scheme import KeyPair, SignatureScheme
 from pq.toy_lwe import ToyLWEParameters, ToyLWESignatureScheme
+from pq.toy_module_lattice import (
+    ModuleMatrix,
+    ModuleVector,
+    Polynomial,
+    ToyModuleLatticeParameters,
+    ToyModuleLatticeSignatureScheme,
+)
 
 __all__ = [
     "EnvelopeCanonicalizationId",
@@ -20,6 +27,9 @@ __all__ = [
     "ML_DSA_CONTEXT_V1",
     "MLDSAAdapter",
     "MLDSAVerificationEvidence",
+    "ModuleMatrix",
+    "ModuleVector",
+    "Polynomial",
     "SignatureAlgorithmId",
     "SignatureBindingV1",
     "SignatureProfileId",
@@ -27,4 +37,6 @@ __all__ = [
     "SignatureScheme",
     "ToyLWEParameters",
     "ToyLWESignatureScheme",
+    "ToyModuleLatticeParameters",
+    "ToyModuleLatticeSignatureScheme",
 ]

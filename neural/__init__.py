@@ -10,6 +10,15 @@ from neural.a1_toy_verifier import (
     FullReLUToyLWEVerifier,
     audit_a1_claimed_source,
 )
+from neural.a2_module_lattice_verifier import (
+    A2ModuleLatticeBoundary,
+    A2ModuleLatticeComplexity,
+    A2ModuleLatticeTrace,
+    A2ModuleLatticeVerifierCore,
+    A2SourceClosureReport,
+    FixedModuleLatticeVerifier,
+    audit_a2_claimed_source,
+)
 from neural.compiled_lwe_dnn import (
     CompiledVerifierBoundary,
     CompiledToyLWEVerifier,
@@ -80,6 +89,11 @@ __all__ = [
     "A1ToyVerificationTrace",
     "A1ToyVerifierBoundary",
     "A1ToyVerifierComplexity",
+    "A2ModuleLatticeBoundary",
+    "A2ModuleLatticeComplexity",
+    "A2ModuleLatticeTrace",
+    "A2ModuleLatticeVerifierCore",
+    "A2SourceClosureReport",
     "BitLayout",
     "A0ShadowEvidence",
     "A0ShadowEvidenceOutbox",
@@ -103,6 +117,7 @@ __all__ = [
     "FixedEqualityGate",
     "FixedLinear",
     "FixedMatrixProjector",
+    "FixedModuleLatticeVerifier",
     "FixedModReduce",
     "FixedModuloComplexity",
     "FixedModSubtractor",
@@ -131,6 +146,7 @@ __all__ = [
     "SignatureVerifierWrapper",
     "assert_fixed_circuit",
     "audit_a1_claimed_source",
+    "audit_a2_claimed_source",
     "bits_to_bytes",
     "bytes_to_bits",
     "find_trainable_state",

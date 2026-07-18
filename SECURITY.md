@@ -464,6 +464,42 @@ security, a neural SHA-256 implementation, or production post-quantum security.
 The A1 verifier is not wired as execution authority; Route B and the shared
 Coordinator remain the production-facing enforcement direction.
 
+Route A A2 adds a research-only module-lattice relation and fixed
+negacyclic-convolution verifier. Its security boundary is deliberately narrow:
+
+- `ToyModuleLatticeSignatureScheme` defines `A(z-c) mod q = t` only as an
+  independent reference oracle. The response exposes secret-related linear
+  information, so the construction is not unforgeable and must never be used
+  for real authentication.
+- The signing secret is returned to the caller by test-only `keygen()` and is
+  consumed only by `sign()`. `FixedModuleLatticeVerifier` stores public matrix,
+  parameters, public inputs, and fixed modules; it does not store private key
+  bytes.
+- Each public module-matrix polynomial is expanded at construction time into a
+  `TinyNegacyclicProjector`. Runtime ring arithmetic reuses the same
+  `FixedProjectorCore` as A0.5, followed by fixed module sum, subtraction,
+  bounded modulo, equality, coordinate/L1 checks, exact one-hot challenge
+  weight, and hard Boolean aggregation.
+- The claimed A2 evaluators inherit the A1 source audit and add module
+  projection/relation symbols. Python `%`, ordinary `==/!=`, data-dependent
+  branch nodes, and calls to a reference `verify()` are forbidden in that
+  claimed runtime core.
+- uint16 public-target parsing, int16 response parsing, bit packing, SHA-256
+  one-hot challenge derivation, and negacyclic matrix expansion are explicit
+  preprocessing or construction-time steps outside the claimed circuit.
+- Software guards reject wrong rank/degree/length, bool, non-binary real bits,
+  NaN, Inf, coefficients outside the compiled domain, response norm overflow,
+  and challenges whose L1 weight is not exactly one. Rejection produces no
+  execution authority.
+
+The A2 gate report has zero mismatches over 2,025 exhaustive tiny ring cases
+and 64 seeded rank-2 cases, detects six deletion witnesses, and records fixed
+state, numeric bounds, structural complexity, latency, and Python peak memory.
+This evidence establishes only the first fixed-ring relation checkpoint. It is
+not a Module-SIS security proof, CNN/NTT implementation, neural SHA-256,
+neuralized ML-DSA, or production post-quantum authentication. Route B and the
+shared Coordinator remain the production-facing enforcement direction.
+
 `CAN` now applies a finite `[0,1]` software guard before Shamir MASK. Values
 inside the interval but outside the binary set still reach MASK and reject;
 bool, NaN, Inf, and values below zero or above one reject before fixed layers.
