@@ -435,6 +435,51 @@ Agent config helper or create executable authority. B0.5/B1 must first add typed
 authorization facts and reference-equivalent fixed-policy shadow evaluation;
 only the shared Coordinator may later commit a successful composite decision.
 
+### Route B B0.5/B1 Typed Fixed-Policy Shadow
+
+The V1 `AuthorizationInputLayout` has six ordered facts:
+`standard_signature_valid`, `request_envelope_valid`, `scope_authorized`,
+`flow_allowed`, `delegation_allowed`, and `time_window_valid`. Each
+`AuthorizationFact` requires a built-in `bool` and an
+`AuthorizationFactProvenance` whose source is fixed for that fact, whose source
+version is a stable identifier, and whose evidence digest is exactly 32 bytes.
+The layout encodes each Boolean as one uint8 and rejects raw mappings, missing or
+duplicate facts, layout/profile version drift, wrong lengths, and bytes other
+than zero or one. Integers, floats, NaN, Inf, strings, and truthy objects are not
+coerced to Boolean facts.
+
+`AuthorizationPredicateIR` binds the layout and policy profile to ordered
+`require_true` predicates with stable reject reasons. The ordinary
+`ReferenceAuthorizationPolicy` must contain all six V1 predicates in canonical
+order. `FixedPolicyAggregator` applies a fixed all-ones Linear map with threshold
+`n-1`, followed by fixed ReLU, and accepts only an exact built-in integer `1`.
+Its trace records the encoded typed input, each predicate output, first reject
+reason, fixed-layer intermediates, and hard output. Its complexity manifest is
+structural; it does not substitute deterministic layer counts for measured
+latency or memory.
+
+The B1 shadow evaluator requires the reference and fixed paths to share exactly
+the same layout and predicate IR. It also checks that the in-circuit
+`standard_signature_valid` fact agrees with the external
+`MLDSARouteBVerificationEvidence`. Every result is fixed to `shadow_only` and
+`authority_granted=false`; no Context constructor, Coordinator commit, or sink
+callback is exposed. Deleting any signature/envelope/scope/flow/delegation/time
+predicate is detected by the reference corpus before it could become an
+enforcement profile. Predicate-deletion tests use a separately identified
+research-mutation profile; a canonical V1 policy with missing or reordered
+predicates is rejected during IR construction.
+
+`experiments.fixed_policy_gate_runner` emits a deterministic machine-readable
+`B1_shadow_preliminary` report. The preliminary report covers all 64 Boolean
+inputs, a fixed-seed differential corpus, all six predicate-deletion mutations,
+inside/outside standard-signature consistency, exact 0/1 outputs, trace reason
+coverage, and absence of trainable state. It deliberately does not close the
+final BG1-BG6 enforcement gate: the corpus uses synthetic internally typed
+facts, not Agent runtime shadow traffic, and the provenance object is an
+in-process trusted-code contract rather than a cryptographic attestation against
+arbitrary code executing inside the trusted Python process. B1.5 remains
+forbidden until real shadow integration and final gate review are completed.
+
 The current compiled toy verifier has a deliberately narrow boundary:
 
 - fixed circuit: public matrix projections over the decoded signature and

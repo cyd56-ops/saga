@@ -374,6 +374,40 @@ than manually pre-hashing. The validated local environment uses cryptography
 keygen/sign/verify round trip; unavailable providers still fail closed without
 falling back to toy LWE.
 
+Route B B0.5/B1 now also has a typed fixed-policy shadow toolchain. Its V1
+layout contains six built-in Boolean facts: standard ML-DSA signature validity,
+canonical envelope validity, scope authorization, flow permission, delegation
+permission, and time-window validity. Every fact must carry the matching
+internal validator source, source version, and a 32-byte evidence digest. Raw
+mappings, integers used as booleans, floating-point values, unknown versions,
+wrong lengths, non-binary uint8 encodings, missing fields, and duplicate fields
+are rejected before fixed-policy evaluation.
+
+`FixedPolicyAggregator` implements the B1 AND as one fixed Linear layer followed
+by one fixed ReLU. It has no trainable parameters and accepts only the exact
+built-in integer output `1`. `FixedPolicyShadowEvaluator` compares it with the
+ordinary `ReferenceAuthorizationPolicy` using the same layout and predicate IR.
+Its evidence is permanently marked `shadow_only` and
+`authority_granted=false`; it cannot create a `LocalExecutionContext`, call the
+Coordinator, or invoke a protected sink.
+
+From the Route B worktree, generate the deterministic preliminary BG1-BG6
+report with module execution so the shared editable virtual environment does
+not resolve another worktree:
+
+```bash
+/home/kali/saga/.venv/bin/python -m experiments.fixed_policy_gate_runner \
+  --output /tmp/saga-route-b-fixed-policy-gates.json
+```
+
+The report covers the complete 64-case Boolean space, a fixed-seed differential
+corpus, predicate-deletion mutations, trace reason coverage, exact output types,
+and fixed-circuit training-state audit. It is intentionally labeled
+`B1_shadow_preliminary`: it contains synthetic typed facts rather than Agent
+runtime shadow traffic, does not include BG8 latency/memory measurements, and
+is not approval to enter B1.5 enforcement. Deletion mutations use an explicitly
+separate research profile; the canonical V1 IR cannot omit or reorder facts.
+
 Legacy configs that omit `mode` continue to infer `toy_compiled_research` from
 `verifier_flavor: compiled` or `toy_wrapper` from `verifier_flavor: wrapper`.
 
