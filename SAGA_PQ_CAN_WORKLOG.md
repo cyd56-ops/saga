@@ -524,7 +524,7 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 
 ## 3. 当前状态面板
 
-最后更新日期：`2026-07-16`
+最后更新日期：`2026-07-18`
 
 ### 3.1 代码实际状态
 
@@ -575,6 +575,18 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `SignedRequestExecutionGate` 默认使用 strict Coordinator mode；旧 `authorize()`、`consume_request()` 和 direct Context helper 不能在 strict 模式授予可执行 authority
   - 显式 `compatibility` mode 只保留历史测试、离线诊断和已声明降级路径；其 Context 标记为 uncommitted，strict Agent prompt 路径会拒绝
   - 当前仍不是 replay/revocation/capability/audit 的跨后端事务；file-marker 在 reserve 后崩溃可能永久拒绝合法重试，该限制保留给 R17
+- 路线 B 已在独立 `research/route-b-fixed-auth` 分支完成 R6-R8 第一阶段：
+  - `0163bfd` 接入 cryptography/OpenSSL 的 strict ML-DSA backend contract
+  - `4a1a5da` 建立 typed fact/provenance/predicate IR 与 fixed policy shadow
+  - `f53e4ae` 增加 trusted fact compiler 和真实 ML-DSA-44 shadow corpus runner
+  - 组件级 BG1-BG6 已关闭，但尚未进入 B1.5 execution enforcement
+- 路线 A R12-R14 当前已完成实现并进入 checkpoint 收尾：
+  - `BoundedA0ShadowQueue` / `InMemoryA0ShadowOutbox` 对公开材料执行有界异步 A0 shadow；queue full、关闭、超时、异常和结果分歧只形成 late evidence，固定 `authority_granted=False`
+  - 超时调用在返回前持续占用有界 call slot，避免 stuck verifier 触发无限线程；outbox 故障只增加 shadow metric
+  - A0.5 新增严格 `BinaryInputGuard`、`FixedModReduce`、固定 ReLU equality/range/norm/Boolean aggregation gadget
+  - dense 与 tiny negacyclic backend 共用 `FixedProjectorCore`、trace、boundary、complexity 和 manifest 接口
+  - preliminary runner 当前得到 139 个 gadget case、125 个 dense case、81 个 tiny negacyclic case零不一致，6/6 deletion witness 被检测
+  - AG1 / AG4-AG8 为 `preliminary_pass`；AG2 / AG3 明确保留 open，当前仍不是 A1 或 production verifier
 - 当前仓库已新增 canonical request envelope 模块：
   - `saga/messages.py`
 - 当前仓库已新增最小 `neural/` 实现：
@@ -1175,15 +1187,15 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（shared core R2-R5 第一阶段已完成并形成通过规定测试的 `core-api-v1` 固定 checkpoint；下一步从同一提交创建 A/B/integration 分支）
+- 双路线认证研究与论文选择：`进行中`（shared core R2-R5、路线 B R6-R8 与路线 A R12-R14 第一阶段均已形成实现；路线 A 下一步为 R15 A1 closure，路线 B B1.5 与 integration 仍后置）
 
 ### 3.4 阻塞 / 风险
 
-- 双路线实现前 P0 阻塞项：
-  - 路线 B 尚无真实 vetted ML-DSA backend wiring，也没有 fixed authorization circuit
-  - 路线 A 当前仅为 A0 部分编译，不能作为纯验签神经元完成态
+- 双路线当前阶段阻塞项：
+  - 路线 B 已有 strict ML-DSA backend 和 fixed policy shadow，但尚无 B1.5 enforcement、持续负载或 Coordinator 集成
+  - 路线 A 已有 A0/A0.5 preliminary 工具链，但 AG2/AG3 未关闭，不能作为纯验签神经元完成态
   - 文件 marker 只能原子 reserve replay，不能保证 replay / revocation / capability / audit 整条提交链事务化
-  - A shadow 尚无有界异步队列、资源预算、drop evidence 与 late discrepancy audit
+  - A shadow queue 已在路线 A 组件层完成，但尚未在 integration 分支接到 B-enforced 运行模式
 - 当前最大论文风险：
   - 路线 B 若只把预计算布尔值改写成 ReLU AND，工程可行但创新性不足；B0.5 必须建立 typed layout / provenance / predicate IR / trace，B2 必须直接计算原始授权关系，B3 必须用第二 policy profile 证明迁移能力
   - 路线 A 若停留在 A0，只适合作为 exploratory shadow artifact；A0.5 必须以第二 projector backend 证明工具链可迁移，A1/A2 需要完整 verifier 电路、环结构、复杂度数据和相对既有 secure-DNN transformation 的新增贡献
@@ -1222,6 +1234,17 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `.venv/bin/python -m pytest -q` -> `499 passed, 96 subtests passed`
   - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
   - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
+
+- 已于 `2026-07-18` 完成路线 A R12-R14 第一阶段后回归验证：
+  - `.venv/bin/python -m pytest -q tests/test_fixed_toolchain.py tests/test_shadow_queue.py tests/test_route_a_preliminary_gate_runner.py` -> `21 passed, 8 subtests passed`
+  - `.venv/bin/python -m experiments.route_a_preliminary_gate_runner` -> `preliminary_gates_passed=true`, `all_ag1_ag8_passed=false`
+  - `.venv/bin/python -m pytest -q` -> `519 passed, 1 skipped, 104 subtests passed`
+  - 唯一 skip 为 `tests/test_paper_tables.py:529` 缺少本地 ignored 历史 summary，与路线 A 功能无关
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `.venv/bin/python -m pip check` -> `No broken requirements found.`
   - `git diff --check` -> no output
   - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
 
@@ -2317,20 +2340,20 @@ protected sinks 至少覆盖：
 ### R. 双路线认证与论文选择
 
 - R0. 固定双路线职责、运行模式、论文归因与非降级安全边界：`已完成`（设计阶段：A0-A2、B0-B3、B-enforced+A-shadow、Dual 研究模式和多维实验已写入本文档）
-- R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（`research/runtime-auth-core` 已从验证基线 `1917836` 创建并形成 `core-api-v1`；A/B/integration 尚未创建，下一步从该固定提交分出）
+- R1. 固定“shared core -> A/B feature branches -> integration”分支拓扑、文件职责与合并方向：`已完成`（`core-api-v1` 为 `4bdda66`；A/B/integration 三个独立 branch/worktree 已创建）
 - R2. 收紧 generic `MLDSAAdapter.verify(...)` 返回类型并定义 backend error evidence：`已完成`（第一阶段：只接受内建 `bool` 的 `True`；缺 backend、接口畸形、异常、truthy 非布尔结果均形成稳定拒绝 evidence）
 - R3. 定义无歧义 `SignatureBindingV1`、profile / digest semantics 与拒绝规则：`已完成`（第一阶段：严格有序 TLV、golden bytes、typed enum、pure/HashML-DSA profile、固定 context、digest/canonicalization 版本和未知/重复/乱序/错误宽度/超长拒绝已落地）
 - R4. 定义 `RouteEvidence / CompositeEvidence / RuntimeAuthCoordinator`，并收口唯一 commit / Context 入口：`已完成`（第一阶段：evaluate 无状态提交；commit 重验 current facts、核对 canonical fingerprint、reserve replay 并创建 Coordinator-marked Context；重复/并发 commit 至多一个成功）
 - R5. 将旧 `authorize()` / direct Context helper 收进 compatibility 边界并补 strict bypass 测试：`已完成`（第一阶段：gate 默认 strict；旧 authorize/consume/direct Context helper 无法授予 authority；显式 compatibility Context 标记为 uncommitted 并被 strict Agent 拒绝）
-- R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`未开始`
-- R7. 路线 B0.5：实现 typed layout、fact provenance、predicate IR、reference policy、trace 与 complexity manifest：`未开始`
-- R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`未开始`
+- R6. 路线 B0：显式接入 vetted external ML-DSA backend，异常、超时、版本错误与畸形结果 fail-closed：`已完成`（第一阶段：strict contract 与 cryptography/OpenSSL ML-DSA backend 位于独立 route B 分支 `0163bfd`）
+- R7. 路线 B0.5：实现 typed layout、fact provenance、predicate IR、reference policy、trace 与 complexity manifest：`已完成`（第一阶段：typed toolchain 与 trusted fact compiler 位于 route B `4a1a5da` / `f53e4ae`）
+- R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`已完成`（第一阶段：组件级 BG1-BG6 与真实 ML-DSA-44 八场景 shadow corpus 已通过；不授予 authority）
 - R9. 路线 B1.5：通过 BG1-BG6 后把 fixed policy 正式纳入 B 的 AND，同时保留电路外标准验签必要条件：`未开始`
 - R10. 路线 B2：实现原始 scope / flow / delegation / time / digest 关系电路：`未开始`
 - R11. 路线 B3：用第二 policy / execution-surface profile 证明 PolicyCompiler / circuit profile 可迁移并完成 BG1-BG8：`未开始`
-- R12. 路线 A0：将 `partially_compiled_toy_shadow` 接入有界异步 shadow queue / outbox：`未开始`
-- R13. 路线 A0.5：实现 reusable arithmetic / Boolean gadget、scheme-independent projector、trace / boundary / complexity manifest：`未开始`
-- R14. 路线 A0.5 migration smoke：dense 与 tiny negacyclic projector 复用同一 core，并形成 AG1 / AG4-AG8 preliminary evidence：`未开始`
+- R12. 路线 A0：将 `partially_compiled_toy_shadow` 接入有界异步 shadow queue / outbox：`已完成`（第一阶段：有界 queue/outbox、timeout call slot、drop/error/disagreement late evidence 和无 authority contract 已通过测试）
+- R13. 路线 A0.5：实现 reusable arithmetic / Boolean gadget、scheme-independent projector、trace / boundary / complexity manifest：`已完成`（第一阶段：严格 guard、mod/equality/range/norm/aggregation、共享 projector core 与 manifest 已落地）
+- R14. 路线 A0.5 migration smoke：dense 与 tiny negacyclic projector 复用同一 core，并形成 AG1 / AG4-AG8 preliminary evidence：`已完成`（第一阶段：preliminary report 通过，AG2/AG3 保持 open，未宣称 A1/A2）
 - R15. 路线 A1：完成 fixed ReLU toy verifier core、关闭 AG2/AG3、汇总 AG1-AG8 gate report，并明确 parse / hash / numeric / real-valued claim 边界：`未开始`
 - R16. 路线 A2：实现 research-only module-lattice / module-SIS-style fixed negacyclic-convolution verifier：`未开始`
 - R17. 定义并实现 durable authorization state machine 与 audit outbox；记录 file-marker profile 的 availability 限制：`未开始`
@@ -2346,7 +2369,7 @@ protected sinks 至少覆盖：
    - 路线 B 推进 `B0 strict ML-DSA -> B0.5 typed toolchain -> B1/B1.5 -> B2 raw relations -> B3 portable policy compiler`，作为默认真实执行安全锚点。
    - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
    - R2-R5 P0/shared core 第一阶段已完成：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口均已落地。
-   - 通过规定测试的 `core-api-v1` checkpoint 已形成；下一步从同一提交分出 A、B 与 integration，避免三条分支同时重构公共 gate。
+   - `core-api-v1` 与 A/B/integration 独立 worktree 已形成；路线 B R6-R8 和路线 A R12-R14 第一阶段实现互不直接合并。
    - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
 
@@ -2503,10 +2526,11 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. 当前 `research/runtime-auth-core` 已完成 R2-R5 shared core 第一阶段，并形成通过规定测试的 `core-api-v1` 固定 checkpoint；A/B/integration 分支尚未创建。
-2. 下一步从同一 `core-api-v1` 提交创建 A、B 和 integration 三个分支 / worktree，不在分支创建时混入功能代码。
-3. A/B 并行第一阶段：B 按 R6-R8 完成 B0/B0.5/B1 shadow 与 BG1-BG6；A 按 R12-R14 完成 A0/A0.5、tiny ring smoke 和 preliminary AG evidence，不提前进入强制 B1.5 或声称 A1/A2。
-4. 路线 B 通过 BG1-BG6 后才按 R9-R11 进入 B1.5-B3；路线 A 必须先在 R15 完成 A1 和全部 AG1-AG8，再按 R16 进入 A2。J11 threat model、durable state machine、Dual 与论文实验按 R17-R18 推进，不与 shared-core P0 混在同一 patch。
+1. 先完成路线 A R12-R14 的规定全量测试、敏感文件检查和本地 checkpoint；当前 preliminary report 不能被表述为 A1 或生产验签器。
+2. 路线 A 下一阶段是 R15：把 toy verifier 的既定 core 边界完整收口，完成端到端 reference equivalence，关闭 AG2/AG3，并重新汇总 AG1-AG8。
+3. R15 必须明确 parse/hash 是否属于 claim，并消除 claimed circuit 内普通 `%`、`==` 与未声明的数据相关分支；未全部通过 AG1-AG8 时不得进入 R16/A2。
+4. 路线 B R6-R8 已在独立分支完成组件级 BG1-BG6；R9/B1.5 enforcement、A-shadow 集成和运行模式应在各自分支 checkpoint 后推进，仍禁止 A OR B/fallback。
+5. R17 durable state、J11 threat model 与 R18 公平实验继续后置，避免与 R15 电路闭环混在同一 patch。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2524,7 +2548,7 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 - 两个旧 calendar agent 证书已重命名为：
   - `saga/user/emma_johnson@gmail.com:calendar_agent/agent.crt.stale-20260516`
   - `saga/user/raj.sharma@gmail.com:calendar_agent/agent.crt.stale-20260516`
-- 当前 `2026-07-14` 双路线方案更新开始前工作区为 clean，且 `origin/repro-local` 与 `origin/backup/repro-local` 均已同步到 `34caff7`；本次只修改工作文档。
+- `core-api-v1` 与 A/B/integration 本地 worktree 已创建；路线 A、B 研究分支默认只保留本地 checkpoint，不自动推送或改写 `origin/backup/repro-local`。
 - 历史运行环境中仍存在生成凭据、实验结果和本地 DB；任何后续提交都必须以实际 `git status` / staged file list 为准，不得因本次文档范围干净而放宽检查。
 - 不自动 push 到主开发分支；稳定 integration checkpoint 默认目标仍是 `origin/backup/repro-local`，推送前必须展示确切文件列表。
 
@@ -2543,6 +2567,75 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-18 Route A R12-R14 Shadow and A0.5 Toolchain Session
+
+目标：
+
+- 将现有 A0 partially compiled toy verifier 接入有界异步 shadow queue/outbox。
+- 建立 A0.5 reusable gadget/projector/trace/boundary/complexity 工具链。
+- 用 dense 与 tiny negacyclic 两个 backend 形成 AG1/AG4-AG8 preliminary evidence，同时保持 AG2/AG3 open。
+
+已做工作：
+
+- 新增 `neural/shadow_queue.py`：
+  - shadow job 只接受不可变公开 bytes，不保存私钥。
+  - non-blocking bounded queue 和 bounded outbox 对 queue full/closed、timeout、verifier error、invalid output 与 reference disagreement 生成 late evidence。
+  - submission/evidence 固定 `authority_granted=False`；evidence 不复制 pk/message/signature 或异常消息。
+  - timeout 调用在自行返回前继续占用 bounded call slot，避免无限 retry thread；outbox 故障只增加 metric。
+- 新增 `neural/fixed_toolchain.py`：
+  - `BinaryInputGuard`、`FixedModReduce`、固定 ReLU `FixedEquality`、`FixedRangeNormCheck` 与 `FixedBooleanAggregator`。
+  - `FixedProjectorCore`、`DenseFixedProjector`、`TinyNegacyclicProjector` 与统一 protocol/trace/boundary/complexity/manifest。
+  - 构造期计算 worst-case output bound，超过 prototype IEEE-754 精确整数范围时拒绝。
+- 新增 `experiments/route_a_preliminary_gate_runner.py`：
+  - 139 个 gadget exhaustive cases 零 mismatch。
+  - dense 125 个、tiny negacyclic 81 个 reference-equivalence cases 零 mismatch。
+  - mod/equality/range/norm/MASK/aggregation 共 6/6 deletion witness detected。
+  - 输出层数、固定参数量、数值上界、批次延迟、Python peak memory 和 reference equivalence manifest。
+  - AG1/AG4-AG8 为 `preliminary_pass`；AG2/AG3 明确 open，`all_ag1_ag8_passed=false`。
+- 新增/更新测试、`neural/__init__.py`、README、SECURITY 和本工作文档。
+
+已验证：
+
+- `.venv/bin/python -m pytest -q tests/test_fixed_toolchain.py tests/test_shadow_queue.py tests/test_route_a_preliminary_gate_runner.py` -> `21 passed, 8 subtests passed`
+- `.venv/bin/python -m experiments.route_a_preliminary_gate_runner` -> preliminary gate run passed；AG2/AG3 open
+- `.venv/bin/python -m pytest -q` -> `519 passed, 1 skipped, 104 subtests passed`
+- 唯一 skip：`tests/test_paper_tables.py:529` 缺少本地 ignored end-to-end summaries，与本轮功能无关
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `.venv/bin/python -m pip check` -> `No broken requirements found.`
+- `git diff --check` -> no output
+- 未发现 ruff/mypy 配置，因此未运行对应检查。
+
+安全边界：
+
+- A0/A0.5 仍是 toy/research-only shadow，不提供执行授权 API，不替代路线 B 的标准 ML-DSA 决策。
+- `FixedModReduce` 明确保留普通 Python `%` hard gate；当前没有 A1 end-to-end closure，因此 AG2/AG3 未关闭。
+- tiny negacyclic backend 只证明 projector 工具链迁移，不是 production ring-LWE/ML-DSA 实现。
+- integration 尚未把 A shadow 接到 B-enforced 主路径；该接线必须继续保持异步、无 authority 和禁止 OR/fallback。
+
+当前 checkpoint 待提交文件范围：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `experiments/route_a_preliminary_gate_runner.py`
+- `neural/__init__.py`
+- `neural/fixed_toolchain.py`
+- `neural/shadow_queue.py`
+- `tests/test_fixed_toolchain.py`
+- `tests/test_route_a_preliminary_gate_runner.py`
+- `tests/test_shadow_queue.py`
+
+敏感文件审查：
+
+- 待提交范围只包含源码、测试与文档；不包含 private keys、生成 secrets、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+- runner 只把报告打印到 stdout；本轮没有把包含动态测量值的 JSON artifact 写入仓库。
+
+Git / checkpoint 状态：
+
+- 本节与 R12-R14 源码、测试和文档一起形成本地 route A checkpoint；最终 commit 以 `git log -1 --oneline` 为准。
+- 不自动推送研究分支；若后续需要备份，必须先展示精确文件列表，并只使用 `origin/backup/repro-local`。
 
 ### 2026-07-16 R4/R5 Runtime Auth Coordinator Session
 

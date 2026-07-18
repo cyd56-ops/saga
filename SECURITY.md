@@ -405,8 +405,36 @@ The current compiled toy verifier has a deliberately narrow boundary:
   all-coordinate acceptance aggregation.
 
 The SHA-256 challenge derivation is not implemented as a neural hash circuit.
-Future work may move more arithmetic gadgets into fixed modules, but the current
-security claims and tests must describe the preprocessing boundary explicitly.
+The A0 verifier therefore remains a partially compiled research shadow rather
+than a complete neural signature verifier.
+
+Route A A0 shadow execution uses an explicitly non-authoritative boundary:
+
+- shadow jobs contain immutable public key, message, and signature bytes only;
+- the queue and in-memory evidence outbox are bounded;
+- queue-full, closed, timeout, verifier-error, invalid-output, and reference
+  disagreement states produce late evidence with `authority_granted=False`;
+- evidence contains a domain-separated job digest and stable error type, not
+  the public material or exception message;
+- a timed-out verifier call keeps its bounded call slot until it returns, so a
+  stuck verifier cannot cause unbounded retry-thread creation;
+- outbox failure changes only shadow metrics and cannot authorize execution.
+
+The Route A A0.5 toolchain is also research-only. `FixedEquality`,
+`FixedRangeNormCheck`, and `FixedBooleanAggregator` use fixed Linear/ReLU
+modules over declared bounded integer domains. Dense and tiny negacyclic
+projectors compile through the same `FixedProjectorCore`; numeric manifests
+reject configurations whose worst-case output exceeds the exact IEEE-754
+integer range used by this prototype. Input guards reject bool, non-integral
+values, NaN, Inf, wrong widths, and declared-bound violations before those
+fixed modules run.
+
+The A0.5 gate runner may report preliminary passes for AG1 and AG4-AG8, but it
+always leaves AG2 and AG3 open. It does not contain an end-to-end A1 verifier,
+and `FixedModReduce` explicitly uses ordinary Python `%` as a deterministic
+hard gate. Consequently, the current report is migration and toolchain
+evidence, not proof of a complete fixed-circuit verifier and not production
+post-quantum authentication.
 
 Current PQ-CAN request signing protects request authentication only. Unless a
 separate post-quantum key exchange or PQ TLS story is added, this repository

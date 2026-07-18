@@ -370,6 +370,28 @@ derivation stays deterministic preprocessing, and modular subtraction/equality
 aggregation are deterministic hard gates. This prototype does not claim a
 neural implementation of SHA-256 or a fully neuralized hash-to-challenge path.
 
+Route A now also has research-only A0/A0.5 components. A0 jobs can run through
+`BoundedA0ShadowQueue`, which accepts only immutable public material and emits
+late, non-authoritative evidence. Queue exhaustion, timeout, verifier errors,
+and reference disagreement never grant authority or block the execution path.
+This branch provides the component; wiring it behind Route B belongs to the
+dual-route integration stage.
+
+The A0.5 toolchain provides strict binary/integer guards, bounded fixed
+equality, range/norm and Boolean aggregation gadgets, plus dense and tiny
+negacyclic projectors backed by the same fixed-linear core. Its preliminary
+gate report is available with:
+
+```bash
+.venv/bin/python -m experiments.route_a_preliminary_gate_runner
+```
+
+The report measures gadget/projector equivalence, numeric bounds, mutation
+witnesses, latency, and Python peak memory. It deliberately leaves AG2 and AG3
+open: there is no end-to-end A1 verifier closure yet, and `FixedModReduce`
+still declares ordinary Python modulo as an A0.5 hard gate. These components
+are not production cryptography and do not authorize execution.
+
 The current `experiments/schedule_meeting.py`, `experiments/expense_report.py`,
 and `experiments/create_blogpost.py` entrypoints will automatically call the
 runtime helper when this block is present.
