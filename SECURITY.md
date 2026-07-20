@@ -410,9 +410,9 @@ For the pure profile, the vetted backend receives the canonical binding bytes
 directly through its pure ML-DSA interface. For a HashML-DSA profile, the vetted
 backend must apply the profile's standard pre-hash to those same binding bytes.
 Callers must not manually pre-hash the binding and then label that operation as
-HashML-DSA. The current module only fixes this protocol contract; R6 still must
-provide an explicit backend shim that enforces the selected profile, parameter
-set, context, backend version, and fail-closed error behavior.
+HashML-DSA. The explicit Route B shim and cryptography/OpenSSL backend live on
+the independent Route B branch; integration must still preserve the selected
+profile, parameter set, context, backend version, and fail-closed behavior.
 
 The current compiled toy verifier has a deliberately narrow boundary:
 
@@ -424,8 +424,104 @@ The current compiled toy verifier has a deliberately narrow boundary:
   all-coordinate acceptance aggregation.
 
 The SHA-256 challenge derivation is not implemented as a neural hash circuit.
-Future work may move more arithmetic gadgets into fixed modules, but the current
-security claims and tests must describe the preprocessing boundary explicitly.
+The A0 verifier therefore remains a partially compiled research shadow rather
+than a complete neural signature verifier.
+
+Route A A0 shadow execution uses an explicitly non-authoritative boundary:
+
+- shadow jobs contain immutable public key, message, and signature bytes only;
+- the queue and in-memory evidence outbox are bounded;
+- queue-full, closed, timeout, verifier-error, invalid-output, and reference
+  disagreement states produce late evidence with `authority_granted=False`;
+- evidence contains a domain-separated job digest and stable error type, not
+  the public material or exception message;
+- a timed-out verifier call keeps its bounded call slot until it returns, so a
+  stuck verifier cannot cause unbounded retry-thread creation;
+- outbox failure changes only shadow metrics and cannot authorize execution.
+
+The Route A A0.5 toolchain is also research-only. `FixedEquality`,
+`FixedRangeNormCheck`, and `FixedBooleanAggregator` use fixed Linear/ReLU
+modules over declared bounded integer domains. Dense and tiny negacyclic
+projectors compile through the same `FixedProjectorCore`; numeric manifests
+reject configurations whose worst-case output exceeds the exact IEEE-754
+integer range used by this prototype. Input guards reject bool, non-integral
+values, NaN, Inf, wrong widths, and declared-bound violations before those
+fixed modules run.
+
+The A0.5 gate runner may report preliminary passes for AG1 and AG4-AG8, but it
+always leaves AG2 and AG3 open. It does not contain an end-to-end A1 verifier,
+and `FixedModReduce` explicitly uses ordinary Python `%` as a deterministic
+hard gate. Consequently, the current report is migration and toolchain
+evidence, not proof of a complete fixed-circuit verifier and not production
+post-quantum authentication.
+
+Route A A1 adds `FullReLUToyLWEVerifier` and a complete claimed toy arithmetic
+core after preprocessing. The core uses the shared dense projector, fixed
+subtraction, `FixedBoundedModulo`, fixed equality, range/L1 checks, and fixed
+Boolean aggregation. `FixedBoundedModulo` expands a finite integer domain into
+a construction-time fixed number of ReLU thresholds; it rejects configurations
+above 65,536 thresholds rather than allocating unbounded circuit state.
+
+The A1 boundary is deliberately narrower than the byte-level verifier API:
+
+- strict byte decoding, bit packing, and domain-separated SHA-256 challenge
+  derivation are deterministic preprocessing, not claimed neural circuits;
+- software guards enforce exact widths, built-in numeric types, finite
+  `[0,1]` CAN inputs, binary bit vectors, and bounded integer vectors;
+- the claimed arithmetic evaluator list is statically audited for Python `%`,
+  ordinary `==/!=`, data-dependent `if/while/match`, and calls to a reference
+  `verify()` method;
+- numeric manifests bound every compiled projection/modulo intermediate below
+  the exact IEEE-754 integer limit used by the fixed Linear implementation;
+- the A1 object contains public toy parameters only and no signing private key.
+
+The current A1 gate report passes AG1-AG8 with 20,736 exhaustive tiny relation
+cases, 32 deterministic default-parameter differential cases, 1,025 bounded
+modulo cases, two projector backends, and six deletion witnesses. This is a
+testable closure of the declared toy arithmetic core, not a proof of toy scheme
+security, a neural SHA-256 implementation, or production post-quantum security.
+The A1 verifier is not wired as execution authority; Route B and the shared
+Coordinator remain the production-facing enforcement direction.
+
+Route A A2 adds a research-only module-lattice relation and fixed
+negacyclic-convolution verifier. Its security boundary is deliberately narrow:
+
+- `ToyModuleLatticeSignatureScheme` defines `A(z-c) mod q = t` only as an
+  independent reference oracle. The response exposes secret-related linear
+  information, so the construction is not unforgeable and must never be used
+  for real authentication.
+- The signing secret is returned to the caller by test-only `keygen()` and is
+  consumed only by `sign()`. `FixedModuleLatticeVerifier` stores public matrix,
+  parameters, public inputs, and fixed modules; it does not store private key
+  bytes.
+- Each public module-matrix polynomial is expanded at construction time into a
+  `TinyNegacyclicProjector`. Runtime ring arithmetic reuses the same
+  `FixedProjectorCore` as A0.5, followed by fixed module sum, subtraction,
+  bounded modulo, equality, coordinate/L1 checks, exact one-hot challenge
+  weight, and hard Boolean aggregation.
+- The claimed A2 evaluators inherit the A1 source audit and add module
+  projection/relation symbols. Python `%`, ordinary `==/!=`, data-dependent
+  branch nodes, and calls to a reference `verify()` are forbidden in that
+  claimed runtime core.
+- uint16 public-target parsing, int16 response parsing, bit packing, SHA-256
+  one-hot challenge derivation, and negacyclic matrix expansion are explicit
+  preprocessing or construction-time steps outside the claimed circuit.
+- Software guards reject wrong rank/degree/length, bool, non-binary real bits,
+  NaN, Inf, coefficients outside the compiled domain, response norm overflow,
+  and challenges whose L1 weight is not exactly one. Rejection produces no
+  execution authority.
+
+The A2 gate report has zero mismatches over 2,025 exhaustive tiny ring cases
+and 64 seeded rank-2 cases, detects six deletion witnesses, and records fixed
+state, numeric bounds, structural complexity, latency, and Python peak memory.
+This evidence establishes only the first fixed-ring relation checkpoint. It is
+not a Module-SIS security proof, CNN/NTT implementation, neural SHA-256,
+neuralized ML-DSA, or production post-quantum authentication. Route B and the
+shared Coordinator remain the production-facing enforcement direction.
+
+`CAN` now applies a finite `[0,1]` software guard before Shamir MASK. Values
+inside the interval but outside the binary set still reach MASK and reject;
+bool, NaN, Inf, and values below zero or above one reject before fixed layers.
 
 Current PQ-CAN request signing protects request authentication only. Unless a
 separate post-quantum key exchange or PQ TLS story is added, this repository

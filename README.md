@@ -400,6 +400,65 @@ derivation stays deterministic preprocessing, and modular subtraction/equality
 aggregation are deterministic hard gates. This prototype does not claim a
 neural implementation of SHA-256 or a fully neuralized hash-to-challenge path.
 
+Route A now also has research-only A0/A0.5 components. A0 jobs can run through
+`BoundedA0ShadowQueue`, which accepts only immutable public material and emits
+late, non-authoritative evidence. Queue exhaustion, timeout, verifier errors,
+and reference disagreement never grant authority or block the execution path.
+This branch provides the component; wiring it behind Route B belongs to the
+dual-route integration stage.
+
+The A0.5 toolchain provides strict binary/integer guards, bounded fixed
+equality, range/norm and Boolean aggregation gadgets, plus dense and tiny
+negacyclic projectors backed by the same fixed-linear core. Its preliminary
+gate report is available with:
+
+```bash
+.venv/bin/python -m experiments.route_a_preliminary_gate_runner
+```
+
+The report measures gadget/projector equivalence, numeric bounds, mutation
+witnesses, latency, and Python peak memory. It deliberately leaves AG2 and AG3
+open because `FixedModReduce` still declares ordinary Python modulo as an A0.5
+hard gate.
+
+The separate A1 research verifier closes the declared post-parse arithmetic
+core with fixed Linear/ReLU projector, bounded modulo, equality, range/norm,
+and Boolean aggregation modules. Run its final gate report with:
+
+```bash
+.venv/bin/python -m experiments.route_a_a1_gate_runner
+```
+
+The checked A1 report covers 20,736 exhaustive tiny relation cases, 32 seeded
+default-parameter differential cases, 1,025 signed modulo cases, and a static
+audit of the eight claimed evaluator symbols. It currently reports AG1-AG8 as
+passed. Byte parsing and domain-separated SHA-256 challenge derivation remain
+explicit preprocessing outside the claim. `FullReLUToyLWEVerifier` is still
+toy/research-only, is not the default execution authority, and is not a
+production post-quantum signature implementation.
+
+Route A A2 now provides a first research-only module-lattice relation over
+`R_q = Z_q[x]/(x^n + 1)`. `ToyModuleLatticeSignatureScheme` is an intentionally
+insecure reference oracle for `A(z-c) mod q = t`; it exists only to generate
+deterministic public test material and must not be used for authentication.
+`FixedModuleLatticeVerifier` compiles each public module-matrix entry through
+the existing `TinyNegacyclicProjector`, then applies fixed module summation,
+subtraction, bounded ReLU modulo, equality, response/challenge norm checks, and
+hard Boolean aggregation. Run the A2 report with:
+
+```bash
+.venv/bin/python -m experiments.route_a_a2_gate_runner
+```
+
+The report covers all 2,025 inputs in a tiny degree-2/rank-1 relation domain,
+64 deterministic degree-4/rank-2 differential cases, claimed-source closure,
+binary/real-valued input rejection, six mutation witnesses, fixed-state audit,
+numeric bounds, latency, and Python peak memory. Byte parsing and SHA-256
+one-hot challenge derivation remain preprocessing. Negacyclic matrices are
+expanded at construction time and executed by fixed Linear rows; this first
+A2 checkpoint does not implement a CNN layer, NTT, Module-SIS security proof,
+or ML-DSA neuralization, and it does not grant runtime authority.
+
 The current `experiments/schedule_meeting.py`, `experiments/expense_report.py`,
 and `experiments/create_blogpost.py` entrypoints will automatically call the
 runtime helper when this block is present.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
+from neural.fixed_toolchain import UnitIntervalInputGuard
 from neural.shamir_layers import MASK, STEP13
 from neural.verifier_wrapper import CompoundBitVerifier
 
@@ -17,6 +18,7 @@ class CAN:
         self.step_in = STEP13()
         self.step_out = STEP13()
         self.mask = MASK()
+        self.input_domain_guard = UnitIntervalInputGuard()
 
     def _step_inputs(self, bits: Sequence[int | float]) -> list[float]:
         """Project inputs through ``STEP_1_3`` coordinate-wise."""
@@ -24,12 +26,16 @@ class CAN:
 
     def can_accept_compound_bits(self, bits: Sequence[int | float]) -> int:
         """Return a hard ``0`` or ``1`` for a concatenated request bit vector."""
-        mask_value = self.mask(bits)
+        try:
+            guarded_bits = self.input_domain_guard(bits)
+        except (TypeError, ValueError):
+            return 0
+        mask_value = self.mask(guarded_bits)
         if mask_value > 0.0:
             return 0
 
         # 只有所有坐标通过 MASK 的二值检查后，才把比特交给签名 verifier。
-        stepped_bits = self._step_inputs(bits)
+        stepped_bits = self._step_inputs(guarded_bits)
         try:
             raw_verify_output = self.verifier.verify_compound_bits(stepped_bits)
         except ValueError:
@@ -54,4 +60,10 @@ class CAN:
 
     def submodules(self) -> tuple[object, ...]:
         """返回 CAN 依赖的固定验签器与 Shamir 保护层。"""
-        return (self.verifier, self.step_in, self.step_out, self.mask)
+        return (
+            self.verifier,
+            self.input_domain_guard,
+            self.step_in,
+            self.step_out,
+            self.mask,
+        )

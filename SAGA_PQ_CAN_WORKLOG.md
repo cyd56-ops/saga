@@ -604,17 +604,17 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - 当前已新增显式编译边界对象 `CompiledVerifierBoundary`
   - `ProjectionTrace` 已记录 `challenge_source="deterministic_sha256_preprocessing:not_neural_hash"`
   - README / SECURITY / 设计文档均已固定：SHA-256 challenge 派生不是神经哈希电路，而是 deterministic preprocessing
-  - 因此当前实现按新双路线术语属于 `A0 = partially_compiled_toy_shadow`，不能称为 A1 `full_relu_toy_verifier`
+  - 因此 `CompiledToyLWEVerifier` 兼容类仍属于 `A0 = partially_compiled_toy_shadow`；新的 A1 独立类不改变该旧边界
 - 当前仓库已新增固定电路审计 helper：
   - `neural/fixed_circuit.py`
   - `assert_fixed_circuit(...)`
   - `find_trainable_state(...)`
   - 当前已覆盖 compiled verifier 与 `CAN` 组合的递归不可训练状态检查
-- 当前 Shamir/CAN 软件实现仍依赖额外 Python 边界来获得硬拒绝语义：
+- 当前 Shamir/CAN 软件实现已补有限单位区间 guard，并继续依赖明确 Python 边界获得硬拒绝语义：
+  - `UnitIntervalInputGuard` 在 MASK 前拒绝 bool、`<0`、`>1`、NaN 与 Inf；`[0,1]` 内非二进制实数仍交由 MASK 拒绝
   - `CAN.can_accept_compound_bits(...)` 先以 `mask_value > 0` 提前返回，再用最终精确 `== 1.0` 收敛为整数
-  - 当前 RECT/MASK 对 `<0`、`>1`、NaN、Inf 与极端浮点值没有形成完整的软件输入域保证
   - 路线 B 必须在入电路前执行严格 typed / finite / length / value 检查，不能把 Shamir 公式作为唯一生产边界
-  - 路线 A 必须明确数学输入域并补越界实数与软件特殊浮点拒绝，才能扩大 real-valued security claim
+  - 路线 A real-valued claim 只覆盖上述 software guard + STEP/RECT/MASK 组合，不声称 RECT 单独处理任意 IEEE-754 特殊值
 - 当前 `neural/verifier_wrapper.py` 仍保留原始 wrapper 路径：
   - 已能验证接口与执行层接线
   - 当前 compiled DNN verifier 与 wrapper verifier 并存，便于逐步替换和回归比较
@@ -1281,6 +1281,28 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - 主工作树 `.venv/bin/python -m pytest -q` -> `506 passed, 96 subtests passed`
   - 主工作树 `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
   - 主工作树 `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- 已于 `2026-07-18` 完成路线 A R12-R14 第一阶段后回归验证：
+  - `.venv/bin/python -m pytest -q tests/test_fixed_toolchain.py tests/test_shadow_queue.py tests/test_route_a_preliminary_gate_runner.py` -> `21 passed, 8 subtests passed`
+  - `.venv/bin/python -m experiments.route_a_preliminary_gate_runner` -> `preliminary_gates_passed=true`, `all_ag1_ag8_passed=false`
+  - `.venv/bin/python -m pytest -q` -> `519 passed, 1 skipped, 104 subtests passed`
+  - 唯一 skip 为 `tests/test_paper_tables.py:529` 缺少本地 ignored 历史 summary，与路线 A 功能无关
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `.venv/bin/python -m pip check` -> `No broken requirements found.`
+  - `git diff --check` -> no output
+  - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
+
+- 已于 `2026-07-18` 完成路线 A R15 A1 toy arithmetic closure 后回归验证：
+  - `.venv/bin/python -m pytest -q tests/test_a1_toy_verifier.py` -> `10 passed, 7 subtests passed`
+  - `.venv/bin/python -m pytest -q tests/test_route_a_a1_gate_runner.py tests/test_route_a_preliminary_gate_runner.py` -> `7 passed`
+  - `.venv/bin/python -m experiments.route_a_a1_gate_runner --output /tmp/saga-route-a-a1-gates.json` -> AG1-AG8 全部 `pass`
+  - `.venv/bin/python -m pytest -q` -> `536 passed, 1 skipped, 123 subtests passed`
+  - 唯一 skip 为 `tests/test_paper_tables.py:529` 缺少本地 ignored 历史 summary，与 R15 无关
+  - `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+  - `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `.venv/bin/python -m pip check` -> `No broken requirements found.`
+  - `git diff --check` -> no output
+  - 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`
 
 - 已在本环境实际跑通：
   - Python 依赖导入
@@ -2598,7 +2620,7 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
 - 两个旧 calendar agent 证书已重命名为：
   - `saga/user/emma_johnson@gmail.com:calendar_agent/agent.crt.stale-20260516`
   - `saga/user/raj.sharma@gmail.com:calendar_agent/agent.crt.stale-20260516`
-- 当前 `2026-07-14` 双路线方案更新开始前工作区为 clean，且 `origin/repro-local` 与 `origin/backup/repro-local` 均已同步到 `34caff7`；本次只修改工作文档。
+- `core-api-v1` 与 A/B/integration 本地 worktree 已创建；路线 A、B 研究分支默认只保留本地 checkpoint，不自动推送或改写 `origin/backup/repro-local`。
 - 历史运行环境中仍存在生成凭据、实验结果和本地 DB；任何后续提交都必须以实际 `git status` / staged file list 为准，不得因本次文档范围干净而放宽检查。
 - 不自动 push 到主开发分支；稳定 integration checkpoint 默认目标仍是 `origin/backup/repro-local`，推送前必须展示确切文件列表。
 
@@ -2974,6 +2996,223 @@ Git / checkpoint 状态：
 
 - 本节将作为 core 分支上的文档 checkpoint；三条路线分支继续固定在 `core-api-v1` 提交 `4bdda66`。
 - 下一步进入 `/home/kali/saga/.worktrees/route-b-fixed-auth` 执行 R6。
+### 2026-07-18 Route A R16 A2 Module-Lattice Ring Relation Session
+
+目标：
+
+- 在 A1 AG1-AG8 通过后进入 R16，定义明确标注 research-only 的 module-lattice relation。
+- 复用 A0.5/A1 fixed toolchain，把 ``R_q = Z_q[x]/(x^n+1)`` 负循环卷积纳入固定验签算术 core。
+- 独立建立 A2 reference equivalence、数值/复杂度、real-valued rejection、mutation 与 claim boundary，不把 A1 结论直接外推到 A2。
+
+已做工作：
+
+- 新增 `pq/toy_module_lattice.py`：
+  - `ToyModuleLatticeParameters` 固定 power-of-two ring degree、module rank、modulus、公开 matrix seed 和 small secret bound。
+  - `ToyModuleLatticeSignatureScheme` 提供 ``A(z-c) mod q=t`` 的确定性 keygen/sign/reference verify，challenge 是 SHA-256 派生的 signed one-hot module vector。
+  - wire contract 使用 canonical uint16 public target 与 int16 signed response；错误长度、非 canonical public 系数、超响应范围/范数和非 one-hot challenge 均拒绝。
+  - 构造明确可伪造，只作为普通 Python reference oracle，不声称 Module-SIS 或生产后量子安全。
+- 新增 `neural/a2_module_lattice_verifier.py`：
+  - `A2ModuleLatticeVerifierCore` 为每个公开 module-matrix 多项式复用 `TinyNegacyclicProjector` / `FixedProjectorCore`。
+  - claimed runtime core 组合 fixed negacyclic projection、module sum、subtraction、`FixedBoundedModulo`、equality、response/challenge range/L1、challenge weight ``==1`` 和 Boolean aggregation。
+  - `FixedModuleLatticeVerifier` 提供 bytes/bits/compound-bits fail-closed wrapper；私钥不进入 verifier。
+  - byte parse、signed decode、SHA-256 challenge 和构造期 negacyclic matrix expansion 明确位于 claimed circuit 外。
+  - `audit_a2_claimed_source()` 继承 A1 八个 evaluator 并增加两个 A2 module/ring evaluator，检查 Python ``%``、普通 ``==/!=``、数据分支和 reference `verify()` 调用。
+- 新增 `experiments/route_a_a2_gate_runner.py`：
+  - degree=2/rank=1/q=3 全 public/response/challenge 定义域 2,025 cases 穷举，零 mismatch。
+  - degree=4/rank=2 默认 relation 64 个固定种子 valid/wrong-message/tampered/arbitrary cases，零 mismatch。
+  - A2G1-A2G8 覆盖 source closure、binary/real/wire contract、numeric bounds、6/6 mutation、fixed state、projector reuse 和机器可读 manifest。
+  - 报告明确 `research_only=true`、`production_ready=false`、`ntt_implemented=false`、`ml_dsa_neuralized=false`。
+- 新增单元测试：
+  - `tests/test_toy_module_lattice.py`
+  - `tests/test_a2_module_lattice_verifier.py`
+  - `tests/test_route_a_a2_gate_runner.py`
+- 更新 `pq/__init__.py`、`neural/__init__.py`、README、SECURITY 和本工作文档。
+
+已验证：
+
+- `/home/kali/saga/.venv/bin/python -m py_compile pq/toy_module_lattice.py neural/a2_module_lattice_verifier.py experiments/route_a_a2_gate_runner.py tests/test_toy_module_lattice.py tests/test_a2_module_lattice_verifier.py tests/test_route_a_a2_gate_runner.py` -> success
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/test_toy_module_lattice.py tests/test_a2_module_lattice_verifier.py tests/test_route_a_a2_gate_runner.py` -> `17 passed, 7 subtests passed`
+- `/home/kali/saga/.venv/bin/python -m experiments.route_a_a2_gate_runner --output /tmp/saga-route-a-a2-gates.json` -> A2G1-A2G8 全部 `pass`，两个 corpus 零 mismatch，mutation `6/6`
+- `/home/kali/saga/.venv/bin/python -m pytest -q` -> `553 passed, 1 skipped, 130 subtests passed`
+- 唯一 skip 为独立 worktree 缺少 ignored 2026-05-27 end-to-end summaries，与 R16 无关。
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `/home/kali/saga/.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- 未发现 ruff / mypy 配置文件，因此未运行 `ruff check .` / `mypy .`。
+
+安全与论文边界：
+
+- 本轮没有手写或修改生产密码实现；A2 reference relation 明确可伪造、非生产，Route B vetted ML-DSA 仍是 production-facing signature anchor。
+- A2 fixed core 不持有私钥，不创建 Context、不授予 authority，也未接入 Agent/runtime/integration。
+- 当前 fixed negacyclic backend 是构造期矩阵展开后执行 fixed Linear 行，不是 CNN、NTT、Module-SIS 安全证明、完整 neural hash 或 ML-DSA 神经化。
+- 报告证明 declared bounded relation 上的实现等价与负向边界，不证明密码不可伪造性或任意参数下的数学正确性。
+
+当前 checkpoint 待提交文件范围：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `experiments/route_a_a2_gate_runner.py`
+- `neural/__init__.py`
+- `neural/a2_module_lattice_verifier.py`
+- `pq/__init__.py`
+- `pq/toy_module_lattice.py`
+- `tests/test_a2_module_lattice_verifier.py`
+- `tests/test_route_a_a2_gate_runner.py`
+- `tests/test_toy_module_lattice.py`
+
+敏感文件审查：
+
+- 待提交范围只包含源码、测试和文档，不包含 private keys、生成 secrets、本地 DB、模型 checkpoint、真实运行结果或 `paper/`。
+- A2 runner 的 JSON/stdout 位于 `/tmp`；报告不含公钥、私钥、secret seed 或签名字节，不进入仓库 checkpoint。
+
+Git / checkpoint 状态：
+
+- 本节将与 R16 源码、测试和文档形成 Route A 本地 checkpoint；最终 commit 以 `git log -1 --oneline` 为准。
+- Route A checkpoint 后必须回主工作树更新完整 HEAD 登记并运行 worktree progress guard；本轮不推送研究分支。
+
+### 2026-07-18 Route A R15 A1 Toy Arithmetic Closure Session
+
+目标：
+
+- 把 A0.5 gadget/toolchain 组合为 post-parse A1 toy verifier arithmetic core。
+- 消除 claimed core 中的普通 `%`、`==`、reference verifier 调用和未声明的数据相关分支。
+- 关闭 AG2/AG3，汇总最终 AG1-AG8 report，同时明确 parse/hash/数值/实数域与非生产边界。
+
+已做工作：
+
+- 新增 `neural/a1_toy_verifier.py`：
+  - `FixedToyLWEVerifierCore` 组合 shared dense projector、fixed subtraction、bounded modulo、equality、range/L1 与 Boolean aggregation。
+  - `FullReLUToyLWEVerifier` 只把上述 post-parse arithmetic core 纳入 claim；byte decoder、bit packer 与 SHA-256 challenge 保持 deterministic preprocessing。
+  - `A1ToyVerificationTrace`、boundary、complexity 与 claimed-source closure report 已落地。
+  - `audit_a1_claimed_source()` 静态覆盖 8 个 evaluator；普通 `%`、`==/!=`、数据相关分支与 `verify()` 调用均无 finding。
+- 扩展 `neural/fixed_toolchain.py`：
+  - 新增 `FixedBoundedModulo`，以构造期固定的相邻 ReLU integer steps 实现 signed bounded modulo。
+  - 设置 `MAX_FIXED_MODULO_THRESHOLDS=65536`，拒绝异常参数导致的构造期资源爆炸。
+  - 将 projector/equality/range/norm/aggregation 的 fixed evaluator 与软件类型/范围 guard 分开，供 AG3 审计。
+  - 新增 `UnitIntervalInputGuard`；`CAN` 在 MASK 前拒绝 bool、NaN、Inf 与 `[0,1]` 外输入，区间内非二进制值仍由 MASK 拒绝。
+- 新增 `experiments/route_a_a1_gate_runner.py`：
+  - A1 modulo signed domain 1,025 cases 零 mismatch。
+  - tiny dimension=2/q=3 的 public vector × 全部一字节 message × signature vector 共 20,736 cases 零 mismatch。
+  - 默认参数固定种子 valid/tampered/arbitrary 共 32 cases 零 mismatch。
+  - 输出 A1 boundary、23 层理论关键路径、20,547 个结构固定参数、46,836 次 ReLU/verification、数值上界、延迟和 Python peak memory。
+  - 最终 gate status 为 AG1-AG8 全部 `pass`，同时固定 `research_only=true`、`production_ready=false` 和 `parse_hash_inside_claimed_circuit=false`。
+- 更新 A0.5 preliminary input boundary，使其覆盖有限 `[0,1]` guard。
+- 新增/更新单元测试、CAN 测试、README、SECURITY 与本工作文档。
+
+已验证：
+
+- `.venv/bin/python -m pytest -q tests/test_a1_toy_verifier.py` -> `10 passed, 7 subtests passed`
+- `.venv/bin/python -m pytest -q tests/test_route_a_a1_gate_runner.py tests/test_route_a_preliminary_gate_runner.py` -> `7 passed`
+- `.venv/bin/python -m experiments.route_a_a1_gate_runner --output /tmp/saga-route-a-a1-gates.json` -> AG1-AG8 全部 `pass`
+- `.venv/bin/python -m pytest -q` -> `536 passed, 1 skipped, 123 subtests passed`
+- 唯一 skip：`tests/test_paper_tables.py:529` 缺少本地 ignored end-to-end summaries，与 R15 无关
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `.venv/bin/python -m pip check` -> `No broken requirements found.`
+- `git diff --check` -> no output
+- 未发现 ruff/mypy 配置，因此未运行对应检查。
+
+安全边界：
+
+- A1 完成的是 toy relation 的 fixed arithmetic core，不包含 neural SHA-256、byte parser 或生产后量子安全主张。
+- A1 runtime 不调用 `scheme.verify()`；reference verifier 只在 runner/test oracle 中使用。
+- A1 不替换默认 A0 compatibility wiring，也不创建 Context 或 execution authority；真实执行安全方向仍由路线 B 与 shared Coordinator 承担。
+- AG1-AG8 通过只打开 R16/A2 研究阶段门；不能把 A1 等价测试外推为 A2 ring relation 正确性。
+
+当前 checkpoint 待提交文件范围：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `experiments/route_a_a1_gate_runner.py`
+- `experiments/route_a_preliminary_gate_runner.py`
+- `neural/__init__.py`
+- `neural/a1_toy_verifier.py`
+- `neural/can.py`
+- `neural/fixed_toolchain.py`
+- `tests/test_a1_toy_verifier.py`
+- `tests/test_can.py`
+- `tests/test_fixed_toolchain.py`
+- `tests/test_route_a_a1_gate_runner.py`
+
+敏感文件审查：
+
+- 待提交范围只包含源码、测试与文档；不包含 private keys、生成 secrets、本地 DB、模型 checkpoint、实验结果或 `paper/`。
+- A1 JSON report 位于 `/tmp/saga-route-a-a1-gates.json`，不进入仓库 checkpoint；report 不包含公私钥或签名字节。
+
+Git / checkpoint 状态：
+
+- 本节与 R15 源码、测试和文档一起形成本地 route A checkpoint；最终 commit 以 `git log -1 --oneline` 为准。
+- 不自动推送研究分支；若后续需要备份，必须先展示精确文件列表，并只使用 `origin/backup/repro-local`。
+
+### 2026-07-18 Route A R12-R14 Shadow and A0.5 Toolchain Session
+
+目标：
+
+- 将现有 A0 partially compiled toy verifier 接入有界异步 shadow queue/outbox。
+- 建立 A0.5 reusable gadget/projector/trace/boundary/complexity 工具链。
+- 用 dense 与 tiny negacyclic 两个 backend 形成 AG1/AG4-AG8 preliminary evidence，同时保持 AG2/AG3 open。
+
+已做工作：
+
+- 新增 `neural/shadow_queue.py`：
+  - shadow job 只接受不可变公开 bytes，不保存私钥。
+  - non-blocking bounded queue 和 bounded outbox 对 queue full/closed、timeout、verifier error、invalid output 与 reference disagreement 生成 late evidence。
+  - submission/evidence 固定 `authority_granted=False`；evidence 不复制 pk/message/signature 或异常消息。
+  - timeout 调用在自行返回前继续占用 bounded call slot，避免无限 retry thread；outbox 故障只增加 metric。
+- 新增 `neural/fixed_toolchain.py`：
+  - `BinaryInputGuard`、`FixedModReduce`、固定 ReLU `FixedEquality`、`FixedRangeNormCheck` 与 `FixedBooleanAggregator`。
+  - `FixedProjectorCore`、`DenseFixedProjector`、`TinyNegacyclicProjector` 与统一 protocol/trace/boundary/complexity/manifest。
+  - 构造期计算 worst-case output bound，超过 prototype IEEE-754 精确整数范围时拒绝。
+- 新增 `experiments/route_a_preliminary_gate_runner.py`：
+  - 139 个 gadget exhaustive cases 零 mismatch。
+  - dense 125 个、tiny negacyclic 81 个 reference-equivalence cases 零 mismatch。
+  - mod/equality/range/norm/MASK/aggregation 共 6/6 deletion witness detected。
+  - 输出层数、固定参数量、数值上界、批次延迟、Python peak memory 和 reference equivalence manifest。
+  - AG1/AG4-AG8 为 `preliminary_pass`；AG2/AG3 明确 open，`all_ag1_ag8_passed=false`。
+- 新增/更新测试、`neural/__init__.py`、README、SECURITY 和本工作文档。
+
+已验证：
+
+- `.venv/bin/python -m pytest -q tests/test_fixed_toolchain.py tests/test_shadow_queue.py tests/test_route_a_preliminary_gate_runner.py` -> `21 passed, 8 subtests passed`
+- `.venv/bin/python -m experiments.route_a_preliminary_gate_runner` -> preliminary gate run passed；AG2/AG3 open
+- `.venv/bin/python -m pytest -q` -> `519 passed, 1 skipped, 104 subtests passed`
+- 唯一 skip：`tests/test_paper_tables.py:529` 缺少本地 ignored end-to-end summaries，与本轮功能无关
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `.venv/bin/python -m pip check` -> `No broken requirements found.`
+- `git diff --check` -> no output
+- 未发现 ruff/mypy 配置，因此未运行对应检查。
+
+安全边界：
+
+- A0/A0.5 仍是 toy/research-only shadow，不提供执行授权 API，不替代路线 B 的标准 ML-DSA 决策。
+- `FixedModReduce` 明确保留普通 Python `%` hard gate；当前没有 A1 end-to-end closure，因此 AG2/AG3 未关闭。
+- tiny negacyclic backend 只证明 projector 工具链迁移，不是 production ring-LWE/ML-DSA 实现。
+- integration 尚未把 A shadow 接到 B-enforced 主路径；该接线必须继续保持异步、无 authority 和禁止 OR/fallback。
+
+当前 checkpoint 待提交文件范围：
+
+- `README.md`
+- `SECURITY.md`
+- `SAGA_PQ_CAN_WORKLOG.md`
+- `experiments/route_a_preliminary_gate_runner.py`
+- `neural/__init__.py`
+- `neural/fixed_toolchain.py`
+- `neural/shadow_queue.py`
+- `tests/test_fixed_toolchain.py`
+- `tests/test_route_a_preliminary_gate_runner.py`
+- `tests/test_shadow_queue.py`
+
+敏感文件审查：
+
+- 待提交范围只包含源码、测试与文档；不包含 private keys、生成 secrets、本地 DB、模型 checkpoint、实验运行结果或 `paper/`。
+- runner 只把报告打印到 stdout；本轮没有把包含动态测量值的 JSON artifact 写入仓库。
+
+Git / checkpoint 状态：
+
+- 本节与 R12-R14 源码、测试和文档一起形成本地 route A checkpoint；最终 commit 以 `git log -1 --oneline` 为准。
+- 不自动推送研究分支；若后续需要备份，必须先展示精确文件列表，并只使用 `origin/backup/repro-local`。
 
 ### 2026-07-16 R4/R5 Runtime Auth Coordinator Session
 
