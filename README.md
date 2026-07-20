@@ -523,6 +523,28 @@ expanded at construction time and executed by fixed Linear rows; this first
 A2 checkpoint does not implement a CNN layer, NTT, Module-SIS security proof,
 or ML-DSA neuralization, and it does not grant runtime authority.
 
+The first R18 integration checkpoint is available through
+`build_dual_route_runtime_coordinator(...)`. It requires an R17 durable state
+store, an explicit mode, a Route B fixed-authorization evaluator, and local
+key-ID registries. Request-controlled fields cannot select a backend or weaken
+the configured mode. The four formulas are fixed as follows:
+
+```text
+route_b_only:              allow = B
+route_b_with_a_shadow:     allow = B; A is submitted after durable commit
+dual_required_research:    allow = A AND B
+offline_compare:           allow = false; record A/B evidence only
+```
+
+`evaluate(...)` is side-effect free. `commit(...)` re-evaluates the current
+request and time, checks the request fingerprint, and delegates the only
+authority transition to the R17 durable Coordinator path. A shadow queue drop,
+late result, verifier error, or disagreement cannot roll back or expand Route B
+authority. No mode implements `A OR B` or fallback from failed ML-DSA to the toy
+Route A verifier. This checkpoint covers local integration and concurrency
+tests; fair sustained-load experiments, Agent network wiring, J11 threat-model
+closure, and the paper route decision remain R18 follow-up work.
+
 The current `experiments/schedule_meeting.py`, `experiments/expense_report.py`,
 and `experiments/create_blogpost.py` entrypoints will automatically call the
 runtime helper when this block is present.

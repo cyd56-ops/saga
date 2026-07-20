@@ -161,6 +161,40 @@ local/dev/test option and still has the reserve-before-delivery availability
 gap; its replay, revocation, budget, and audit stores do not form one
 cross-backend transaction.
 
+### Dual-Route Runtime Integration
+
+The R18 integration Coordinator composes Route B fixed authorization and Route
+A research verification without creating another authority path. It accepts
+only local key-ID registries and a locally configured mode; unsigned request
+fields cannot choose a route, backend, profile, or key. Its fixed formulas are
+`B`, `B` with non-authoritative A shadow, `A AND B` for dual research, and
+always-reject for offline comparison. There is no `A OR B` or downgrade from a
+failed or unavailable Route B verifier to Route A.
+
+All A/B integration evidence has `authority_granted=false`, and pure
+`evaluate(...)` creates no replay reservation, shadow queue entry, durable
+record, or `LocalExecutionContext`. `commit(...)` re-evaluates current inputs
+and time, verifies the mode-bound fingerprint, and publishes a Context only
+after the R17 durable transaction returns a new `committed` result. Repeated or
+concurrent commits publish at most one Context. The internal state gate has no
+single-route trust registry and is wired back to the dual-route Coordinator, so
+the supported strict path does not expose a second base-Coordinator bypass.
+
+In `route_b_with_a_shadow`, the A job is built only from locally selected public
+material bound to the same envelope digest and is submitted only after durable
+Route B commit. Queue-full/closed results, malformed submissions, exceptions,
+late disagreement, or invalid A output do not change already committed Route B
+authority. `dual_required_research` requires exact A output integer `1` and B
+acceptance synchronously. `offline_compare` can expose the A/B quadrant but
+cannot commit state or return a Context even when both routes accept.
+
+This is a local integration checkpoint, not an Agent network or production HA
+claim. Route A remains toy/research-only and cannot inherit Route B's standard
+cryptographic claim. SQLite retains the local crash/availability limitations
+described above. Sustained shadow load, fair A/B experiment statistics,
+protected-sink end-to-end measurements, and the J11 untrusted-inference threat
+model remain open.
+
 Experiment, paper-reproduction, and demonstration code is not part of the
 mandatory runtime security boundary for the PQ-CAN prototype. In particular,
 `experiments/`, `proofs/`, `saga/attack_models/`, and most of `agent_backend/`
@@ -533,10 +567,9 @@ predicate, or a Boolean/float value masquerading as circuit output therefore
 fails closed. Enforcement evidence is immutable, explicitly records that
 Coordinator commit is required, carries `authority_granted=false`, and exposes
 no replay, commit, authorization, Context, or protected-sink method. Only the
-shared `RuntimeAuthCoordinator` may later revalidate and commit this route
-decision in the integration branch. B1.5 does not yet wire Route B into Agent
-network execution, B3 policy portability, BG7/BG8 performance evidence, or
-durable transactional state.
+shared Coordinator may revalidate and commit this route decision. The R18 local
+integration now does so through the R17 durable state path; B1.5 by itself still
+cannot authorize Agent network execution or a protected sink.
 
 ### Route B B2 Raw Authorization Relations
 
@@ -575,8 +608,10 @@ parent-constraint semantics therefore remain mandatory B1.5 checks. The V1
 flow vocabulary is fixed to `public`, `internal`, `private`, `confidential`,
 `restricted`, and `secret`; an unmodelled runtime label maps to a dedicated
 reject-only bit and fails closed even if B1 recognizes a matching custom label.
-A later versioned B3 layout/compiler may add such policy profiles. B2 does not
-connect Route B to Agent network execution or the Coordinator commit path.
+A later versioned B3 layout/compiler may add such policy profiles. B2 alone
+does not connect Route B to Agent network execution; the R18 local integration
+adapts its evidence to the shared durable Coordinator without adding authority
+to B2 itself.
 
 ### Route B B3 Versioned Policy Compiler
 
@@ -610,9 +645,9 @@ fixed evaluation's Python allocator peak, trainable-state findings, and
 authority count. BG8 latency is an in-process Python microbenchmark, not Agent
 end-to-end latency. Memory is a `tracemalloc` Python-allocator peak, not process
 RSS or accelerator memory. These measurements close the first component-level
-BG7/BG8 evidence stage; Agent/Coordinator integration, durable transactional
-state, sustained-load measurements, and paper-scale fair experiments remain
-outside this claim.
+BG7/BG8 evidence stage. The R18 local Coordinator now integrates the general
+Route B circuit with durable state, but Agent network wiring, sustained-load
+measurements, and paper-scale fair experiments remain outside this claim.
 
 The current compiled toy verifier has a deliberately narrow boundary:
 

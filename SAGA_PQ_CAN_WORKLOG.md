@@ -588,8 +588,8 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - 双路线关联 worktree 当前实际进度：
   - Route B HEAD `50dc336d8a1dcad8f8e5c833a4f687744a1ec669` 已完成 R6-R11 第一阶段：strict cryptography/OpenSSL ML-DSA backend、typed fixed-policy toolchain、trusted fact compiler、组件级 BG1-BG8、真实 ML-DSA-44 八场景 shadow corpus、B1.5/B2 无状态强制 AND，以及复用同一 IR/schema/reference/circuit/gadget 的 general + memory 双 profile PolicyCompiler/manifest
   - Route A HEAD `d899d25874a40992df526710ff263f280a61d882` 已完成 R12-R16 第一阶段：有界异步 shadow、A0.5 reusable toolchain、A1 toy arithmetic closure，以及 A2 research-only module-lattice fixed negacyclic relation
-  - Integration HEAD `4bdda665f18a31cb8baa74f376129ac62dba19e7` 仍保持 `core-api-v1`，尚无组合模式功能改动
-  - 路线实现仍只存在于各自分支；主工作树只汇总状态，不因日志同步而合并路线功能代码
+  - Integration 已基于 shared core R17 合入 Route A/B checkpoint，并完成 R18 四模式本地 Coordinator 接线第一阶段；准确 checkpoint HEAD 将在提交后登记到主工作树日志
+  - Route A/B 原始功能 checkpoint 继续保留在各自分支；integration 只组合公开 route/evidence 接口，主工作树不因日志同步而合并路线功能代码
 - 路线 B R6 strict external ML-DSA backend wiring 已完成第一阶段：
   - 新增 `pq/mldsa_route_b.py`，定义版本化 backend descriptor/contract、稳定 verification evidence 与 `MLDSARouteBVerifier`
   - 本地 contract 显式 pin backend/provider 名称与版本、ML-DSA parameter set、pure/Hash profile、固定 V1 context 和有限正超时；backend 自报 descriptor 不能动态扩大信任
@@ -619,7 +619,7 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - compiler/fixed 路径即使伪造签名事实为真，也不能绕过电路外标准验签；有效签名不能绕过 scope 等 fixed-policy 拒绝
   - bool/float `1`、accepted/output 矛盾、evidence 接受位或 authority 重标记均 fail-closed
   - enforcement route 仍无 `commit`、`authorize`、Context factory 或 sink API；evidence 固定 `coordinator_commit_required=True` 与 `authority_granted=False`
-  - 本阶段只完成 Route B 无状态 B1.5 判定；Agent/Coordinator integration、R11 portability、BG7/BG8 与 durable state 仍后置
+  - 本条描述的是 R9 checkpoint 的无状态边界；R11 portability、R17 durable state 与 R18 本地 Coordinator integration 已在后续阶段完成，Agent 网络和持续负载仍后置
 - 路线 B R10/B2 raw authorization relations 已完成第一阶段：
   - 新增版本化 `RouteBRawAuthorizationInputV1`、普通整数/集合 reference oracle 与 `FixedAuthorizationCircuitV1`
   - 固定 Linear/ReLU 电路直接计算外部标准签名位、scope-family bitset subset、固定 flow-label subset、delegation、900 秒 TTL/time 与六组固定摘要等值关系，不把软件 allow facts 包装成 B2
@@ -1235,15 +1235,15 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（shared core R2-R5/R17、Route B R6-R11、Route A R12-R16 第一阶段已完成；下一步进入 integration mode wiring、J11 与 R18 公平实验）
+- 双路线认证研究与论文选择：`进行中`（shared core R2-R5/R17、Route B R6-R11、Route A R12-R16 与 R18 四模式本地接线第一阶段已完成；下一步进入公平实验、持续负载、Agent 网络接线、J11 与论文路线选择）
 
 ### 3.4 阻塞 / 风险
 
 - 双路线当前阶段阻塞项：
-  - 路线 B 已有 strict ML-DSA backend、B1.5/B2 无状态 enforcement 和 B3 双 profile compiler/manifest，但尚无 Coordinator route 集成或持续负载证据
+  - 路线 B 已有 strict ML-DSA backend、B1.5/B2 无状态 enforcement、B3 双 profile compiler/manifest 与 R18 本地 durable Coordinator 集成，但尚无 Agent 网络接线或持续负载证据
   - 路线 A A2 已建立 fixed negacyclic module relation，但 reference 构造明确可伪造，尚无 Module-SIS 安全证明、CNN/NTT backend 或 ML-DSA 神经化
   - R17 SQLite durable profile 已统一本地事务，但不提供多主机共识；COMMITTED 后交付前崩溃仍选择拒绝重发，file-marker compatibility profile 也仍不保证 replay / revocation / capability / audit 整条提交链事务化
-  - A shadow queue 已在 Route A 组件层完成，但尚未在 integration 分支接到 B-enforced 运行模式
+  - A shadow queue 已接到 `route_b_with_a_shadow`，但当前只验证本地 commit 后非阻塞提交、queue drop/error 隔离与 late evidence；尚无持续负载/backlog 论文统计
 - 当前最大论文风险：
   - 路线 B 已有第二 policy profile 与 BG7/BG8 组件级数据，但 latency/memory 仅为进程内 Python 微基准和 allocator 峰值；在 Agent/Coordinator 接线、持续负载与公平实验前不能宣称端到端收益或生产完成态
   - 路线 A 已证明 module-lattice/ring relation 可复用 fixed toolchain；当前论文风险是 fixed-matrix 展开相对普通算术电路的新增贡献有限，不能把工程 relation 等价误写成 Module-SIS 安全贡献
@@ -2044,7 +2044,7 @@ origin/backup/repro-local
 - 论文结果报告 A/B 四象限、reference equivalence、误拒绝、延迟、backlog、crash recovery、replay 与 protected-sink side effects。
 - toy / A0-A2 的非生产边界明确；路线 B 只通过 vetted external ML-DSA backend 获得 production-facing signature claim。
 
-状态：`进行中`（shared core R2-R5/R17、Route B R6-R11、Route A R12-R16 第一阶段已完成；R18 尚未开始）
+状态：`进行中`（shared core R2-R5/R17、Route B R6-R11、Route A R12-R16 与 R18 四模式本地接线第一阶段已完成；R18 公平实验、Agent 网络接线、J11 与论文选择尚未完成）
 
 ## Phase U0：定义安全内核边界
 
@@ -2519,7 +2519,7 @@ protected sinks 至少覆盖：
 - R15. 路线 A1：完成 fixed ReLU toy verifier core、关闭 AG2/AG3、汇总 AG1-AG8 gate report，并明确 parse / hash / numeric / real-valued claim 边界：`已完成`（第一阶段：20,736 tiny exhaustive、32 normal differential、1,025 modulo cases 零 mismatch，AG1-AG8 全部通过；仍为 toy/research-only）
 - R16. 路线 A2：实现 research-only module-lattice / module-SIS-style fixed negacyclic-convolution verifier：`已完成`（第一阶段：Route A `d899d25` 已落地 `A(z-c) mod q=t` research relation、rank^2 tiny-negacyclic projector、fixed mod/equality/range/norm/one-hot/aggregation、2,025 tiny exhaustive、64 rank-2 differential、6/6 mutation 与机器可读 manifest；不声称 Module-SIS 安全、CNN/NTT 或 ML-DSA 神经化）
 - R17. 定义并实现 durable authorization state machine 与 audit outbox；记录 file-marker profile 的 availability 限制：`已完成`（第一阶段：shared core 新增 SQLite 单库 `PENDING/COMMITTED/CONSUMED/REJECTED` 状态机，统一撤销、signed budget 与 outbox；相同 PENDING 可恢复、并发只发布一个 Context、状态/outbox 同事务、投递失败可重试，且明确 SQLite/file-marker 的 availability 与非分布式边界）
-- R18. 完成 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare`、公平实验、A/B 四象限统计与论文路线选择：`未开始`
+- R18. 完成 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare`、公平实验、A/B 四象限统计与论文路线选择：`进行中`（第一阶段：四模式固定公式、本地 key-ID trust registry、同 envelope 绑定、commit-time 重评估、R17 durable 唯一 Context、A shadow commit 后提交、offline 零 authority、A/B 四象限单测与并发唯一 Context 已落地；公平 runner、持续负载、Agent 网络、J11 与论文选择未完成）
 
 ## 7. 当前工作焦点
 
@@ -2531,7 +2531,7 @@ protected sinks 至少覆盖：
    - 路线 B 推进 `B0 strict ML-DSA -> B0.5 typed toolchain -> B1/B1.5 -> B2 raw relations -> B3 portable policy compiler`，作为默认真实执行安全锚点。
    - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
    - R2-R5 P0/shared core 第一阶段已完成：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口均已落地。
-   - Route B R6-R11 与 Route A R12-R16 已在独立 worktree 完成第一阶段；integration 仍保持 `core-api-v1`，后续公共 gate 修复仍回 core 处理。
+   - Route B R6-R11 与 Route A R12-R16 已合入 integration；R18 四模式本地 Coordinator 接线第一阶段已完成，后续公共 gate 修复仍回 core 处理。
    - shared core R17 已完成第一阶段：SQLite durable profile 统一 request state、revocation、budget 与 audit outbox；兼容 file-marker 路径的可用性限制继续保留。
    - 主工作树日志现在通过完整 HEAD 登记表和 `scripts/check_worktree_progress.py` 检查跨 worktree 进度，路线 checkpoint 后必须另做主日志汇总。
    - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
@@ -2704,11 +2704,11 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. shared core R17 已实现并完成聚焦测试；形成 core checkpoint 后，把该 checkpoint 作为 integration route wiring 的公共基线候选，不为同步而直接合并 Route A/B 功能提交。
-2. 下一实现步骤进入 R18 integration：先设计并接线 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare`，保持 B 为默认执行 authority、A shadow 零 authority，禁止 OR/fallback 降级。
-3. integration 接线必须复用 R17 `RuntimeAuthCoordinator`/durable commit 作为唯一 Context 发布入口；Route A/B evidence 与 PolicyCompiler 不得直接写授权状态。
-4. 在同一任务/输入/环境下生成 A/B 四象限、reference equivalence、误拒绝、延迟、backlog、crash recovery、replay 与 protected-sink side-effect 统计，再做论文路线选择。
-5. 将 J11 threat model 并入 R18 文档：分别限定路线 A 的 real-valued/untrusted-inference 假设、路线 B 的标准密码/fixed-policy claim，以及 SQLite/file-marker 的 availability 和非分布式边界。
+1. shared core R17 与 Route A/B checkpoint 已合入 integration，四模式本地接线已通过规定回归；先形成 integration checkpoint 并把准确完整 HEAD 同步回主工作树日志。
+2. R18 四模式本地 Coordinator 接线已完成第一阶段；下一实现步骤是新增公平实验 runner，在同一任务/输入/环境下输出版本化 manifest 与 A/B 四象限。
+3. runner 必须分别统计 reference equivalence、误拒绝、A/B/commit 延迟、shadow backlog/drop/error、crash recovery、replay 与 protected-sink side effects，不能把 A/B 当作只改变一个变量的直接对照。
+4. 在 runner 证据稳定后接入 Agent 网络接收路径，并继续保持 R17 durable commit 为唯一 Context 发布入口；Route A/B evidence 与 PolicyCompiler 不得直接写授权状态。
+5. 将 J11 threat model 并入 R18 文档：分别限定路线 A 的 real-valued/untrusted-inference 假设、路线 B 的标准密码/fixed-policy claim，以及 SQLite/file-marker 的 availability 和非分布式边界，再据硬门槛选择 A、B 或拆分论文。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2747,6 +2747,54 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-20 R18 Dual-Route Integration Mode Wiring Session
+
+目标：
+
+- 在 `research/dual-route-integration` 合入 shared core R17、Route A R12-R16 与 Route B R6-R11 checkpoint。
+- 实现 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare` 的固定公式与 fail-closed 本地 Coordinator。
+- 继续复用 R17 durable transaction 作为唯一 Context 发布入口，不给 Route A/B evidence 增加 authority。
+
+Integration 基线与合并：
+
+- integration 从 core R17 `7e26287d186ebd43e910c0e912ed5cd3ea794ac3` fast-forward。
+- Route A `d899d25874a40992df526710ff263f280a61d882` 合并 checkpoint：`1b7248c merge: integrate route A research components`。
+- Route B `50dc336d8a1dcad8f8e5c833a4f687744a1ec669` 合并 checkpoint：`7693ceb merge: integrate route B authorization components`。
+- 依赖冲突继续使用 core 单一 requirements 来源并保留 `cryptography>=48.0.1,<50.0.0`；Route A/B 公开导出与 SECURITY 边界均保留。
+
+R18 第一阶段实现：
+
+- 新增 `saga/dual_route_runtime.py`，定义四模式 request/evidence/commit schema 与 `DualRouteRuntimeAuthCoordinator`。
+- `route_b_only` 只由 B 决定；默认 `route_b_with_a_shadow` 在 durable commit 后才非阻塞提交 A job，queue drop/error/late evidence 不回滚或扩大 B authority。
+- `dual_required_research` 固定使用精确 `A AND B`；`offline_compare` 只生成 A/B evidence，始终不能写 durable state 或创建 Context；所有模式禁止 OR/fallback。
+- A/B 公钥只由本地 key-ID registry 选择；transport、binding、canonical envelope、身份、token/message digest、scope 与 runtime parameters 必须绑定一致。
+- commit 重新计算当前时间与 A/B 结果，核对 mode-bound fingerprint；非规范参数漂移、未知 key、route 异常、无效输出和 evidence 漂移全部稳定拒绝。
+- integration state gate 不持有 single-route trust registry，唯一受支持的 strict Coordinator 指向 dual-route 实例；A/B evidence、shadow submission 和 late evidence 均固定零 authority。
+- shadow submission 的 job digest 必须匹配本地 job；畸形 submission 只改变 shadow reason，不影响已经完成的 B durable commit。
+
+验证：
+
+- focused R18 runtime -> `11 passed, 4 subtests passed`
+- `.venv/bin/python -m pytest -q` -> `655 passed, 1 skipped, 572 subtests passed`
+- 唯一 skip 是独立 worktree 缺少 ignored paper-table summaries，不是 R18 失败
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `.venv/bin/python -m py_compile saga/dual_route_runtime.py tests/test_dual_route_runtime.py` -> success
+- `git diff --check` -> no output
+- 仓库未配置 ruff/mypy，因此未运行对应检查。
+
+安全与未实现边界：
+
+- 本轮是本地 route/Coordinator integration，不是 Agent TLS/socket 接收路径、真实任务或多主机 HA 接线。
+- Route A 仍是 toy/research-only；dual 通过不能把 Route B 的标准密码 claim 转移给 A，也不能把 A2 relation 描述为 Module-SIS 安全。
+- R18 公平 runner、持续 shadow backlog/latency、crash recovery 统计、protected-sink 端到端 side-effect 统计、J11 threat model 与论文路线选择仍未完成。
+- SQLite 的 COMMITTED 后交付前拒绝重发、非分布式边界与 outbox at-least-once 语义保持不变。
+
+Git / checkpoint 状态：
+
+- 本轮待提交文件不包含私钥、生成凭据、本地数据库、模型输出或 `paper/`。
+- 本节将与四模式实现形成 `research/dual-route-integration` 本地 checkpoint；未自动推送远端，准确完整 HEAD 将在提交后同步到主工作树。
 
 ### 2026-07-20 Shared Core R17 Durable Authorization Session
 
