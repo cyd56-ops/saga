@@ -580,7 +580,7 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - 显式 `compatibility` mode 只保留历史测试、离线诊断和已声明降级路径；其 Context 标记为 uncommitted，strict Agent prompt 路径会拒绝
   - 当前仍不是 replay/revocation/capability/audit 的跨后端事务；file-marker 在 reserve 后崩溃可能永久拒绝合法重试，该限制保留给 R17
 - 双路线关联 worktree 当前实际进度：
-  - Route B HEAD `29ea82791488854c09f7d55e7cd6237ea93867ab` 已完成 R6-R10 第一阶段：strict cryptography/OpenSSL ML-DSA backend、typed fixed-policy toolchain、trusted fact compiler、组件级 BG1-BG6、真实 ML-DSA-44 八场景 shadow corpus、保留电路外标准验签必要条件的 B1.5 无状态强制 AND，以及直接计算 scope/flow/delegation/time/digest 的 B2 raw relation circuit
+  - Route B HEAD `50dc336d8a1dcad8f8e5c833a4f687744a1ec669` 已完成 R6-R11 第一阶段：strict cryptography/OpenSSL ML-DSA backend、typed fixed-policy toolchain、trusted fact compiler、组件级 BG1-BG8、真实 ML-DSA-44 八场景 shadow corpus、B1.5/B2 无状态强制 AND，以及复用同一 IR/schema/reference/circuit/gadget 的 general + memory 双 profile PolicyCompiler/manifest
   - Route A HEAD `d899d25874a40992df526710ff263f280a61d882` 已完成 R12-R16 第一阶段：有界异步 shadow、A0.5 reusable toolchain、A1 toy arithmetic closure，以及 A2 research-only module-lattice fixed negacyclic relation
   - Integration HEAD `4bdda665f18a31cb8baa74f376129ac62dba19e7` 仍保持 `core-api-v1`，尚无组合模式功能改动
   - 路线实现仍只存在于各自分支；主工作树只汇总状态，不因日志同步而合并路线功能代码
@@ -1184,17 +1184,17 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（shared core R2-R5、Route B R6-R10、Route A R12-R16 第一阶段已完成；下一步进入 Route B R11/B3，integration 仍后置）
+- 双路线认证研究与论文选择：`进行中`（shared core R2-R5、Route B R6-R11、Route A R12-R16 第一阶段已完成；下一步进入 R17 durable state，integration 与公平实验仍后置）
 
 ### 3.4 阻塞 / 风险
 
 - 双路线当前阶段阻塞项：
-  - 路线 B 已有 strict ML-DSA backend、fixed-policy shadow、B1.5 无状态 enforcement 和 B2 raw-relation circuit，但尚无 B3 second profile、Coordinator 集成或持续负载证据
+  - 路线 B 已有 strict ML-DSA backend、B1.5/B2 无状态 enforcement 和 B3 双 profile compiler/manifest，但尚无 Coordinator route 集成、durable transactional state 或持续负载证据
   - 路线 A A2 已建立 fixed negacyclic module relation，但 reference 构造明确可伪造，尚无 Module-SIS 安全证明、CNN/NTT backend 或 ML-DSA 神经化
   - 文件 marker 只能原子 reserve replay，不能保证 replay / revocation / capability / audit 整条提交链事务化
   - A shadow queue 已在 Route A 组件层完成，但尚未在 integration 分支接到 B-enforced 运行模式
 - 当前最大论文风险：
-  - 路线 B 已从预计算布尔 AND 推进到 B2 原始关系，但尚未用第二 policy profile 证明编译器可迁移性，也没有 BG7/BG8 latency/memory 证据；当前不能宣称完整 fixed-authorization toolchain
+  - 路线 B 已有第二 policy profile 与 BG7/BG8 组件级数据，但 latency/memory 仅为进程内 Python 微基准和 allocator 峰值；在 Agent/Coordinator 接线、持续负载与公平实验前不能宣称端到端收益或生产完成态
   - 路线 A 已证明 module-lattice/ring relation 可复用 fixed toolchain；当前论文风险是 fixed-matrix 展开相对普通算术电路的新增贡献有限，不能把工程 relation 等价误写成 Module-SIS 安全贡献
   - A 的单个 toy verifier 能运行、B 的单个 fixed policy 能运行，都不能单独作为“工具链完成”证据；必须分别通过 AG1-AG8 与 BG1-BG8
   - A/B 不能作为只改变一个变量的直接对照；签名 verifier、authorization evaluator 与 integration mode 必须分三个实验维度评估
@@ -1253,6 +1253,21 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - 唯一 skip：Route B 独立 worktree 不包含主工作区 ignored paper-table summaries；与 R10 无关
   - `/home/kali/saga/.venv/bin/python -m pytest -q tests/security` -> `27 passed`
   - `/home/kali/saga/.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+  - `git diff --check` -> no output
+  - 未发现 ruff / mypy 配置文件或 repo-local 可执行文件，因此未运行 `ruff check .` / `mypy .`
+
+- 已于 `2026-07-20` 完成路线 B R11/B3 portable PolicyCompiler 后回归验证：
+  - Route B checkpoint：`50dc336d8a1dcad8f8e5c833a4f687744a1ec669`
+  - focused PolicyCompiler/raw/runtime tests -> `41 passed, 315 subtests passed`
+  - BG7/BG8 runner -> `all_passed=true`；两个 profile 各 `263` cases、零 mismatch、六关系 coverage 完整、零 trainable finding 与零 authority
+  - 两个 profile 均记录 `566` fixed Linear、`28` ReLU、`2210` 固定参数、depth `8`
+  - 本次 general/reference/fixed mean `12574 ns / 1382383 ns`，allocator peak `69822 bytes`
+  - 本次 memory/reference/fixed mean `14625 ns / 1360153 ns`，allocator peak `69826 bytes`
+  - latency/memory 仅代表本次进程内 Python 微基准与 `tracemalloc` allocator peak，不是 Agent E2E 或 RSS 结论
+  - full pytest -> `571 passed, 1 skipped, 534 subtests passed`
+  - 唯一 skip：Route B worktree 缺少 ignored paper-table summaries，与 R11 无关
+  - security -> `27 passed`
+  - integration -> `39 passed, 12 subtests passed`
   - `git diff --check` -> no output
   - 未发现 ruff / mypy 配置文件或 repo-local 可执行文件，因此未运行 `ruff check .` / `mypy .`
   - 主工作树 `.venv/bin/python scripts/check_worktree_progress.py` -> all linked branch HEADs match
@@ -1895,7 +1910,7 @@ origin/backup/repro-local
 - 论文结果报告 A/B 四象限、reference equivalence、误拒绝、延迟、backlog、crash recovery、replay 与 protected-sink side effects。
 - toy / A0-A2 的非生产边界明确；路线 B 只通过 vetted external ML-DSA backend 获得 production-facing signature claim。
 
-状态：`进行中`（shared core R2-R5、Route B R6-R10、Route A R12-R16 第一阶段已完成；R11、R17-R18 尚未开始）
+状态：`进行中`（shared core R2-R5、Route B R6-R11、Route A R12-R16 第一阶段已完成；R17-R18 尚未开始）
 
 ## Phase U0：定义安全内核边界
 
@@ -2363,7 +2378,7 @@ protected sinks 至少覆盖：
 - R8. 路线 B1：实现 `FixedPolicyAggregator` shadow、BG1-BG6 gate 与普通 reference policy equivalence：`已完成`（第一阶段：组件级 BG1-BG6、64 项穷举/固定种子差分、6/6 mutation 与真实 ML-DSA-44 八场景 shadow corpus 已通过；不授予 authority）
 - R9. 路线 B1.5：通过 BG1-BG6 后把 fixed policy 正式纳入 B 的 AND，同时保留电路外标准验签必要条件：`已完成`（第一阶段：Route B `4fa4a4d` 新增无状态 enforcement route；显式重复检查外部 ML-DSA、签名事实一致性、fixed accept 与精确整数 1，且 evidence 不携带 authority、不能绕过 Coordinator）
 - R10. 路线 B2：实现原始 scope / flow / delegation / time / digest 关系电路：`已完成`（第一阶段：Route B `29ea827` 新增版本化 raw layout、普通 reference oracle 与固定 Linear/ReLU circuit，直接计算 scope-family/固定 flow subset、parent digest/depth/max/scope/flow/time attenuation、900 秒 TTL/time 和六组 digest equality；外部 ML-DSA 与 B1.5 仍为独立必要条件，evidence 零 authority）
-- R11. 路线 B3：用第二 policy / execution-surface profile 证明 PolicyCompiler / circuit profile 可迁移并完成 BG1-BG8：`未开始`
+- R11. 路线 B3：用第二 policy / execution-surface profile 证明 PolicyCompiler / circuit profile 可迁移并完成 BG1-BG8：`已完成`（第一阶段：Route B `50dc336` 中 general 与 memory_access 复用同一版本化 compiler、ordered relation IR、raw schema、reference/fixed class 和 gadget graph；profile mask/TTL/depth 固定且 fail-closed，两个 profile 的固定种子差分、全关系覆盖、结构/延迟/allocator manifest 均通过，所有 evidence 零 authority）
 - R12. 路线 A0：将 `partially_compiled_toy_shadow` 接入有界异步 shadow queue / outbox：`已完成`（第一阶段：有界 queue/outbox、timeout、drop/error/disagreement late evidence 与无 authority contract 已通过）
 - R13. 路线 A0.5：实现 reusable arithmetic / Boolean gadget、scheme-independent projector、trace / boundary / complexity manifest：`已完成`（第一阶段：严格输入 guard、mod/equality/range/norm/aggregation、共享 projector core 与 manifest 已落地）
 - R14. 路线 A0.5 migration smoke：dense 与 tiny negacyclic projector 复用同一 core，并形成 AG1 / AG4-AG8 preliminary evidence：`已完成`（第一阶段：dense 与 tiny-negacyclic projector 共用接口，preliminary gate 已通过）
@@ -2382,7 +2397,7 @@ protected sinks 至少覆盖：
    - 路线 B 推进 `B0 strict ML-DSA -> B0.5 typed toolchain -> B1/B1.5 -> B2 raw relations -> B3 portable policy compiler`，作为默认真实执行安全锚点。
    - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
    - R2-R5 P0/shared core 第一阶段已完成：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口均已落地。
-   - Route B R6-R10 与 Route A R12-R16 已在独立 worktree 完成第一阶段；integration 仍保持 `core-api-v1`，后续公共 gate 修复仍回 core 处理。
+   - Route B R6-R11 与 Route A R12-R16 已在独立 worktree 完成第一阶段；integration 仍保持 `core-api-v1`，后续公共 gate 修复仍回 core 处理。
    - 主工作树日志现在通过完整 HEAD 登记表和 `scripts/check_worktree_progress.py` 检查跨 worktree 进度，路线 checkpoint 后必须另做主日志汇总。
    - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
@@ -2545,7 +2560,7 @@ protected sinks 至少覆盖：
 {
   "refs/heads/research/dual-route-integration": "4bdda665f18a31cb8baa74f376129ac62dba19e7",
   "refs/heads/research/route-a-neural-verifier": "d899d25874a40992df526710ff263f280a61d882",
-  "refs/heads/research/route-b-fixed-auth": "29ea82791488854c09f7d55e7cd6237ea93867ab"
+  "refs/heads/research/route-b-fixed-auth": "50dc336d8a1dcad8f8e5c833a4f687744a1ec669"
 }
 ```
 <!-- worktree-progress:end -->
@@ -2555,10 +2570,10 @@ protected sinks 至少覆盖：
 下一步建议直接执行：
 
 1. Route A R16 已通过规定测试并形成 checkpoint `d899d25`；A2 第一阶段只表述为 research-only fixed ring relation closure，不继续扩大 toy 参数。
-2. Route B R10 已通过规定测试并形成 checkpoint `29ea827`；B2 直接计算 raw relations，但只生成无状态 Route B evidence，不自行 commit replay/Context 或授予 execution authority。
-3. 下一实现步骤继续在 `/home/kali/saga/.worktrees/route-b-fixed-auth` 执行 R11/B3：定义第二个版本化 policy / execution-surface profile，并让同一 compiler/toolchain 生成对应 layout、reference 与 fixed circuit，关闭 BG7 portability。
-4. R11 必须保留 B2 V1 的外部 ML-DSA、B1.5 exact constraints、Coordinator-only authority 与 unknown-label fail-closed 边界；不得复制一次性实现后宣称 portable compiler。
-5. R11 同时补 latency/memory/complexity 自动 manifest 与固定种子跨 profile differential，形成 BG8 第一阶段数据；R17 durable state、J11 threat model 与 R18 integration/fair experiments 继续后置。
+2. Route B R11 已通过规定测试并形成 checkpoint `50dc336`；general 与 memory profile 复用同一 compiler/IR/schema/reference/circuit/gadget，并形成 BG7/BG8 第一阶段 manifest，但只生成无状态 evidence。
+3. 下一实现步骤进入 R17：在 shared core 定义 durable authorization state machine 与 audit outbox，统一 replay、revocation、capability budget、decision/context 和 audit 的提交/恢复语义。
+4. R17 必须保持 `RuntimeAuthCoordinator` 为唯一 authority 入口，明确 prepare/commit/abort/recovery 状态、幂等键、崩溃点和 fail-closed 行为；Route A/B evidence 与 PolicyCompiler 均不得直接写状态。
+5. file-marker replay profile 的可用性限制需要显式保留；durable 后端并发/crash-recovery 测试通过后，再进入 integration route wiring、J11 threat model 与 R18 公平实验。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2597,6 +2612,67 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-20 Route B R11 Primary Worktree Synchronization Session
+
+目标：
+
+- 在 Route B R11/B3 checkpoint 后同步主工作树这一跨分支全局事实来源。
+- 登记完整路线 HEAD、R11/BG7/BG8 状态、测试、全局下一步与剩余风险。
+- 不为同步文档而把 Route B 功能提交合并进 core。
+
+Route B checkpoint：
+
+- branch：`research/route-b-fixed-auth`
+- commit：`50dc336d8a1dcad8f8e5c833a4f687744a1ec669`
+- summary：`security: compile portable route B policy profiles`
+- 修改文件：`SAGA_PQ_CAN_WORKLOG.md`、`SECURITY.md`、`experiments/route_b_policy_compiler_runner.py`、`neural/__init__.py`、`neural/fixed_authorization.py`、`neural/fixed_policy_runtime.py`、`tests/test_fixed_authorization.py`、`tests/test_fixed_policy_runtime.py`、`tests/test_route_b_policy_compiler_runner.py`
+
+R11 第一阶段实现：
+
+- 新增版本化 relation IR、CircuitProfile registry 与单一 `RouteBAuthorizationPolicyCompilerV1`。
+- general 与 `memory_access` 复用同一 ordered IR、raw schema、reference/fixed class 和 gadget graph，同时使用独立 profile/layout/circuit identity 与 digest。
+- memory profile 固定只允许 memory read/write、public 至 confidential flow、300 秒 TTL 和最大 depth 2；未知/重排/未注册 profile、跨 profile raw input 与 runtime compiler/circuit mismatch 均 fail-closed。
+- 第二 profile 继续独立要求外部真实 ML-DSA、完整 B1.5 exact constraints 与 B2 精确整数输出；report/runtime evidence 都不创建 Context 或 authority。
+- BG7/BG8 runner 输出跨 profile reference equivalence、六关系 coverage、结构复杂度、进程内延迟和 `tracemalloc` allocator peak；明确不是 Agent E2E、RSS/accelerator、持续负载或第二签名方案。
+
+Route B 已验证：
+
+- focused compiler/raw/runtime tests -> `41 passed, 315 subtests passed`
+- BG7/BG8 runner -> `all_passed=true`；两个 profile 各 `263` cases、零 mismatch、coverage 完整、零 trainable/authority count
+- structure -> 每 profile `566` fixed Linear、`28` ReLU、`2210` 固定参数、depth `8`
+- full pytest -> `571 passed, 1 skipped, 534 subtests passed`
+- 唯一 skip：独立 worktree 缺少 ignored paper-table summaries
+- security -> `27 passed`
+- integration -> `39 passed, 12 subtests passed`
+- `git diff --check` -> no output
+
+主工作树同步：
+
+- 第 3 节更新 Route B 完整 HEAD、R11 状态、测试结果与残余风险。
+- 第 6 节将 R11 标记为第一阶段已完成。
+- 第 7 节更新完整 HEAD registry，并把全局下一步切换到 R17 durable authorization state machine / audit outbox。
+- 主工作树只修改 `SAGA_PQ_CAN_WORKLOG.md`；Route B 功能代码仍只存在于路线分支。
+
+主工作树已验证：
+
+- `.venv/bin/python scripts/check_worktree_progress.py` -> `worktree progress registry matches all linked branch HEADs`
+- `.venv/bin/python -m pytest -q` -> `506 passed, 96 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `git diff --check` -> no output
+
+安全与未实现边界：
+
+- 本轮主工作树只同步文档，没有合并、重写或重复实现 Route B 密码/授权代码。
+- R11 仍是无状态组件级 closure；Agent/Coordinator route integration、R17 durable transaction、J11 threat model、持续负载与 R18 公平实验尚未实现。
+- BG8 memory/latency 只代表本次 `tracemalloc` allocator 与进程内 Python 微基准，不能描述为端到端或生产性能。
+- Route A A2 仍是可伪造的 research relation，不得描述为 Module-SIS 安全、CNN/NTT 或 ML-DSA 神经化。
+
+Git / checkpoint 状态：
+
+- Route B 本地 checkpoint 已形成；路线研究分支未推送远端。
+- 本节将形成 `research/runtime-auth-core` 的纯文档同步 checkpoint；最终 commit 以 `git log -1 --oneline` 为准。
 
 ### 2026-07-20 Route B R10 Primary Worktree Synchronization Session
 
