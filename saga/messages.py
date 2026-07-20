@@ -149,6 +149,23 @@ def normalize_execution_budget(
     return dict(sorted(normalized.items()))
 
 
+def execution_budget_scopes_for_action(
+    execution_budget: Mapping[str, int],
+    action_scope: str,
+) -> tuple[str, ...]:
+    """返回一次动作必须同时扣减的 total 与匹配 scope 预算。"""
+    parse_action_scope(action_scope)
+    budget_scopes: list[str] = []
+    if EXECUTION_BUDGET_TOTAL_KEY in execution_budget:
+        budget_scopes.append(EXECUTION_BUDGET_TOTAL_KEY)
+    for budget_scope in execution_budget:
+        if budget_scope == EXECUTION_BUDGET_TOTAL_KEY:
+            continue
+        if action_scope_allows(budget_scope, action_scope):
+            budget_scopes.append(budget_scope)
+    return tuple(budget_scopes)
+
+
 def normalize_flow_label(label: str) -> str:
     """规范化 IFC 标签；标签只作为确定性文本比较，不执行策略代码。"""
     if not isinstance(label, str):

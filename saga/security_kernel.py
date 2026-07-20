@@ -738,7 +738,10 @@ MUTATION_EVIDENCE: tuple[MutationEvidence, ...] = (
     MutationEvidence(
         mutation_id="skip_prompt_surface_authorization",
         sink_ids=("prompt_local_agent_run",),
-        mutated_control="bypass Agent._evaluate_prompt_surface_request before local_agent.run",
+        mutated_control=(
+            "bypass Agent._evaluate_prompt_surface_request authorization/state "
+            "consumption before local_agent.run"
+        ),
         expected_test_failures=(
             "tests/integration/test_baseline_agent_flow.py::BaselineAgentFlowTests::test_receive_conversation_rejects_tool_only_scope_before_prompt",
             "tests/test_negative_injection_runner.py::NegativeInjectionRunnerTests::test_runner_covers_real_agent_runtime_negative_paths",

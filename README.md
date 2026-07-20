@@ -344,6 +344,30 @@ tests the adapter contract. For opt-in real-service negative runs, receiver
 listeners can now use an injected replay store without editing the checked-in
 YAML:
 
+R17 also provides an opt-in local durable profile that keeps authorization
+state, revocation, signed budgets, and the audit outbox in one SQLite database:
+
+```python
+from saga.durable_authorization import SQLiteDurableAuthorizationStateStore
+
+enable_toy_lwe_runtime_auth(
+    alice_email_agent,
+    scheme=scheme,
+    key_pair=alice_keys,
+    trusted_public_keys={
+        "bob@mail.com:email_agent": b"<bob-toy-public-key-bytes>",
+    },
+    durable_authorization_state_store=SQLiteDurableAuthorizationStateStore(
+        "/tmp/saga-pqcan-authorization.sqlite3"
+    ),
+)
+```
+
+The durable profile requires strict Coordinator mode and cannot be mixed with
+separate replay, revocation, or budget stores. It is a local research backend,
+not a multi-host consensus database. Outbox delivery is at least once, so an
+external audit consumer must deduplicate the stable event id.
+
 ```bash
 .venv/bin/python experiments/real_negative_runner.py run \
   --scenario replayed_envelope \

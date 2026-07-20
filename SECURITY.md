@@ -120,8 +120,8 @@ Strict runtime auth separates evaluation from state commit:
   `LocalExecutionContext`.
 - `RuntimeAuthCoordinator.commit(evidence)` re-evaluates the request, rechecks
   current revocation and time-window facts, compares a fingerprint covering the
-  envelope, signature, transport bindings, and runtime parameters, atomically
-  reserves replay state, and only then creates a Coordinator-marked Context.
+  envelope, signature, transport bindings, and runtime parameters, commits
+  authorization state, and only then publishes a Coordinator-marked Context.
 - A repeated or concurrent commit can create at most one Context. Replay-store
   failure, changed evidence, non-canonical runtime parameters, invalid composite
   evidence, or Context construction failure is fail-closed.
@@ -135,12 +135,31 @@ Contexts are marked uncommitted and are rejected by strict prompt enforcement.
 The private commit/context primitives are implementation details inside the
 security runtime kernel, not supported public authorization entry points.
 
-This first Coordinator closes the supported in-process bypass but is not yet a
-cross-backend transaction. With file-marker replay state, a crash after replay
-reserve but before Context delivery can permanently reject a legitimate retry.
-Atomic persistence of replay, revocation version, decision/capability state, and
-audit outbox remains R17 work and is required before stronger crash-consistency
-or multi-host availability claims.
+R17 adds an opt-in `SQLiteDurableAuthorizationStateStore` profile. It uses one
+database and `BEGIN IMMEDIATE` transactions for the request state machine
+`PENDING -> COMMITTED -> CONSUMED` or `PENDING/COMMITTED -> REJECTED`, current
+revocation facts, signed capability-budget counters, and an audit outbox.
+`request_fingerprint` and a route/decision-bound `context_fingerprint` are the
+idempotency identity: an exact `PENDING` record may resume after restart, while
+changed evidence fails closed. Only a newly returned `committed` result may
+publish a Context. Concurrent or restarted commits after `COMMITTED`/`CONSUMED`
+are replay rejects. Contexts receive only a narrow budget-consumption adapter,
+not state-commit, revocation, or outbox administration methods.
+
+State transitions and their outbox rows share the same transaction. Delivery
+is at least once: a sink failure leaves the row pending, and consumers must
+deduplicate the stable `event_id`. Durable rows contain public envelope metadata
+and hashes, never message/token text, signatures, private keys, or model state.
+Early evaluation rejects still use the normal runtime audit path because they
+never enter the durable authorization state machine.
+
+The profile deliberately favors authorization safety over availability. A
+crash after `COMMITTED` but before Context delivery does not reissue a Context;
+the retry is rejected as replay. SQLite is a local research backend, not a
+multi-host consensus service. The compatibility file-marker profile remains a
+local/dev/test option and still has the reserve-before-delivery availability
+gap; its replay, revocation, budget, and audit stores do not form one
+cross-backend transaction.
 
 Experiment, paper-reproduction, and demonstration code is not part of the
 mandatory runtime security boundary for the PQ-CAN prototype. In particular,

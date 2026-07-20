@@ -88,21 +88,19 @@ def mutation_specs() -> tuple[MutationSpec, ...]:
     return (
         MutationSpec(
             mutation_id="skip_prompt_surface_authorization",
-            description="Bypass llm_prompt authorization before local_agent.run.",
+            description="Bypass llm_prompt authorization and state consumption before local_agent.run.",
             patches=(
                 MutationPatch(
                     relative_path="saga/agent.py",
                     needle=(
-                        '        if execution_context.authorize_action("llm_prompt"):\n'
-                        "            return ExecutionGateDecision(\n"
-                        "                True,\n"
-                        '                "prompt_scope_authorized",\n'
+                        "        try:\n"
+                        '            execution_context.require_action("llm_prompt")\n'
+                        "        except ExecutionAuthorizationError as exc:\n"
                     ),
                     replacement=(
-                        "        if True:\n"
-                        "            return ExecutionGateDecision(\n"
-                        "                True,\n"
-                        '                "prompt_scope_authorized_mutation",\n'
+                        "        try:\n"
+                        "            pass  # mutation: skip prompt authorization and durable consumption\n"
+                        "        except ExecutionAuthorizationError as exc:\n"
                     ),
                 ),
             ),

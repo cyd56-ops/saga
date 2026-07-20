@@ -26,6 +26,7 @@ from saga.common.overhead import Monitor
 from saga.common.contact_policy import check_rulebook, match
 from saga.ca.CA import get_SAGA_CA
 import saga.common.crypto as sc
+from saga.durable_authorization import DurableAuthorizationStateStore
 from saga.execution_gate import (
     append_execution_gate_audit_record,
     build_execution_gate_audit_record,
@@ -233,6 +234,7 @@ def enable_toy_lwe_runtime_auth(
     replay_state_dir: str | Path | None = None,
     replay_state_store: ReplayStateStore | None = None,
     revocation_store: RevocationStore | None = None,
+    durable_authorization_state_store: DurableAuthorizationStateStore | None = None,
     capability_ttl_seconds: int = DEFAULT_RUNTIME_AUTH_CAPABILITY_TTL_SECONDS,
     enforcement_mode: EnforcementMode | str = EnforcementMode.STRICT,
     downgrade_reason: str | None = None,
@@ -245,6 +247,7 @@ def enable_toy_lwe_runtime_auth(
     verification.
 
     启用 toy LWE runtime auth 时默认使用严格执行层 gate，非 strict 模式必须说明降级理由。
+    注入 durable store 时由其统一 replay、撤销、预算和审计提交，不能混用独立状态后端。
     """
     resolved_enforcement_mode = normalize_enforcement_mode(enforcement_mode)
     if resolved_enforcement_mode is not EnforcementMode.STRICT:
@@ -258,7 +261,16 @@ def enable_toy_lwe_runtime_auth(
         raise ValueError("capability_ttl_seconds must be a positive integer")
 
     effective_replay_state_dir = replay_state_dir
-    if replay_state_store is None:
+    if durable_authorization_state_store is not None:
+        if any(
+            store is not None
+            for store in (replay_state_dir, replay_state_store, revocation_store)
+        ):
+            raise ValueError(
+                "durable_authorization_state_store cannot be mixed with separate state stores"
+            )
+        effective_replay_state_dir = None
+    elif replay_state_store is None:
         effective_replay_state_dir = replay_state_dir or _require_default_replay_state_dir(agent)
 
     gate = build_toy_lwe_execution_gate(
@@ -270,6 +282,7 @@ def enable_toy_lwe_runtime_auth(
         replay_state_dir=effective_replay_state_dir,
         replay_state_store=replay_state_store,
         revocation_store=revocation_store,
+        durable_authorization_state_store=durable_authorization_state_store,
     )
     agent.pq_signature_scheme = scheme
     agent.pq_public_key = key_pair.public_key
@@ -290,8 +303,9 @@ def enable_toy_lwe_runtime_auth_from_config(
     now_fn: Callable[[], datetime] | None = None,
     replay_state_store: ReplayStateStore | None = None,
     revocation_store: RevocationStore | None = None,
+    durable_authorization_state_store: DurableAuthorizationStateStore | None = None,
 ) -> ExecutionGate | None:
-    """从配置块启用 runtime auth，并按 mode 与 replay backend 保持安全边界。"""
+    """从配置块启用 runtime auth，并按 mode 与 durable/replay backend 保持安全边界。"""
     if runtime_auth_config is None or not runtime_auth_config.enabled:
         return None
 
@@ -310,7 +324,13 @@ def enable_toy_lwe_runtime_auth_from_config(
             raise ValueError(f"invalid base64 trusted public key for {aid}") from exc
 
     replay_store_config = runtime_auth_config.resolved_replay_store()
-    if replay_state_store is not None:
+    if durable_authorization_state_store is not None:
+        if replay_state_store is not None or revocation_store is not None:
+            raise ValueError(
+                "durable_authorization_state_store cannot be mixed with separate state stores"
+            )
+        replay_state_dir = None
+    elif replay_state_store is not None:
         if replay_store_config is None or replay_store_config.backend != "external_strong_consistency":
             raise ValueError(
                 "explicit ReplayStateStore injection requires "
@@ -336,6 +356,7 @@ def enable_toy_lwe_runtime_auth_from_config(
         replay_state_dir=replay_state_dir,
         replay_state_store=replay_state_store,
         revocation_store=revocation_store,
+        durable_authorization_state_store=durable_authorization_state_store,
         capability_ttl_seconds=runtime_auth_config.capability_ttl_seconds,
         enforcement_mode=runtime_auth_config.resolved_enforcement_mode(),
         downgrade_reason=runtime_auth_config.downgrade_reason,
@@ -1297,7 +1318,37 @@ class Agent:
                 pq_signature=execution_context.pq_signature,
                 enforcement_mode=enforcement_mode.value,
             )
-        if execution_context.authorize_action("llm_prompt"):
+        try:
+            execution_context.require_action("llm_prompt")
+        except ExecutionAuthorizationError as exc:
+            strict_decision = ExecutionGateDecision(
+                False,
+                exc.reason,
+                protocol_allow=protocol_allow,
+                request_envelope_valid=request_envelope_valid,
+                pq_signature_valid=pq_signature_valid,
+                can_accept=can_accept,
+                execution_scope_allowed=False,
+                internal_policy_accept=False,
+                request_envelope=execution_context.request_envelope,
+                pq_signature=execution_context.pq_signature,
+                enforcement_mode=enforcement_mode.value,
+                downgrade_reason=downgrade_reason,
+            )
+            if (
+                enforcement_mode is EnforcementMode.STRICT
+                or not _agent_allows_permissive_continue(self)
+            ):
+                return strict_decision
+            return replace(
+                strict_decision,
+                allowed=True,
+                reason="would_reject_permissive",
+                internal_policy_accept=True,
+                would_reject=True,
+                would_reject_reason=strict_decision.reason,
+            )
+        else:
             return ExecutionGateDecision(
                 True,
                 "prompt_scope_authorized",
@@ -1312,30 +1363,6 @@ class Agent:
                 enforcement_mode=enforcement_mode.value,
                 downgrade_reason=downgrade_reason,
             )
-        strict_decision = ExecutionGateDecision(
-            False,
-            "prompt_scope_not_authorized",
-            protocol_allow=protocol_allow,
-            request_envelope_valid=request_envelope_valid,
-            pq_signature_valid=pq_signature_valid,
-            can_accept=can_accept,
-            execution_scope_allowed=False,
-            internal_policy_accept=False,
-            request_envelope=execution_context.request_envelope,
-            pq_signature=execution_context.pq_signature,
-            enforcement_mode=enforcement_mode.value,
-            downgrade_reason=downgrade_reason,
-        )
-        if enforcement_mode is EnforcementMode.STRICT or not _agent_allows_permissive_continue(self):
-            return strict_decision
-        return replace(
-            strict_decision,
-            allowed=True,
-            reason="would_reject_permissive",
-            internal_policy_accept=True,
-            would_reject=True,
-            would_reject_reason=strict_decision.reason,
-        )
 
     def _local_agent_supports_execution_context(self) -> bool:
         """检查本地 agent 是否声明会用 execution_context 保护受限资源。"""

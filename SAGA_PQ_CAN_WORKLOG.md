@@ -574,11 +574,17 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - 未知、重复、乱序、错误宽度、截断、尾随或超长编码均在 backend 选择和验签前 fail-closed
 - 双路线 R4/R5 Runtime Auth Coordinator 已完成第一阶段：
   - `RouteEvidence` / `CompositeEvidence` 是不可变的 evaluate 结果；evaluate 不 reserve replay，也不创建 `LocalExecutionContext`
-  - `RuntimeAuthCoordinator.commit(...)` 会重新验证当前请求、时间窗和撤销状态，核对绑定 envelope/signature/transport/runtime parameters 的 canonical fingerprint，再 reserve replay 并创建唯一 Coordinator-marked Context
+  - `RuntimeAuthCoordinator.commit(...)` 会重新验证当前请求、时间窗和撤销状态，核对绑定 envelope/signature/transport/runtime parameters 的 canonical fingerprint，再提交状态并发布唯一 Coordinator-marked Context
   - 同一 evidence 的重复或并发 commit 至多生成一个 Context；evidence 变化、非 canonical 参数、replay backend 故障和无效 composite 均 fail-closed
   - `SignedRequestExecutionGate` 默认使用 strict Coordinator mode；旧 `authorize()`、`consume_request()` 和 direct Context helper 不能在 strict 模式授予可执行 authority
   - 显式 `compatibility` mode 只保留历史测试、离线诊断和已声明降级路径；其 Context 标记为 uncommitted，strict Agent prompt 路径会拒绝
-  - 当前仍不是 replay/revocation/capability/audit 的跨后端事务；file-marker 在 reserve 后崩溃可能永久拒绝合法重试，该限制保留给 R17
+- shared core R17 durable authorization state machine 已完成第一阶段：
+  - 新增 `SQLiteDurableAuthorizationStateStore`，以单库事务统一 `PENDING -> COMMITTED -> CONSUMED` / `REJECTED`、当前撤销事实、signed budget 计数和 audit outbox
+  - request fingerprint 与绑定 route/decision 的 context fingerprint 构成恢复身份；完全一致的 PENDING 可在重启后完成，漂移证据、重复/并发 COMMITTED 和未知后端结果全部 fail-closed
+  - `RuntimeAuthCoordinator` 仍是唯一 authority 入口，只有 durable backend 新返回 `committed` 才发布 Context；Context 只持有窄化的 consume adapter，不暴露 commit/revocation/outbox 管理 API
+  - prompt surface 已改用 `require_action("llm_prompt")`，因此无 signed budget 时也会验证 durable COMMITTED 状态并把首次使用标为 CONSUMED；预算/撤销检查与消费在同一事务内完成
+  - 状态迁移与 outbox 行同事务写入；投递采用稳定 event id 的 at-least-once 语义，失败保留 pending，外部消费者必须去重
+  - SQLite profile 只用于本地研究/测试，不声明多主机共识；COMMITTED 后、Context 交付前崩溃会安全地拒绝重发但牺牲可用性；file-marker compatibility profile 仍不提供跨 replay/revocation/budget/audit 的原子事务
 - 双路线关联 worktree 当前实际进度：
   - Route B HEAD `50dc336d8a1dcad8f8e5c833a4f687744a1ec669` 已完成 R6-R11 第一阶段：strict cryptography/OpenSSL ML-DSA backend、typed fixed-policy toolchain、trusted fact compiler、组件级 BG1-BG8、真实 ML-DSA-44 八场景 shadow corpus、B1.5/B2 无状态强制 AND，以及复用同一 IR/schema/reference/circuit/gadget 的 general + memory 双 profile PolicyCompiler/manifest
   - Route A HEAD `d899d25874a40992df526710ff263f280a61d882` 已完成 R12-R16 第一阶段：有界异步 shadow、A0.5 reusable toolchain、A1 toy arithmetic closure，以及 A2 research-only module-lattice fixed negacyclic relation
@@ -624,10 +630,10 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
   - `tool` 已有实际包装 gate
   - `memory` 已至少有一个真实写入点走 gate
 - 当前 `SignedRequestExecutionGate` 的 strict 状态提交与 Context 入口已收口到第一版 Coordinator 契约：
-  - `RuntimeAuthCoordinator.evaluate(...)` 保持无本地状态提交，`commit(...)` 是支持的 strict replay reserve / Context 创建入口
+  - `RuntimeAuthCoordinator.evaluate(...)` 保持无本地状态提交，`commit(...)` 是支持的 strict 状态提交 / Context 发布入口
   - `Agent` receiving-side 与 initiating-side strict 路径均执行 Coordinator evaluate -> commit，并且只接受 `coordinator_committed=True` 的 Context
   - private reserve/context primitive 仅属于 runtime security kernel 实现细节，不是受支持的公开授权 API
-  - replay reserve、revocation、decision/capability 持久化和 audit 目前仍不是一条跨后端事务；更强崩溃恢复语义属于 R17
+  - opt-in durable profile 已统一 request state、revocation、budget 与 outbox；旧 file-marker / 独立 store profile 仍保留原有跨后端事务限制
 - 当前 `saga/security_kernel.py` 已从 entry-centric 清单升级为第一版 sink-centric audit：
   - 新增 `ProtectedSinkAudit`
   - 新增论文级命题 `Execute(surface) => N_verify=1 AND scope_ok AND replay_ok AND delegation_ok AND policy_ok`
@@ -1184,14 +1190,14 @@ research/route-a-neural-verifier  research/route-b-fixed-auth
 - Proof-hardening / sink-centric 不可绕过性证据：`已完成`（第一阶段：protected sink audit、static drift、no-side-effect oracle、mutation runner、Python/TLA+ 模型、refinement mapping 与 manual-only proof-hardening workflow 已落地）
 - 当前主线 release / paper closure：`已完成`（第一阶段：无需新增旧主线大模块即可进入论文整理或后续扩展）
 - 后续执行访问控制扩展：`进行中`（J1-J10 第一阶段已完成：显式 enforcement mode、参数级 constrained scope schema、确定性 predicate evaluator、delegation constraint attenuation、hash-chained audit、capability budget / SQLite contract、revocation store / 短 TTL、online invariant monitor 与轻量 IFC / egress contract 已落地；下一步为不可信推理平台 threat model 论证）
-- 双路线认证研究与论文选择：`进行中`（shared core R2-R5、Route B R6-R11、Route A R12-R16 第一阶段已完成；下一步进入 R17 durable state，integration 与公平实验仍后置）
+- 双路线认证研究与论文选择：`进行中`（shared core R2-R5/R17、Route B R6-R11、Route A R12-R16 第一阶段已完成；下一步进入 integration mode wiring、J11 与 R18 公平实验）
 
 ### 3.4 阻塞 / 风险
 
 - 双路线当前阶段阻塞项：
-  - 路线 B 已有 strict ML-DSA backend、B1.5/B2 无状态 enforcement 和 B3 双 profile compiler/manifest，但尚无 Coordinator route 集成、durable transactional state 或持续负载证据
+  - 路线 B 已有 strict ML-DSA backend、B1.5/B2 无状态 enforcement 和 B3 双 profile compiler/manifest，但尚无 Coordinator route 集成或持续负载证据
   - 路线 A A2 已建立 fixed negacyclic module relation，但 reference 构造明确可伪造，尚无 Module-SIS 安全证明、CNN/NTT backend 或 ML-DSA 神经化
-  - 文件 marker 只能原子 reserve replay，不能保证 replay / revocation / capability / audit 整条提交链事务化
+  - R17 SQLite durable profile 已统一本地事务，但不提供多主机共识；COMMITTED 后交付前崩溃仍选择拒绝重发，file-marker compatibility profile 也仍不保证 replay / revocation / capability / audit 整条提交链事务化
   - A shadow queue 已在 Route A 组件层完成，但尚未在 integration 分支接到 B-enforced 运行模式
 - 当前最大论文风险：
   - 路线 B 已有第二 policy profile 与 BG7/BG8 组件级数据，但 latency/memory 仅为进程内 Python 微基准和 allocator 峰值；在 Agent/Coordinator 接线、持续负载与公平实验前不能宣称端到端收益或生产完成态
@@ -1910,7 +1916,7 @@ origin/backup/repro-local
 - 论文结果报告 A/B 四象限、reference equivalence、误拒绝、延迟、backlog、crash recovery、replay 与 protected-sink side effects。
 - toy / A0-A2 的非生产边界明确；路线 B 只通过 vetted external ML-DSA backend 获得 production-facing signature claim。
 
-状态：`进行中`（shared core R2-R5、Route B R6-R11、Route A R12-R16 第一阶段已完成；R17-R18 尚未开始）
+状态：`进行中`（shared core R2-R5/R17、Route B R6-R11、Route A R12-R16 第一阶段已完成；R18 尚未开始）
 
 ## Phase U0：定义安全内核边界
 
@@ -2384,7 +2390,7 @@ protected sinks 至少覆盖：
 - R14. 路线 A0.5 migration smoke：dense 与 tiny negacyclic projector 复用同一 core，并形成 AG1 / AG4-AG8 preliminary evidence：`已完成`（第一阶段：dense 与 tiny-negacyclic projector 共用接口，preliminary gate 已通过）
 - R15. 路线 A1：完成 fixed ReLU toy verifier core、关闭 AG2/AG3、汇总 AG1-AG8 gate report，并明确 parse / hash / numeric / real-valued claim 边界：`已完成`（第一阶段：20,736 tiny exhaustive、32 normal differential、1,025 modulo cases 零 mismatch，AG1-AG8 全部通过；仍为 toy/research-only）
 - R16. 路线 A2：实现 research-only module-lattice / module-SIS-style fixed negacyclic-convolution verifier：`已完成`（第一阶段：Route A `d899d25` 已落地 `A(z-c) mod q=t` research relation、rank^2 tiny-negacyclic projector、fixed mod/equality/range/norm/one-hot/aggregation、2,025 tiny exhaustive、64 rank-2 differential、6/6 mutation 与机器可读 manifest；不声称 Module-SIS 安全、CNN/NTT 或 ML-DSA 神经化）
-- R17. 定义并实现 durable authorization state machine 与 audit outbox；记录 file-marker profile 的 availability 限制：`未开始`
+- R17. 定义并实现 durable authorization state machine 与 audit outbox；记录 file-marker profile 的 availability 限制：`已完成`（第一阶段：shared core 新增 SQLite 单库 `PENDING/COMMITTED/CONSUMED/REJECTED` 状态机，统一撤销、signed budget 与 outbox；相同 PENDING 可恢复、并发只发布一个 Context、状态/outbox 同事务、投递失败可重试，且明确 SQLite/file-marker 的 availability 与非分布式边界）
 - R18. 完成 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare`、公平实验、A/B 四象限统计与论文路线选择：`未开始`
 
 ## 7. 当前工作焦点
@@ -2398,6 +2404,7 @@ protected sinks 至少覆盖：
    - 默认模式为 `route_b_with_a_shadow`；B 决定执行，A 异步观测；Dual 只用于研究，禁止 OR / fallback 降级。
    - R2-R5 P0/shared core 第一阶段已完成：严格 adapter、无歧义签名绑定、Evidence、唯一 Coordinator commit / Context 入口和 legacy 收口均已落地。
    - Route B R6-R11 与 Route A R12-R16 已在独立 worktree 完成第一阶段；integration 仍保持 `core-api-v1`，后续公共 gate 修复仍回 core 处理。
+   - shared core R17 已完成第一阶段：SQLite durable profile 统一 request state、revocation、budget 与 audit outbox；兼容 file-marker 路径的可用性限制继续保留。
    - 主工作树日志现在通过完整 HEAD 登记表和 `scripts/check_worktree_progress.py` 检查跨 worktree 进度，路线 checkpoint 后必须另做主日志汇总。
    - J11 threat model 并入 R18 论文选择阶段：分别说明路线 A 的 real-valued / untrusted inference 假设与路线 B 的标准密码 / fixed authorization claim。
    - 设计原则保持不变：接收侧强制点 deterministic、fail-closed、可审计；LLM / Agent-LLM interface 只能提出 intent / scope proposal，不能直接授权或扩大 signed capability。
@@ -2569,11 +2576,11 @@ protected sinks 至少覆盖：
 
 下一步建议直接执行：
 
-1. Route A R16 已通过规定测试并形成 checkpoint `d899d25`；A2 第一阶段只表述为 research-only fixed ring relation closure，不继续扩大 toy 参数。
-2. Route B R11 已通过规定测试并形成 checkpoint `50dc336`；general 与 memory profile 复用同一 compiler/IR/schema/reference/circuit/gadget，并形成 BG7/BG8 第一阶段 manifest，但只生成无状态 evidence。
-3. 下一实现步骤进入 R17：在 shared core 定义 durable authorization state machine 与 audit outbox，统一 replay、revocation、capability budget、decision/context 和 audit 的提交/恢复语义。
-4. R17 必须保持 `RuntimeAuthCoordinator` 为唯一 authority 入口，明确 prepare/commit/abort/recovery 状态、幂等键、崩溃点和 fail-closed 行为；Route A/B evidence 与 PolicyCompiler 均不得直接写状态。
-5. file-marker replay profile 的可用性限制需要显式保留；durable 后端并发/crash-recovery 测试通过后，再进入 integration route wiring、J11 threat model 与 R18 公平实验。
+1. shared core R17 已实现并完成聚焦测试；形成 core checkpoint 后，把该 checkpoint 作为 integration route wiring 的公共基线候选，不为同步而直接合并 Route A/B 功能提交。
+2. 下一实现步骤进入 R18 integration：先设计并接线 `route_b_only / route_b_with_a_shadow / dual_required_research / offline_compare`，保持 B 为默认执行 authority、A shadow 零 authority，禁止 OR/fallback 降级。
+3. integration 接线必须复用 R17 `RuntimeAuthCoordinator`/durable commit 作为唯一 Context 发布入口；Route A/B evidence 与 PolicyCompiler 不得直接写授权状态。
+4. 在同一任务/输入/环境下生成 A/B 四象限、reference equivalence、误拒绝、延迟、backlog、crash recovery、replay 与 protected-sink side-effect 统计，再做论文路线选择。
+5. 将 J11 threat model 并入 R18 文档：分别限定路线 A 的 real-valued/untrusted-inference 假设、路线 B 的标准密码/fixed-policy claim，以及 SQLite/file-marker 的 availability 和非分布式边界。
 
 历史 proof-hardening / artifact / branch 状态保留为支撑证据，不再作为默认下一步：
 
@@ -2612,6 +2619,56 @@ API cost 目前不从价格表估算；只有模型后端诊断记录显式提�
    - 若失败，失败原因是什么
 
 ## 8. 工作日志
+
+### 2026-07-20 Shared Core R17 Durable Authorization Session
+
+目标：
+
+- 在 `research/runtime-auth-core` 实现 R17 durable authorization state machine 与 audit outbox。
+- 保持 `RuntimeAuthCoordinator` 为唯一 authority/Context 发布入口，统一本地 replay、撤销、signed budget 与状态审计事务。
+- 锁定 PENDING 恢复、并发唯一提交、撤销竞争、预算消费、outbox 重试和 file-marker availability 边界。
+
+R17 第一阶段实现：
+
+- 新增 `saga/durable_authorization.py`：
+  - `SQLiteDurableAuthorizationStateStore` 使用 `BEGIN IMMEDIATE` 和单库表实现 `PENDING -> COMMITTED -> CONSUMED` 以及 `PENDING/COMMITTED -> REJECTED`。
+  - request fingerprint 与绑定 route/decision/envelope/capability 的 context fingerprint 共同标识可恢复提交；只有完全相同的 PENDING 可以恢复。
+  - commit/finalize 重新检查当前撤销事实；首次 Context 使用在同一事务内检查授权状态、撤销和 signed budget，并记录 CONSUMED。
+  - 状态迁移、撤销事实与相应 outbox 行同事务写入；stable event id 支持 at-least-once 重试和消费者幂等去重。
+  - durable 表/outbox 只保存公开元数据与摘要，不保存 message/token、签名、私钥或模型状态。
+- `SignedRequestExecutionGate` / `RuntimeAuthCoordinator` 新增 opt-in durable backend：
+  - durable profile 必须使用 strict Coordinator，且不能混用独立 replay/revocation/budget store。
+  - 只有 backend 新返回 `committed` 才发布唯一 Context；重复、冲突、撤销、未知结果与后端故障全部 fail-closed。
+  - Context 只持有窄化 consume adapter，不能调用 commit/revocation/outbox 管理接口。
+- `Agent` toy runtime-auth factory 支持显式注入 durable store；prompt surface 改用 `require_action("llm_prompt")`，让 prompt scope、durable 状态和预算在进入 `local_agent.run()` 前共同生效。
+- 共用的 execution-budget scope 匹配移到 `saga/messages.py`，旧 SQLite budget backend 与 durable backend 使用同一语义。
+- 更新 prompt-gate mutation：变异现在跳过 `require_action` 的授权和 durable 消费，并由既有负向测试成功检出。
+
+验证：
+
+- focused durable/coordinator/agent/gate/factory -> `130 passed, 5 subtests passed`
+- mutation focused -> `31 passed, 18 subtests passed`
+- prompt mutation execution -> `detected=1/1`, `all_detected=True`
+- `.venv/bin/python -m pytest -q` -> `517 passed, 96 subtests passed`
+- `.venv/bin/python -m pytest -q tests/security` -> `27 passed`
+- `.venv/bin/python -m pytest -q tests/integration` -> `39 passed, 12 subtests passed`
+- `.venv/bin/python scripts/check_worktree_progress.py` -> `worktree progress registry matches all linked branch HEADs`
+- `.venv/bin/python -m py_compile saga/durable_authorization.py saga/messages.py saga/execution_gate.py saga/agent.py tests/test_durable_authorization_state.py` -> success
+- `git diff --check` -> no output
+- 仓库未配置 ruff/mypy，因此未运行对应检查。
+
+安全与未实现边界：
+
+- SQLite durable profile 是本地研究/测试实现，不是多主机 consensus 或 deployment-grade HA backend。
+- 完全一致的 PENDING 可在崩溃后恢复；若进程在 COMMITTED 后、Context 交付前崩溃，则后续请求按 replay 拒绝，不重发 authority，安全性优先于可用性。
+- outbox 是 at-least-once，不是 exactly-once；消费者必须按 event id 去重。验签/策略阶段的早期拒绝不会进入 durable 状态机，仍由现有 runtime audit 记录。
+- file-marker compatibility profile 继续只提供 replay reserve，不能声明 replay/revocation/budget/audit 跨后端原子性。
+- Route A/B 功能提交尚未进入 integration；R18 mode wiring、公平实验、持续负载、多主机 durable adapter 与 J11 threat model 尚未完成。
+
+Git / checkpoint 状态：
+
+- 本轮不包含私钥、生成凭据、本地数据库、模型输出或 `paper/`。
+- 本节将形成 `research/runtime-auth-core` 本地 R17 checkpoint；未自动推送远端，最终 commit 以 `git log -1 --oneline` 为准。
 
 ### 2026-07-20 Route B R11 Primary Worktree Synchronization Session
 

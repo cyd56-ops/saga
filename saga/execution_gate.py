@@ -15,12 +15,17 @@ import sqlite3
 import threading
 from typing import Any, Literal, ParamSpec, Protocol, TypeVar
 
+from saga.durable_authorization import (
+    CapabilityConsumptionStatus,
+    DurableAuthorizationCommitV1,
+    DurableAuthorizationStateStore,
+    RevocationStatus,
+)
 from saga.messages import (
-    EXECUTION_BUDGET_TOTAL_KEY,
     RequestEnvelope,
     action_scopes_are_attenuated,
     action_scopes_allow,
-    action_scope_allows,
+    execution_budget_scopes_for_action,
     normalize_execution_budget,
     flow_policy_blocked_labels,
     join_flow_labels,
@@ -772,7 +777,7 @@ class CapabilityStateStore(Protocol):
         self,
         envelope: RequestEnvelope,
         action_scope: str,
-    ) -> Literal["consumed", "exhausted"]:
+    ) -> CapabilityConsumptionStatus:
         """为指定执行面原子扣减预算；预算耗尽时返回 exhausted。"""
 
 
@@ -796,7 +801,7 @@ class SQLiteCapabilityStateStore:
     ) -> Literal["consumed", "exhausted"]:
         """在单个 SQLite 事务中扣减 total 与匹配执行面预算。"""
         budget = normalize_execution_budget(envelope.execution_budget)
-        budget_scopes = _budget_scopes_for_action(budget, action_scope)
+        budget_scopes = execution_budget_scopes_for_action(budget, action_scope)
         if not budget_scopes:
             return "consumed"
         rows = [
@@ -905,13 +910,6 @@ class SQLiteCapabilityStateStore:
                     )
         except sqlite3.Error as exc:
             raise RuntimeError("sqlite capability state database is unavailable") from exc
-
-
-RevocationStatus = Literal[
-    "active",
-    "capability_revoked",
-    "parent_capability_revoked",
-]
 
 
 class RevocationStore(Protocol):
@@ -1087,6 +1085,21 @@ class SQLiteRevocationStore:
             raise RuntimeError("sqlite revocation database is unavailable") from exc
 
 
+class _DurableContextStateAdapter:
+    """只向 Context 暴露动作消费，不暴露 commit、revocation 或 outbox 管理 API。"""
+
+    def __init__(self, store: DurableAuthorizationStateStore) -> None:
+        self._store = store
+
+    def consume_budget(
+        self,
+        envelope: RequestEnvelope,
+        action_scope: str,
+    ) -> CapabilityConsumptionStatus:
+        """委托统一后端执行状态/撤销/预算事务。"""
+        return self._store.consume_budget(envelope, action_scope)
+
+
 @dataclass(frozen=True)
 class LocalExecutionContext:
     """Execution context propagated into local prompt/tool execution."""
@@ -1096,6 +1109,7 @@ class LocalExecutionContext:
     request_envelope: RequestEnvelope
     pq_signature: bytes
     capability_state_store: CapabilityStateStore | None = None
+    durable_authorization_required: bool = False
     coordinator_committed: bool = False
     """仅 Coordinator 完成 replay reserve 后设置，strict Agent 只接受该状态。"""
 
@@ -1132,16 +1146,20 @@ class LocalExecutionContext:
         self._consume_budget(action_scope)
 
     def _consume_budget(self, action_scope: str) -> None:
-        """按 signed execution budget 原子扣减本次受保护动作。"""
-        if not self.request_envelope.execution_budget:
+        """扣减预算；durable 模式同时验证提交状态并记录首次 Context 使用。"""
+        if (
+            not self.request_envelope.execution_budget
+            and not self.durable_authorization_required
+        ):
             return
-        if self.capability_state_store is None:
+        state_store = self.capability_state_store
+        if state_store is None:
             raise ExecutionAuthorizationError(
                 "capability_budget_store_missing",
                 action_scope,
             )
         try:
-            result = self.capability_state_store.consume_budget(
+            result = state_store.consume_budget(
                 self.request_envelope,
                 action_scope,
             )
@@ -1153,6 +1171,22 @@ class LocalExecutionContext:
         if result == "exhausted":
             raise ExecutionAuthorizationError(
                 "capability_budget_exhausted",
+                action_scope,
+            )
+        durable_rejections = {
+            "authorization_missing": "durable_authorization_missing",
+            "authorization_not_committed": "durable_authorization_not_committed",
+            "capability_revoked": "capability_revoked",
+            "parent_capability_revoked": "parent_capability_revoked",
+        }
+        if result in durable_rejections:
+            raise ExecutionAuthorizationError(
+                durable_rejections[result],
+                action_scope,
+            )
+        if result != "consumed":
+            raise ExecutionAuthorizationError(
+                "capability_budget_store_invalid_result",
                 action_scope,
             )
 
@@ -1635,23 +1669,6 @@ def reason_for_unauthorized_scope(action_scope: str) -> str:
     return "execution_scope_not_authorized"
 
 
-def _budget_scopes_for_action(
-    execution_budget: Mapping[str, int],
-    action_scope: str,
-) -> tuple[str, ...]:
-    """返回本次动作需要同时扣减的 total 与匹配 scope 预算。"""
-    parse_action_scope(action_scope)
-    budget_scopes: list[str] = []
-    if EXECUTION_BUDGET_TOTAL_KEY in execution_budget:
-        budget_scopes.append(EXECUTION_BUDGET_TOTAL_KEY)
-    for budget_scope in execution_budget:
-        if budget_scope == EXECUTION_BUDGET_TOTAL_KEY:
-            continue
-        if action_scope_allows(budget_scope, action_scope):
-            budget_scopes.append(budget_scope)
-    return tuple(budget_scopes)
-
-
 @dataclass(frozen=True)
 class ParentCapabilityFacts:
     """本地已接受父 capability 的事实源，用于校验委托子 capability 收窄关系。"""
@@ -1737,6 +1754,7 @@ class SignedRequestExecutionGate:
     This adapter is transport-facing and consumes canonical request envelopes
     plus detached signatures. It does not hold any private signing material.
     replay_state_dir 或 replay_state_store 指定时，已消费信封会持久化到共享后端，用于跨实例重放拒绝。
+    durable_authorization_state_store 指定时，则由单个事务后端统一授权状态、撤销、预算与 audit outbox。
     """
 
     def __init__(
@@ -1749,22 +1767,44 @@ class SignedRequestExecutionGate:
         replay_state_store: ReplayStateStore | None = None,
         capability_state_store: CapabilityStateStore | None = None,
         revocation_store: RevocationStore | None = None,
+        durable_authorization_state_store: DurableAuthorizationStateStore | None = None,
         parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None = None,
         coordinator_mode: CoordinatorMode = "strict",
     ) -> None:
         """Store gate dependencies and select strict or explicit compatibility mode.
 
         strict 模式禁止旧 authorize/consume/direct Context helper 成为执行授权入口；
-        compatibility 只用于历史测试、离线诊断或显式降级路径。
+        compatibility 只用于历史测试、离线诊断或显式降级路径。durable profile
+        必须独占状态依赖并使用 strict Coordinator，避免跨后端提交间隙。
         """
         if replay_state_dir is not None and replay_state_store is not None:
             raise ValueError("configure either replay_state_dir or replay_state_store, not both")
         if coordinator_mode not in ("strict", "compatibility"):
             raise ValueError("coordinator_mode must be strict or compatibility")
+        if durable_authorization_state_store is not None and any(
+            store is not None
+            for store in (
+                replay_state_dir,
+                replay_state_store,
+                capability_state_store,
+                revocation_store,
+            )
+        ):
+            raise ValueError(
+                "durable_authorization_state_store cannot be mixed with separate state stores"
+            )
+        if (
+            durable_authorization_state_store is not None
+            and coordinator_mode != "strict"
+        ):
+            raise ValueError("durable authorization state requires strict coordinator mode")
         self.can_gate = can_gate
         self.trusted_public_keys = dict(trusted_public_keys)
-        self.capability_state_store = capability_state_store
-        self.revocation_store = revocation_store
+        self._durable_authorization_state_store = durable_authorization_state_store
+        self.capability_state_store = (
+            durable_authorization_state_store or capability_state_store
+        )
+        self.revocation_store = durable_authorization_state_store or revocation_store
         self.parent_capability_store = _normalize_parent_capability_store(parent_capability_store)
         self.coordinator_mode = coordinator_mode
         self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
@@ -2083,7 +2123,16 @@ class SignedRequestExecutionGate:
             receiver_aid=decision.request_envelope.receiver_aid,
             request_envelope=decision.request_envelope,
             pq_signature=decision.pq_signature,
-            capability_state_store=self.capability_state_store,
+            capability_state_store=(
+                _DurableContextStateAdapter(
+                    self._durable_authorization_state_store
+                )
+                if self._durable_authorization_state_store is not None
+                else self.capability_state_store
+            ),
+            durable_authorization_required=(
+                self._durable_authorization_state_store is not None
+            ),
             coordinator_committed=coordinator_committed,
         )
 
@@ -2143,7 +2192,7 @@ class RuntimeAuthCommitResult:
 
 
 class RuntimeAuthCoordinator:
-    """统一认证评估与 replay reserve/Context 创建的唯一 strict 提交入口。"""
+    """统一认证评估与 durable commit/Context 发布的唯一 strict 提交入口。"""
 
     def __init__(
         self,
@@ -2185,7 +2234,7 @@ class RuntimeAuthCoordinator:
         )
 
     def commit(self, evidence: CompositeEvidence) -> RuntimeAuthCommitResult:
-        """重新验证 evidence、reserve replay，并且只在成功后创建 committed Context。"""
+        """重新验证 evidence，并且只在状态提交成功后发布 committed Context。"""
         invalid_decision = ExecutionGateDecision(False, "invalid_composite_evidence")
         if not isinstance(evidence, CompositeEvidence):
             return RuntimeAuthCommitResult(
@@ -2251,24 +2300,31 @@ class RuntimeAuthCoordinator:
             )
             return RuntimeAuthCommitResult(False, changed.reason, changed)
 
-        committed_decision = self._gate._commit_evaluated_request(decision)
+        context = self._gate._build_context_from_committed_decision(
+            decision,
+            coordinator_committed=True,
+        )
+        if context is None:
+            failed = replace(
+                decision,
+                allowed=False,
+                reason="local_execution_context_creation_failed",
+            )
+            return RuntimeAuthCommitResult(False, failed.reason, failed)
+
+        if self._gate._durable_authorization_state_store is not None:
+            committed_decision = self._commit_durable_authorization(
+                decision,
+                request_fingerprint=current_fingerprint,
+            )
+        else:
+            committed_decision = self._gate._commit_evaluated_request(decision)
         if not committed_decision.allowed:
             return RuntimeAuthCommitResult(
                 False,
                 committed_decision.reason,
                 committed_decision,
             )
-        context = self._gate._build_context_from_committed_decision(
-            committed_decision,
-            coordinator_committed=True,
-        )
-        if context is None:
-            failed = replace(
-                committed_decision,
-                allowed=False,
-                reason="local_execution_context_creation_failed",
-            )
-            return RuntimeAuthCommitResult(False, failed.reason, failed)
         committed_decision = replace(
             committed_decision,
             local_execution_context=context,
@@ -2279,6 +2335,57 @@ class RuntimeAuthCoordinator:
             committed_decision,
             context,
         )
+
+    def _commit_durable_authorization(
+        self,
+        decision: ExecutionGateDecision,
+        *,
+        request_fingerprint: str,
+    ) -> ExecutionGateDecision:
+        """事务化提交状态与 outbox；非 committed 结果全部映射为稳定拒绝。"""
+        store = self._gate._durable_authorization_state_store
+        envelope = decision.request_envelope
+        if store is None or envelope is None:
+            return replace(
+                decision,
+                allowed=False,
+                reason="durable_authorization_state_unavailable",
+            )
+        commit = DurableAuthorizationCommitV1(
+            request_id=envelope.hex_digest(),
+            request_fingerprint=request_fingerprint,
+            route_id=self.route_id,
+            decision_reason=decision.reason,
+            envelope=envelope,
+        )
+        try:
+            result = store.commit_authorization(commit)
+        except OSError:
+            return replace(
+                decision,
+                allowed=False,
+                reason="durable_authorization_state_unavailable",
+            )
+        reason_by_result = {
+            "replayed": "replayed_request_envelope",
+            "rejected": "durable_authorization_rejected",
+            "conflict": "durable_authorization_conflict",
+            "capability_revoked": "capability_revoked",
+            "parent_capability_revoked": "parent_capability_revoked",
+        }
+        if result != "committed":
+            return replace(
+                decision,
+                allowed=False,
+                reason=reason_by_result.get(
+                    result,
+                    "durable_authorization_invalid_result",
+                ),
+            )
+        request_id = envelope.hex_digest()
+        with self._gate._replay_lock:
+            self._gate._seen_request_ids.add(request_id)
+        return decision
 
 
 def _runtime_auth_request_fingerprint(
@@ -2326,6 +2433,7 @@ def build_toy_lwe_execution_gate(
     replay_state_dir: str | Path | None = None,
     replay_state_store: ReplayStateStore | None = None,
     revocation_store: RevocationStore | None = None,
+    durable_authorization_state_store: DurableAuthorizationStateStore | None = None,
     parent_capability_store: Mapping[str, ParentCapabilityStoreValue] | None = None,
     coordinator_mode: CoordinatorMode = "strict",
 ) -> SignedRequestExecutionGate:
@@ -2334,6 +2442,7 @@ def build_toy_lwe_execution_gate(
     This helper centralizes the current prototype wiring so real agent/runtime
     entry points do not need to manually assemble ``CAN`` plus verifier objects.
     replay_state_dir 或 replay_state_store 提供时，会把已消费信封持久化到共享 replay 后端；
+    durable_authorization_state_store 提供时，使用统一事务状态机且禁止混用独立状态后端；
     coordinator_mode 默认 strict，compatibility 只供显式离线/历史 harness 使用。
     """
     # toy/PQ-CAN 依赖只在启用 research runtime auth 时加载，保持 SAGA 核心导入路径轻量。
@@ -2358,6 +2467,7 @@ def build_toy_lwe_execution_gate(
         replay_state_dir=replay_state_dir,
         replay_state_store=replay_state_store,
         revocation_store=revocation_store,
+        durable_authorization_state_store=durable_authorization_state_store,
         parent_capability_store=parent_capability_store,
         coordinator_mode=coordinator_mode,
     )
