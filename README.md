@@ -388,8 +388,72 @@ Supported runtime-auth modes are:
 - `toy_compiled_research`: default research path; compiles the toy LWE verifier
   into the fixed verifier/CAN wiring.
 - `toy_wrapper`: research comparison path that calls the toy verifier wrapper.
-- `mldsa_external`: reserved for a vetted external ML-DSA backend; the current
-  config-driven path fails closed unless explicit backend wiring is added.
+- `mldsa_external`: reserved for a vetted external ML-DSA backend. Route B R6
+  provides explicit `MLDSABackendContractV1` / `MLDSARouteBVerifier` wiring,
+  while the generic config-driven Agent helper still fails closed until a
+  deployment injects that route and its trusted key registry explicitly.
+
+The checked-in Route B shim requires `cryptography>=48.0.1,<50.0.0` for the
+OpenSSL-backed ML-DSA path. Cryptography 47 introduced the Python ML-DSA classes
+for AWS-LC/BoringSSL, while cryptography 48 added support for OpenSSL 3.5+.
+The shim pins the exact cryptography and OpenSSL provider versions, parameter
+set, profile, and application context before verification. It accepts only the
+pure ML-DSA API exposed by this backend and rejects HashML-DSA profiles rather
+than manually pre-hashing. The validated local environment uses cryptography
+49.0.0 with its wheel-provided OpenSSL 4.0.1 and completes a real ML-DSA-44
+keygen/sign/verify round trip; unavailable providers still fail closed without
+falling back to toy LWE.
+
+Route B B0.5/B1 now also has a typed fixed-policy shadow toolchain. Its V1
+layout contains six built-in Boolean facts: standard ML-DSA signature validity,
+canonical envelope validity, scope authorization, flow permission, delegation
+permission, and time-window validity. Every fact must carry the matching
+internal validator source, source version, and a 32-byte evidence digest. Raw
+mappings, integers used as booleans, floating-point values, unknown versions,
+wrong lengths, non-binary uint8 encodings, missing fields, and duplicate fields
+are rejected before fixed-policy evaluation.
+
+`FixedPolicyAggregator` implements the B1 AND as one fixed Linear layer followed
+by one fixed ReLU. It has no trainable parameters and accepts only the exact
+built-in integer output `1`. `FixedPolicyShadowEvaluator` compares it with the
+ordinary `ReferenceAuthorizationPolicy` using the same layout and predicate IR.
+Its evidence is permanently marked `shadow_only` and
+`authority_granted=false`; it cannot create a `LocalExecutionContext`, call the
+Coordinator, or invoke a protected sink.
+
+From the Route B worktree, generate the deterministic preliminary BG1-BG6
+report with module execution so the shared editable virtual environment does
+not resolve another worktree:
+
+```bash
+/home/kali/saga/.venv/bin/python -m experiments.fixed_policy_gate_runner \
+  --output /tmp/saga-route-b-fixed-policy-gates.json
+```
+
+The report covers the complete 64-case Boolean space, a fixed-seed differential
+corpus, predicate-deletion mutations, trace reason coverage, exact output types,
+and fixed-circuit training-state audit. It is intentionally labeled
+`B1_shadow_preliminary`: it contains synthetic typed facts rather than Agent
+runtime shadow traffic, does not include BG8 latency/memory measurements, and
+is not approval to enter B1.5 enforcement. Deletion mutations use an explicitly
+separate research profile; the canonical V1 IR cannot omit or reorder facts.
+
+The companion runner exercises the trusted fact compiler and shadow adapter
+with real cryptography/OpenSSL ML-DSA-44 signatures over canonical request
+envelopes:
+
+```bash
+/home/kali/saga/.venv/bin/python -m experiments.route_b_shadow_runner \
+  --output /tmp/saga-route-b-real-shadow.json
+```
+
+It covers valid execution, scope denial, flow denial, expiry, transport-digest
+mismatch, missing and valid parent delegation, and an invalid signature. The
+report contains backend/provider metadata, predicate coverage, stable reasons,
+equivalence counts, and authority counts. Generated private seeds, public keys,
+and signatures remain memory-only and are not included in the JSON. This closes
+the Route B component-level BG1-BG6 shadow gate, but it still does not wire B1
+into an Agent network path or authorize B1.5 enforcement.
 
 Legacy configs that omit `mode` continue to infer `toy_compiled_research` from
 `verifier_flavor: compiled` or `toy_wrapper` from `verifier_flavor: wrapper`.

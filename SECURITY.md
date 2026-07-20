@@ -410,9 +410,209 @@ For the pure profile, the vetted backend receives the canonical binding bytes
 directly through its pure ML-DSA interface. For a HashML-DSA profile, the vetted
 backend must apply the profile's standard pre-hash to those same binding bytes.
 Callers must not manually pre-hash the binding and then label that operation as
-HashML-DSA. The explicit Route B shim and cryptography/OpenSSL backend live on
-the independent Route B branch; integration must still preserve the selected
-profile, parameter set, context, backend version, and fail-closed behavior.
+HashML-DSA.
+
+### Route B B0 External Backend Contract
+
+R6 adds `MLDSABackendDescriptorV1`, `MLDSABackendContractV1`,
+`MLDSARouteBVerifier`, and `CryptographyMLDSABackend`. The trusted deployment
+must pin the backend name/version, provider name/version, ML-DSA parameter set,
+signature profile, fixed `ML_DSA_CONTEXT_V1`, and finite positive timeout. A
+backend descriptor is not trust discovery: every descriptor field is compared
+against the locally configured contract before the backend can be called.
+
+The verifier rejects cross-route bindings, parameter/profile drift, non-byte or
+wrong-length keys/signatures, missing methods, malformed descriptors, API or
+version mismatch, unavailable providers, exceptions, timeouts, and non-boolean
+results. FIPS 204 public-key/signature sizes are checked before the backend call:
+ML-DSA-44 uses 1312/2420 bytes, ML-DSA-65 uses 1952/3309 bytes, and ML-DSA-87
+uses 2592/4627 bytes. Only a built-in `bool` result of `True` produces
+`signature_valid`; diagnostic exception messages never enter evidence.
+
+`CryptographyMLDSABackend` delegates key generation, signing, parsing, and
+verification to the external `cryptography` package; this repository still does
+not implement ML-DSA. Cryptography 47 exposed ML-DSA only when built with
+AWS-LC/BoringSSL; OpenSSL-backed ML-DSA requires cryptography 48+ and OpenSSL
+3.5+. Route B therefore pins `cryptography>=48.0.1,<50.0.0`. The shim only
+advertises pure ML-DSA with the fixed context and rejects HashML-DSA profiles
+rather than applying a caller-defined hash. The validated local environment now
+uses cryptography 49.0.0 with wheel-provided OpenSSL 4.0.1,
+`mldsa_supported=True`, and a real ML-DSA-44 keygen/sign/verify round trip with
+1312-byte public keys and 2420-byte signatures. Python's standard-library
+`ssl` module still uses system OpenSSL 3.2.2, but that separate linkage does not
+control cryptography's statically linked wheel backend.
+
+Verification runs in one bounded daemon worker per verifier. A wall timeout
+fails closed and keeps that backend instance quarantined until the in-flight call
+returns, preventing unbounded concurrent retry threads. Python cannot forcibly
+terminate a blocked in-process C call, so a permanently hung provider can retain
+one daemon thread. Strong process cleanup and resource isolation require an
+out-of-process vetted backend/service and remain outside this first B0 shim.
+
+R6 supplies standard-signature Route B evidence but does not yet attach it to the
+Agent config helper or create executable authority. B0.5/B1 must first add typed
+authorization facts and reference-equivalent fixed-policy shadow evaluation;
+only the shared Coordinator may later commit a successful composite decision.
+
+### Route B B0.5/B1 Typed Fixed-Policy Shadow
+
+The V1 `AuthorizationInputLayout` has six ordered facts:
+`standard_signature_valid`, `request_envelope_valid`, `scope_authorized`,
+`flow_allowed`, `delegation_allowed`, and `time_window_valid`. Each
+`AuthorizationFact` requires a built-in `bool` and an
+`AuthorizationFactProvenance` whose source is fixed for that fact, whose source
+version is a stable identifier, and whose evidence digest is exactly 32 bytes.
+The layout encodes each Boolean as one uint8 and rejects raw mappings, missing or
+duplicate facts, layout/profile version drift, wrong lengths, and bytes other
+than zero or one. Integers, floats, NaN, Inf, strings, and truthy objects are not
+coerced to Boolean facts.
+
+`AuthorizationPredicateIR` binds the layout and policy profile to ordered
+`require_true` predicates with stable reject reasons. The ordinary
+`ReferenceAuthorizationPolicy` must contain all six V1 predicates in canonical
+order. `FixedPolicyAggregator` applies a fixed all-ones Linear map with threshold
+`n-1`, followed by fixed ReLU, and accepts only an exact built-in integer `1`.
+Its trace records the encoded typed input, each predicate output, first reject
+reason, fixed-layer intermediates, and hard output. Its complexity manifest is
+structural; it does not substitute deterministic layer counts for measured
+latency or memory.
+
+The B1 shadow evaluator requires the reference and fixed paths to share exactly
+the same layout and predicate IR. It also checks that the in-circuit
+`standard_signature_valid` fact agrees with the external
+`MLDSARouteBVerificationEvidence`. Every result is fixed to `shadow_only` and
+`authority_granted=false`; no Context constructor, Coordinator commit, or sink
+callback is exposed. Deleting any signature/envelope/scope/flow/delegation/time
+predicate is detected by the reference corpus before it could become an
+enforcement profile. Predicate-deletion tests use a separately identified
+research-mutation profile; a canonical V1 policy with missing or reordered
+predicates is rejected during IR construction.
+
+`experiments.fixed_policy_gate_runner` emits a deterministic machine-readable
+`B1_shadow_preliminary` report. The preliminary report covers all 64 Boolean
+inputs, a fixed-seed differential corpus, all six predicate-deletion mutations,
+inside/outside standard-signature consistency, exact 0/1 outputs, trace reason
+coverage, and absence of trainable state. It deliberately does not close the
+BG1-BG6 gate by itself: the corpus uses synthetic internally typed facts, and
+the provenance object is an in-process trusted-code contract rather than a
+cryptographic attestation against arbitrary code executing inside the trusted
+Python process.
+
+`RouteBTrustedFactCompiler` and `RouteBFixedPolicyShadowRoute` add the trusted
+component boundary needed to close that gap. The adapter first calls the strict
+R6 verifier, then derives all six facts from the canonical binding/envelope,
+transport token/message digests, local scope constraints, flow labels, parent
+capability attenuation, and an explicit UTC observation time. The request does
+not carry caller-provided allow bits. Each fact provenance digest is
+domain-separated and contains only canonical digests, fixed metadata, check
+results, and stable reasons. Public keys, signatures, token/message plaintext,
+and backend exception messages are excluded from compiled evidence.
+
+`experiments.route_b_shadow_runner` executes eight in-memory signed-envelope
+cases with the real cryptography/OpenSSL ML-DSA-44 backend. The current corpus
+covers a valid request, scope/flow/time/transport/delegation rejection, valid
+delegation, and invalid signature. Its manifest requires reference/fixed
+equivalence, negative coverage for every fact, stable reason matching, and zero
+authority. This closes the component-level BG1-BG6 B1 shadow gate. It does not
+run the Agent network path or measure sustained shadow load.
+
+After that component gate passed, `RouteBFixedPolicyEnforcedRoute` implements
+the B1.5 stateless Route B decision as:
+
+```text
+route_B_accept =
+    outside_standard_mldsa_valid
+    AND signature_fact_matches_outside_result
+    AND fixed_policy_accept
+    AND fixed_policy_output_is_exact_builtin_integer_1
+```
+
+The standard ML-DSA result remains an independent check outside the fixed
+circuit. A forged signature fact, a valid signature with a rejected policy
+predicate, or a Boolean/float value masquerading as circuit output therefore
+fails closed. Enforcement evidence is immutable, explicitly records that
+Coordinator commit is required, carries `authority_granted=false`, and exposes
+no replay, commit, authorization, Context, or protected-sink method. Only the
+shared `RuntimeAuthCoordinator` may later revalidate and commit this route
+decision in the integration branch. B1.5 does not yet wire Route B into Agent
+network execution, B3 policy portability, BG7/BG8 performance evidence, or
+durable transactional state.
+
+### Route B B2 Raw Authorization Relations
+
+`RouteBRawAuthorizationCompiler` produces the versioned
+`RouteBRawAuthorizationInputV1`; callers do not provide allow/deny facts. The
+layout carries fixed-width bitsets and bounded integers plus six pairs of
+SHA-256-width values. `FixedAuthorizationCircuitV1` directly computes these
+ordered relations with fixed `Linear`/`ReLU` modules:
+
+1. the strict standard-signature input bit is one;
+2. the requested action-family bitset is a subset of signed authorized families;
+3. runtime flow-label bits are a subset of signed egress-label bits;
+4. the capability is either a canonical root or a one-level child whose observed
+   parent digest and depth match, whose child maximum depth does not exceed the
+   parent's maximum, whose action families and allowed fixed flow labels are
+   attenuated, and whose validity window is contained by the parent's window;
+5. `issued <= observed <= expires <= issued + 900 seconds`; and
+6. binding/envelope, sender, receiver, token, message, and action-scope digests
+   are pairwise equal.
+
+The circuit output is a hard built-in integer `0` or `1`, all weights have
+`requires_grad=false`, and its trace contains only a domain-separated input
+digest, predicate outputs, stable reasons, and structural complexity. A plain
+integer/set reference oracle is tested against a deterministic raw-input corpus.
+The external ML-DSA verification remains independently necessary; neither a
+forged B1 fact nor a forged B2 signature input can replace it.
+
+`RouteBFixedAuthorizationCircuitRoute` accepts only when the full B1.5 result
+and all B2 relations accept with exact integer outputs. Its immutable evidence
+still says `coordinator_commit_required=true` and `authority_granted=false` and
+exposes no commit, Context, replay, authorization, or sink entrypoint.
+
+B2 V1 deliberately represents action *families*, not qualified scope names or
+parameter constraints. Exact qualified-scope, constraint, parent-scope, and
+parent-constraint semantics therefore remain mandatory B1.5 checks. The V1
+flow vocabulary is fixed to `public`, `internal`, `private`, `confidential`,
+`restricted`, and `secret`; an unmodelled runtime label maps to a dedicated
+reject-only bit and fails closed even if B1 recognizes a matching custom label.
+A later versioned B3 layout/compiler may add such policy profiles. B2 does not
+connect Route B to Agent network execution or the Coordinator commit path.
+
+### Route B B3 Versioned Policy Compiler
+
+`RouteBAuthorizationPolicyCompilerV1` now compiles two immutable, registered
+authorization profiles through the same ordered predicate IR, raw input schema,
+reference implementation, `FixedAuthorizationCircuitV1` class, and fixed gadget
+graph. The existing general profile retains all six action families, the six
+known flow labels, the 900-second TTL, and maximum delegation depth 255. The
+second `memory_access` profile permits only `memory_read` and `memory_write`,
+permits only `public` through `confidential` flow labels, limits TTL to 300
+seconds, and limits maximum delegation depth to 2. Each profile has an
+independent versioned layout/circuit identity and a domain-separated digest.
+
+Profile policy masks are fixed compiler constants rather than caller-provided
+allow bits. Both the plain reference and fixed circuit check signed scopes and
+flow allowances against those masks, and check the signed maximum delegation
+depth against the profile maximum. Unknown profiles, reordered axes,
+cross-profile raw inputs, compiler/circuit profile mismatches, and the dedicated
+unknown flow bit fail closed. The runtime route still requires the external
+standard ML-DSA result and the complete B1.5 exact qualified-scope/constraint
+decision independently; a B3 profile cannot replace or weaken either check.
+The route remains stateless evidence-only and cannot commit replay state, create
+a `LocalExecutionContext`, or authorize a protected sink.
+
+`experiments.route_b_policy_compiler_runner` emits the preliminary BG7/BG8
+machine-readable report. With a fixed seed it compares reference and fixed
+outputs/reasons over targeted and randomized inputs for both profiles and
+requires true/false coverage for every relation. The manifest also records
+fixed layer/parameter/depth counts, per-operation reference/fixed latency, the
+fixed evaluation's Python allocator peak, trainable-state findings, and
+authority count. BG8 latency is an in-process Python microbenchmark, not Agent
+end-to-end latency. Memory is a `tracemalloc` Python-allocator peak, not process
+RSS or accelerator memory. These measurements close the first component-level
+BG7/BG8 evidence stage; Agent/Coordinator integration, durable transactional
+state, sustained-load measurements, and paper-scale fair experiments remain
+outside this claim.
 
 The current compiled toy verifier has a deliberately narrow boundary:
 
