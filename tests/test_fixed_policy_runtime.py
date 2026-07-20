@@ -14,6 +14,9 @@ import cryptography
 
 from neural import (
     AUTHORIZATION_FACT_NAMES,
+    RouteBCompiledRawAuthorizationInput,
+    RouteBFixedAuthorizationCircuitEvidence,
+    RouteBFixedAuthorizationCircuitRoute,
     RouteBFixedPolicyEnforcedRoute,
     RouteBFixedPolicyEnforcementEvidence,
     RouteBFixedPolicyShadowRoute,
@@ -55,6 +58,7 @@ def _envelope(
     flow_policy: dict[str, object] | None = None,
     parent_envelope: RequestEnvelope | None = None,
     authorized_scopes: tuple[str, ...] | None = None,
+    max_delegation_depth: int = 8,
     turn_id: str = "turn-route-b-shadow",
 ) -> RequestEnvelope:
     """构造 canonical Route B runtime envelope，不生成或保存签名密钥。"""
@@ -72,6 +76,7 @@ def _envelope(
         flow_policy=flow_policy,
         message=_MESSAGE,
         parent_envelope=parent_envelope,
+        max_delegation_depth=max_delegation_depth,
     )
 
 
@@ -595,6 +600,266 @@ class RouteBFixedPolicyEnforcementTests(unittest.TestCase):
         """冻结 evidence 不能把拒绝翻转为接受，也不能自行携带 authority。"""
         rejected = self._evaluate(
             _request(_envelope(turn_id="enforced-evidence-relabel")),
+            corrupt_signature=True,
+        )
+        with self.assertRaises(ValueError):
+            replace(rejected, accepted=True)
+        with self.assertRaises(ValueError):
+            replace(rejected, authority_granted=cast(object, True))
+        with self.assertRaises(ValueError):
+            replace(rejected, coordinator_commit_required=cast(object, False))
+
+
+class RouteBFixedAuthorizationCircuitRouteTests(unittest.TestCase):
+    """验证真实 ML-DSA、B1.5 与 B2 原始关系的无状态联合强制路径。"""
+
+    def setUp(self) -> None:
+        """构造真实 ML-DSA-44 backend、B2 route 和仅驻留内存的测试密钥。"""
+        self.backend = CryptographyMLDSABackend(SignatureAlgorithmId.ML_DSA_44)
+        self.route = RouteBFixedAuthorizationCircuitRoute(
+            MLDSARouteBVerifier(self.backend, _real_contract(self.backend))
+        )
+        self.key_pair = self.backend.keygen_pair()
+
+    def _evaluate(
+        self,
+        request: RouteBShadowRequest,
+        *,
+        corrupt_signature: bool = False,
+    ) -> RouteBFixedAuthorizationCircuitEvidence:
+        """签署 request binding，并可确定性破坏签名字节形成负向样本。"""
+        signature = self.backend.sign(
+            self.key_pair.secret_key,
+            request.binding.canonical_bytes(),
+        )
+        if corrupt_signature:
+            signature = bytes((signature[0] ^ 1,)) + signature[1:]
+        return self.route.evaluate(request, self.key_pair.public_key, signature)
+
+    def test_valid_request_accepts_b1_and_b2_but_cannot_commit_authority(self) -> None:
+        """真实签名与全部关系成立时只生成待 Coordinator 提交的 B2 evidence。"""
+        evidence = self._evaluate(_request(_envelope(turn_id="b2-valid")))
+
+        self.assertTrue(evidence.accepted)
+        self.assertEqual(evidence.reason, "route_b_fixed_authorization_accept")
+        self.assertTrue(evidence.policy_evidence.accepted)
+        self.assertTrue(evidence.relation_decision.accepted)
+        self.assertEqual(evidence.relation_decision.output, 1)
+        self.assertTrue(evidence.raw_signature_matches_outside)
+        self.assertTrue(evidence.coordinator_commit_required)
+        self.assertFalse(evidence.authority_granted)
+        self.assertFalse(hasattr(self.route, "commit"))
+        self.assertFalse(hasattr(self.route, "authorize"))
+        self.assertFalse(hasattr(self.route, "build_local_execution_context"))
+
+    def test_b1_exact_scope_constraints_remain_required_beside_b2_family_bits(self) -> None:
+        """B2 动作族包含成立时，B1.5 的精确参数约束失败仍必须拒绝。"""
+        envelope = _envelope(
+            scope_constraints={
+                _ACTION_SCOPE: [
+                    {
+                        "field": "recipient_domain",
+                        "op": "eq",
+                        "value": "example.com",
+                    }
+                ]
+            },
+            turn_id="b2-b1-constraint",
+        )
+        evidence = self._evaluate(
+            _request(envelope, parameters={"recipient_domain": "evil.test"})
+        )
+
+        self.assertFalse(evidence.policy_evidence.accepted)
+        self.assertTrue(evidence.relation_decision.accepted)
+        self.assertFalse(evidence.accepted)
+        self.assertEqual(evidence.reason, "scope_not_authorized")
+
+    def test_b2_digest_relation_rejects_even_if_b1_facts_are_forged_true(self) -> None:
+        """B1 facts 被替换为全真时，B2 仍直接发现 transport message 摘要不匹配。"""
+        valid_request = _request(_envelope(turn_id="b2-forged-b1-source"))
+        forged_facts = self.route.fact_compiler.compile(
+            valid_request,
+            _signature_evidence(True),
+        )
+        self.route.fact_compiler.compile = (  # type: ignore[method-assign]
+            lambda _request, _evidence: forged_facts
+        )
+        mismatched_request = _request(
+            _envelope(turn_id="b2-digest-mismatch"),
+            message_digest=b"M" * 32,
+        )
+
+        evidence = self._evaluate(mismatched_request)
+
+        self.assertTrue(evidence.policy_evidence.accepted)
+        self.assertFalse(evidence.relation_decision.accepted)
+        self.assertEqual(
+            evidence.relation_decision.reason,
+            "request_envelope_mismatch",
+        )
+        self.assertFalse(evidence.accepted)
+        self.assertEqual(evidence.reason, "request_envelope_mismatch")
+
+    def test_external_signature_is_necessary_even_if_b1_and_b2_inputs_are_forged(self) -> None:
+        """B1/B2 compiler 均被伪造成有效时，电路外无效 ML-DSA 仍阻断接受。"""
+        request = _request(_envelope(turn_id="b2-signature-independent"))
+        forged_facts = self.route.fact_compiler.compile(
+            request,
+            _signature_evidence(True),
+        )
+        forged_raw = self.route.raw_compiler.compile(
+            request,
+            _signature_evidence(True),
+        )
+        self.route.fact_compiler.compile = (  # type: ignore[method-assign]
+            lambda _request, _evidence: forged_facts
+        )
+        self.route.raw_compiler.compile = (  # type: ignore[method-assign]
+            lambda _request, _evidence: forged_raw
+        )
+
+        evidence = self._evaluate(request, corrupt_signature=True)
+
+        self.assertFalse(evidence.policy_evidence.outside_standard_signature_valid)
+        self.assertTrue(evidence.policy_evidence.fixed_decision.accepted)
+        self.assertTrue(evidence.relation_decision.accepted)
+        self.assertFalse(evidence.raw_signature_matches_outside)
+        self.assertFalse(evidence.accepted)
+        self.assertEqual(evidence.reason, "standard_signature_fact_mismatch")
+
+    def test_raw_signature_bit_must_match_valid_external_signature(self) -> None:
+        """外部签名有效但 B2 签名位被降为 0 时，显式一致性检查拒绝。"""
+        request = _request(_envelope(turn_id="b2-raw-signature-mismatch"))
+        compiled = self.route.raw_compiler.compile(
+            request,
+            _signature_evidence(True),
+        )
+        raw_input = replace(compiled.raw_input, standard_signature_valid=False)
+        forged = RouteBCompiledRawAuthorizationInput(
+            compiler_id=compiled.compiler_id,
+            compiler_version=compiled.compiler_version,
+            raw_input=raw_input,
+            source_digest=raw_input.digest(),
+        )
+        self.route.raw_compiler.compile = (  # type: ignore[method-assign]
+            lambda _request, _evidence: forged
+        )
+
+        evidence = self._evaluate(request)
+
+        self.assertTrue(evidence.policy_evidence.accepted)
+        self.assertFalse(evidence.raw_signature_matches_outside)
+        self.assertFalse(evidence.accepted)
+        self.assertEqual(evidence.reason, "raw_standard_signature_mismatch")
+
+    def test_custom_runtime_flow_label_fails_closed_until_next_layout(self) -> None:
+        """B1 可识别的自定义 IFC 标签在 B2 V1 未建模时必须 fail closed。"""
+        envelope = _envelope(
+            flow_policy={"egress": {_ACTION_SCOPE: ["partner"]}},
+            turn_id="b2-custom-flow",
+        )
+        evidence = self._evaluate(
+            _request(envelope, flow_labels=("partner",))
+        )
+
+        self.assertTrue(evidence.policy_evidence.accepted)
+        self.assertFalse(evidence.relation_decision.accepted)
+        self.assertEqual(evidence.relation_decision.reason, "flow_policy_denied")
+        self.assertFalse(evidence.accepted)
+
+    def test_b2_fixed_ttl_rejects_long_lived_b1_valid_envelope(self) -> None:
+        """软件时间事实成立但有效期超过 B2 固定 900 秒时，time relation 必须拒绝。"""
+        envelope = _envelope(
+            issued_at=_NOW - timedelta(minutes=5),
+            expires_at=_NOW + timedelta(minutes=11),
+            turn_id="b2-ttl-limit",
+        )
+        evidence = self._evaluate(_request(envelope))
+
+        self.assertTrue(evidence.policy_evidence.accepted)
+        self.assertFalse(evidence.relation_decision.accepted)
+        self.assertEqual(evidence.relation_decision.reason, "time_window_invalid")
+        self.assertFalse(evidence.accepted)
+
+    def test_b2_rejects_child_that_expands_parent_max_delegation_depth(self) -> None:
+        """B1 事实成立但子 capability 调大父最大深度时，B2 delegation 必须拒绝。"""
+        parent = _envelope(
+            action_scope="tool_call",
+            authorized_scopes=("tool_call",),
+            max_delegation_depth=1,
+            turn_id="b2-depth-parent",
+        )
+        child = _envelope(
+            parent_envelope=parent,
+            max_delegation_depth=8,
+            turn_id="b2-depth-child",
+        )
+        evidence = self._evaluate(
+            _request(child, parent_envelope=parent)
+        )
+
+        self.assertTrue(evidence.policy_evidence.accepted)
+        self.assertFalse(evidence.relation_decision.accepted)
+        self.assertEqual(
+            evidence.relation_decision.reason,
+            "delegation_policy_denied",
+        )
+        self.assertFalse(evidence.accepted)
+
+    def test_b2_rejects_child_that_expands_parent_flow_policy(self) -> None:
+        """子 capability 新增父未允许的已知 flow label 时，B2 delegation 必须拒绝。"""
+        parent = _envelope(
+            action_scope="tool_call",
+            authorized_scopes=("tool_call",),
+            turn_id="b2-flow-parent",
+        )
+        child = _envelope(
+            parent_envelope=parent,
+            flow_policy={"egress": {_ACTION_SCOPE: ["private"]}},
+            turn_id="b2-flow-child",
+        )
+        evidence = self._evaluate(
+            _request(child, parent_envelope=parent, flow_labels=("public",))
+        )
+
+        self.assertTrue(evidence.policy_evidence.accepted)
+        self.assertFalse(evidence.relation_decision.accepted)
+        self.assertEqual(
+            evidence.relation_decision.reason,
+            "delegation_policy_denied",
+        )
+
+    def test_b2_rejects_child_time_window_outside_parent_window(self) -> None:
+        """子 capability 晚于父到期时间时，即使当前均有效也必须拒绝。"""
+        parent = _envelope(
+            action_scope="tool_call",
+            authorized_scopes=("tool_call",),
+            issued_at=_NOW - timedelta(minutes=10),
+            expires_at=_NOW + timedelta(minutes=5),
+            turn_id="b2-time-parent",
+        )
+        child = _envelope(
+            parent_envelope=parent,
+            issued_at=_NOW - timedelta(minutes=5),
+            expires_at=_NOW + timedelta(minutes=10),
+            turn_id="b2-time-child",
+        )
+        evidence = self._evaluate(
+            _request(child, parent_envelope=parent)
+        )
+
+        self.assertTrue(evidence.policy_evidence.accepted)
+        self.assertFalse(evidence.relation_decision.accepted)
+        self.assertEqual(
+            evidence.relation_decision.reason,
+            "delegation_policy_denied",
+        )
+
+    def test_b2_evidence_rejects_acceptance_or_authority_relabeling(self) -> None:
+        """冻结 B2 evidence 不能翻转拒绝结果或自行移除 Coordinator 边界。"""
+        rejected = self._evaluate(
+            _request(_envelope(turn_id="b2-evidence-relabel")),
             corrupt_signature=True,
         )
         with self.assertRaises(ValueError):

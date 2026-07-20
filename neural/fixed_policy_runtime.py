@@ -1,4 +1,4 @@
-"""把真实 Route B 签名 evidence 和 runtime 请求编译为 B1 shadow facts。"""
+"""把真实 Route B 签名与 runtime 请求编译为 B1 facts 和 B2 原始关系。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,16 @@ import hashlib
 import json
 from typing import Any, Literal
 
+from neural.fixed_authorization import (
+    RAW_AUTHORIZATION_FLOW_LABELS_V1,
+    RAW_AUTHORIZATION_LAYOUT_ID_V1,
+    RAW_AUTHORIZATION_LAYOUT_VERSION_V1,
+    RAW_AUTHORIZATION_MAX_TTL_SECONDS_V1,
+    RAW_AUTHORIZATION_SCOPE_FAMILIES_V1,
+    FixedAuthorizationCircuitV1,
+    FixedAuthorizationRelationDecision,
+    RouteBRawAuthorizationInputV1,
+)
 from neural.fixed_policy import (
     AUTHORIZATION_FACT_NAMES,
     AUTHORIZATION_LAYOUT_ID_V1,
@@ -35,6 +45,7 @@ from saga.messages import (
     RequestEnvelope,
     action_scopes_are_attenuated,
     action_scopes_allow,
+    flow_policy_allowed_labels,
     flow_policy_allows_egress,
     normalize_flow_labels,
     parse_action_scope,
@@ -45,6 +56,10 @@ from saga.messages import (
 
 ROUTE_B_FACT_COMPILER_ID_V1 = "saga-route-b-trusted-fact-compiler"
 ROUTE_B_FACT_COMPILER_VERSION_V1 = 1
+ROUTE_B_RAW_AUTHORIZATION_COMPILER_ID_V1 = (
+    "saga-route-b-raw-authorization-compiler"
+)
+ROUTE_B_RAW_AUTHORIZATION_COMPILER_VERSION_V1 = 1
 
 
 @dataclass(frozen=True)
@@ -153,6 +168,43 @@ class RouteBCompiledAuthorizationFacts:
             "compiler_id": self.compiler_id,
             "compiler_version": self.compiler_version,
             "traces": [trace.as_dict() for trace in self.traces],
+        }
+
+
+@dataclass(frozen=True)
+class RouteBCompiledRawAuthorizationInput:
+    """封装受信 compiler 生成的 B2 原始关系输入与 provenance 摘要。"""
+
+    compiler_id: str
+    compiler_version: int
+    raw_input: RouteBRawAuthorizationInputV1
+    source_digest: bytes
+
+    def __post_init__(self) -> None:
+        """拒绝错误 compiler 身份、布局类型或非 SHA-256 provenance。"""
+        if self.compiler_id != ROUTE_B_RAW_AUTHORIZATION_COMPILER_ID_V1:
+            raise ValueError("unsupported raw authorization compiler id")
+        if (
+            type(self.compiler_version) is not int
+            or self.compiler_version
+            != ROUTE_B_RAW_AUTHORIZATION_COMPILER_VERSION_V1
+        ):
+            raise ValueError("unsupported raw authorization compiler version")
+        if type(self.raw_input) is not RouteBRawAuthorizationInputV1:
+            raise TypeError("raw_input must be RouteBRawAuthorizationInputV1")
+        if type(self.source_digest) is not bytes or len(self.source_digest) != 32:
+            raise ValueError("source_digest must be exactly 32 bytes")
+        if self.source_digest != self.raw_input.digest():
+            raise ValueError("source_digest must match the canonical raw input")
+
+    def as_dict(self) -> dict[str, object]:
+        """导出 compiler、布局和摘要，不复制请求身份或 transport 原文。"""
+        return {
+            "compiler_id": self.compiler_id,
+            "compiler_version": self.compiler_version,
+            "layout_id": self.raw_input.layout_id,
+            "layout_version": self.raw_input.layout_version,
+            "source_digest": self.source_digest.hex(),
         }
 
 
@@ -271,6 +323,88 @@ class RouteBFixedPolicyEnforcementEvidence:
                 self.outside_standard_signature_valid
             ),
             "signature_fact_matches_outside": self.signature_fact_matches_outside,
+            "coordinator_commit_required": self.coordinator_commit_required,
+            "authority_granted": self.authority_granted,
+        }
+
+
+@dataclass(frozen=True)
+class RouteBFixedAuthorizationCircuitEvidence:
+    """组合 B1.5 与 B2 原始关系电路，且不携带执行 authority。"""
+
+    mode: Literal["route_b_fixed_authorization_circuit"]
+    accepted: bool
+    reason: str
+    policy_evidence: RouteBFixedPolicyEnforcementEvidence
+    compiled_raw_input: RouteBCompiledRawAuthorizationInput
+    relation_decision: FixedAuthorizationRelationDecision
+    raw_signature_matches_outside: bool
+    coordinator_commit_required: Literal[True]
+    authority_granted: Literal[False]
+
+    def __post_init__(self) -> None:
+        """重算 B1.5/B2 AND，防止伪造签名位、输出位或 authority。"""
+        if self.mode != "route_b_fixed_authorization_circuit":
+            raise ValueError("Route B B2 evidence requires the fixed-circuit mode")
+        if type(self.accepted) is not bool:
+            raise TypeError("accepted must be a built-in bool")
+        if type(self.policy_evidence) is not RouteBFixedPolicyEnforcementEvidence:
+            raise TypeError(
+                "policy_evidence must be RouteBFixedPolicyEnforcementEvidence"
+            )
+        if type(self.compiled_raw_input) is not RouteBCompiledRawAuthorizationInput:
+            raise TypeError(
+                "compiled_raw_input must be RouteBCompiledRawAuthorizationInput"
+            )
+        if type(self.relation_decision) is not FixedAuthorizationRelationDecision:
+            raise TypeError(
+                "relation_decision must be FixedAuthorizationRelationDecision"
+            )
+        if type(self.raw_signature_matches_outside) is not bool:
+            raise TypeError("raw_signature_matches_outside must be a built-in bool")
+        if self.coordinator_commit_required is not True:
+            raise ValueError("Route B B2 evidence must require Coordinator commit")
+        if self.authority_granted is not False:
+            raise ValueError("Route B B2 evidence cannot grant execution authority")
+
+        outside_valid = self.policy_evidence.outside_standard_signature_valid
+        raw_signature_matches = (
+            self.compiled_raw_input.raw_input.standard_signature_valid
+            is outside_valid
+        )
+        relation_output_is_one = (
+            type(self.relation_decision.output) is int
+            and self.relation_decision.output == 1
+        )
+        expected_accept = (
+            self.policy_evidence.accepted is True
+            and raw_signature_matches
+            and self.relation_decision.accepted is True
+            and relation_output_is_one
+        )
+        expected_reason = _route_b_fixed_authorization_reason(
+            policy_evidence=self.policy_evidence,
+            raw_signature_matches=raw_signature_matches,
+            relation_decision=self.relation_decision,
+            accepted=expected_accept,
+        )
+        if self.raw_signature_matches_outside is not raw_signature_matches:
+            raise ValueError("raw signature match flag is inconsistent")
+        if self.accepted is not expected_accept:
+            raise ValueError("accepted does not match the Route B B2 formula")
+        if self.reason != expected_reason:
+            raise ValueError("reason does not match the Route B B2 formula")
+
+    def as_dict(self) -> dict[str, object]:
+        """导出不含密钥、签名、AID、token 或 message 原文的 B2 摘要。"""
+        return {
+            "mode": self.mode,
+            "accepted": self.accepted,
+            "reason": self.reason,
+            "policy_evidence": self.policy_evidence.as_dict(),
+            "compiled_raw_input": self.compiled_raw_input.as_dict(),
+            "relation_decision": self.relation_decision.as_dict(),
+            "raw_signature_matches_outside": self.raw_signature_matches_outside,
             "coordinator_commit_required": self.coordinator_commit_required,
             "authority_granted": self.authority_granted,
         }
@@ -596,6 +730,107 @@ class RouteBTrustedFactCompiler:
         )
 
 
+class RouteBRawAuthorizationCompiler:
+    """把 signed envelope 与 runtime snapshot 编译为 B2 固定宽度原始输入。"""
+
+    def compile(
+        self,
+        request: RouteBShadowRequest,
+        signature_evidence: MLDSARouteBVerificationEvidence,
+    ) -> RouteBCompiledRawAuthorizationInput:
+        """直接编码 scope/flow/delegation/time/digest 关系，不预计算授权结果。"""
+        if type(request) is not RouteBShadowRequest:
+            raise TypeError("request must be RouteBShadowRequest")
+        if type(signature_evidence) is not MLDSARouteBVerificationEvidence:
+            raise TypeError(
+                "signature_evidence must be MLDSARouteBVerificationEvidence"
+            )
+        envelope = request.envelope
+        parent = request.parent_envelope
+        issued_at = _timestamp_epoch(envelope.issued_at)
+        expires_at = _timestamp_epoch(envelope.expires_at)
+        observed_at = _timestamp_epoch(request.observed_at)
+        requested_scope_base, _ = parse_action_scope(request.action_scope)
+        requested_scope_bits = _scope_family_bits((requested_scope_base,))
+        authorized_scope_bits = _scope_family_bits(envelope.authorized_scopes)
+        parent_scope_bits = _scope_family_bits(
+            parent.authorized_scopes if parent is not None else ()
+        )
+        flow_label_bits = _flow_label_bits(request.flow_labels, reject_unknown=True)
+        allowed_flow_label_bits = _flow_label_bits(
+            flow_policy_allowed_labels(envelope.flow_policy, request.action_scope),
+            reject_unknown=False,
+        )
+        parent_allowed_flow_label_bits = _flow_label_bits(
+            flow_policy_allowed_labels(parent.flow_policy, request.action_scope)
+            if parent is not None
+            else (),
+            reject_unknown=False,
+        )
+        zero_digest = bytes(32)
+        raw_input = RouteBRawAuthorizationInputV1(
+            layout_id=RAW_AUTHORIZATION_LAYOUT_ID_V1,
+            layout_version=RAW_AUTHORIZATION_LAYOUT_VERSION_V1,
+            standard_signature_valid=_strict_signature_input_value(
+                request,
+                signature_evidence,
+            ),
+            requested_scope_bits=requested_scope_bits,
+            authorized_scope_bits=authorized_scope_bits,
+            flow_label_bits=flow_label_bits,
+            allowed_flow_label_bits=allowed_flow_label_bits,
+            parent_allowed_flow_label_bits=parent_allowed_flow_label_bits,
+            parent_present=parent is not None,
+            delegation_depth=envelope.delegation_depth,
+            parent_delegation_depth=(
+                parent.delegation_depth if parent is not None else 0
+            ),
+            max_delegation_depth=envelope.max_delegation_depth,
+            parent_max_delegation_depth=(
+                parent.max_delegation_depth if parent is not None else 0
+            ),
+            signed_parent_digest=(
+                _decode_digest(envelope.parent_envelope_digest)
+                if envelope.parent_envelope_digest
+                else zero_digest
+            ),
+            observed_parent_digest=(parent.digest() if parent is not None else zero_digest),
+            parent_scope_bits=parent_scope_bits,
+            issued_at_epoch=issued_at,
+            observed_at_epoch=observed_at,
+            expires_at_epoch=expires_at,
+            parent_issued_at_epoch=(
+                _timestamp_epoch(parent.issued_at) if parent is not None else 0
+            ),
+            parent_expires_at_epoch=(
+                _timestamp_epoch(parent.expires_at) if parent is not None else 0
+            ),
+            max_ttl_seconds=RAW_AUTHORIZATION_MAX_TTL_SECONDS_V1,
+            bound_digests=(
+                request.binding.envelope_digest,
+                _text_digest(envelope.sender_aid),
+                _text_digest(envelope.receiver_aid),
+                _decode_digest(envelope.token_digest),
+                _decode_digest(envelope.message_digest),
+                _text_digest(envelope.action_scope),
+            ),
+            observed_digests=(
+                envelope.digest(),
+                _text_digest(request.sender_aid),
+                _text_digest(request.receiver_aid),
+                request.token_digest,
+                request.message_digest,
+                _text_digest(request.action_scope),
+            ),
+        )
+        return RouteBCompiledRawAuthorizationInput(
+            compiler_id=ROUTE_B_RAW_AUTHORIZATION_COMPILER_ID_V1,
+            compiler_version=ROUTE_B_RAW_AUTHORIZATION_COMPILER_VERSION_V1,
+            raw_input=raw_input,
+            source_digest=raw_input.digest(),
+        )
+
+
 class RouteBFixedPolicyShadowRoute:
     """组合严格 R6 verifier、受信 fact compiler 和 B1 shadow evaluator。"""
 
@@ -687,35 +922,103 @@ class RouteBFixedPolicyEnforcedRoute:
         )
         compiled_facts = self.fact_compiler.compile(request, signature_evidence)
         fixed_decision = self.fixed_policy.evaluate(compiled_facts.fact_set)
-        outside_valid = _outside_signature_valid(signature_evidence)
-        signature_fact = _compiled_signature_fact_value(compiled_facts)
-        signature_fact_matches = (
-            signature_fact is not None and signature_fact is outside_valid
-        )
-        fixed_output_is_one = (
-            type(fixed_decision.output) is int and fixed_decision.output == 1
-        )
-        accepted = (
-            outside_valid
-            and signature_fact_matches
-            and fixed_decision.accepted is True
-            and fixed_output_is_one
-        )
-        reason = _route_b_enforcement_reason(
-            outside_valid=outside_valid,
-            signature_fact_matches=signature_fact_matches,
-            fixed_decision=fixed_decision,
-            accepted=accepted,
-        )
-        return RouteBFixedPolicyEnforcementEvidence(
-            mode="route_b_fixed_policy_enforced",
-            accepted=accepted,
-            reason=reason,
+        return _build_fixed_policy_enforcement_evidence(
             signature_evidence=signature_evidence,
             compiled_facts=compiled_facts,
             fixed_decision=fixed_decision,
-            outside_standard_signature_valid=outside_valid,
-            signature_fact_matches_outside=signature_fact_matches,
+        )
+
+
+class RouteBFixedAuthorizationCircuitRoute:
+    """执行标准 ML-DSA、B1.5 软件事实 AND 与 B2 原始关系固定电路。"""
+
+    def __init__(
+        self,
+        signature_verifier: MLDSARouteBVerifier,
+        *,
+        fact_compiler: RouteBTrustedFactCompiler | None = None,
+        fixed_policy: FixedPolicyAggregator | None = None,
+        raw_compiler: RouteBRawAuthorizationCompiler | None = None,
+        relation_circuit: FixedAuthorizationCircuitV1 | None = None,
+    ) -> None:
+        """保存无状态受信组件；replay reserve 与 Context 仍只属于 Coordinator。"""
+        if type(signature_verifier) is not MLDSARouteBVerifier:
+            raise TypeError("signature_verifier must be MLDSARouteBVerifier")
+        if fact_compiler is not None and type(fact_compiler) is not RouteBTrustedFactCompiler:
+            raise TypeError("fact_compiler must be RouteBTrustedFactCompiler")
+        if fixed_policy is not None and type(fixed_policy) is not FixedPolicyAggregator:
+            raise TypeError("fixed_policy must be FixedPolicyAggregator")
+        if raw_compiler is not None and type(raw_compiler) is not RouteBRawAuthorizationCompiler:
+            raise TypeError("raw_compiler must be RouteBRawAuthorizationCompiler")
+        if (
+            relation_circuit is not None
+            and type(relation_circuit) is not FixedAuthorizationCircuitV1
+        ):
+            raise TypeError(
+                "relation_circuit must be FixedAuthorizationCircuitV1"
+            )
+        self.signature_verifier = signature_verifier
+        self.fact_compiler = fact_compiler or RouteBTrustedFactCompiler()
+        self.fixed_policy = fixed_policy or build_fixed_policy_aggregator_v1()
+        self.raw_compiler = raw_compiler or RouteBRawAuthorizationCompiler()
+        self.relation_circuit = relation_circuit or FixedAuthorizationCircuitV1()
+
+    def evaluate(
+        self,
+        request: RouteBShadowRequest,
+        public_key: bytes,
+        signature: bytes,
+    ) -> RouteBFixedAuthorizationCircuitEvidence:
+        """对一次严格验签同时计算 B1.5 与 B2，最终仅返回待提交 evidence。"""
+        if type(request) is not RouteBShadowRequest:
+            raise TypeError("request must be RouteBShadowRequest")
+        signature_evidence = self.signature_verifier.verify(
+            request.binding,
+            public_key,
+            signature,
+        )
+        compiled_facts = self.fact_compiler.compile(request, signature_evidence)
+        fixed_decision = self.fixed_policy.evaluate(compiled_facts.fact_set)
+        policy_evidence = _build_fixed_policy_enforcement_evidence(
+            signature_evidence=signature_evidence,
+            compiled_facts=compiled_facts,
+            fixed_decision=fixed_decision,
+        )
+        compiled_raw_input = self.raw_compiler.compile(
+            request,
+            signature_evidence,
+        )
+        relation_decision = self.relation_circuit.evaluate(
+            compiled_raw_input.raw_input
+        )
+        raw_signature_matches = (
+            compiled_raw_input.raw_input.standard_signature_valid
+            is policy_evidence.outside_standard_signature_valid
+        )
+        relation_output_is_one = (
+            type(relation_decision.output) is int
+            and relation_decision.output == 1
+        )
+        accepted = (
+            policy_evidence.accepted is True
+            and raw_signature_matches
+            and relation_decision.accepted is True
+            and relation_output_is_one
+        )
+        reason = _route_b_fixed_authorization_reason(
+            policy_evidence=policy_evidence,
+            raw_signature_matches=raw_signature_matches,
+            relation_decision=relation_decision,
+            accepted=accepted,
+        )
+        return RouteBFixedAuthorizationCircuitEvidence(
+            mode="route_b_fixed_authorization_circuit",
+            accepted=accepted,
+            reason=reason,
+            policy_evidence=policy_evidence,
+            compiled_raw_input=compiled_raw_input,
+            relation_decision=relation_decision,
+            raw_signature_matches_outside=raw_signature_matches,
             coordinator_commit_required=True,
             authority_granted=False,
         )
@@ -775,6 +1078,129 @@ def summarize_route_b_shadow_corpus(
         ),
         cases=tuple(summaries),
     )
+
+
+def _build_fixed_policy_enforcement_evidence(
+    *,
+    signature_evidence: MLDSARouteBVerificationEvidence,
+    compiled_facts: RouteBCompiledAuthorizationFacts,
+    fixed_decision: FixedPolicyDecision,
+) -> RouteBFixedPolicyEnforcementEvidence:
+    """按唯一公式构造 B1.5 evidence，供 B1.5 和 B2 route 共同复用。"""
+    outside_valid = _outside_signature_valid(signature_evidence)
+    signature_fact = _compiled_signature_fact_value(compiled_facts)
+    signature_fact_matches = (
+        signature_fact is not None and signature_fact is outside_valid
+    )
+    fixed_output_is_one = (
+        type(fixed_decision.output) is int and fixed_decision.output == 1
+    )
+    accepted = (
+        outside_valid
+        and signature_fact_matches
+        and fixed_decision.accepted is True
+        and fixed_output_is_one
+    )
+    reason = _route_b_enforcement_reason(
+        outside_valid=outside_valid,
+        signature_fact_matches=signature_fact_matches,
+        fixed_decision=fixed_decision,
+        accepted=accepted,
+    )
+    return RouteBFixedPolicyEnforcementEvidence(
+        mode="route_b_fixed_policy_enforced",
+        accepted=accepted,
+        reason=reason,
+        signature_evidence=signature_evidence,
+        compiled_facts=compiled_facts,
+        fixed_decision=fixed_decision,
+        outside_standard_signature_valid=outside_valid,
+        signature_fact_matches_outside=signature_fact_matches,
+        coordinator_commit_required=True,
+        authority_granted=False,
+    )
+
+
+def _strict_signature_input_value(
+    request: RouteBShadowRequest,
+    evidence: MLDSARouteBVerificationEvidence,
+) -> bool:
+    """只把匹配 binding profile 的严格标准验签 evidence 编译为 B2 输入 1。"""
+    descriptor = evidence.descriptor
+    return (
+        evidence.accepted is True
+        and evidence.reason == "signature_valid"
+        and type(descriptor) is MLDSABackendDescriptorV1
+        and descriptor.available is True
+        and descriptor.algorithm_id is request.binding.algorithm_id
+        and descriptor.profile_id is request.binding.profile_id
+    )
+
+
+def _scope_family_bits(scopes: Iterable[str]) -> bytes:
+    """把动作 scope 映射为固定族 bitset；限定符仍由 B1.5 精确检查。"""
+    indexes = {
+        scope: index
+        for index, scope in enumerate(RAW_AUTHORIZATION_SCOPE_FAMILIES_V1)
+    }
+    bits = bytearray(len(RAW_AUTHORIZATION_SCOPE_FAMILIES_V1))
+    for scope in scopes:
+        base, _ = parse_action_scope(scope)
+        bits[indexes[base]] = 1
+    return bytes(bits)
+
+
+def _flow_label_bits(labels: Iterable[str], *, reject_unknown: bool) -> bytes:
+    """把固定 IFC 标签编码为 bitset；运行时自定义标签映射到拒绝位。"""
+    unknown_index = RAW_AUTHORIZATION_FLOW_LABELS_V1.index("__unknown__")
+    indexes = {
+        label: index
+        for index, label in enumerate(RAW_AUTHORIZATION_FLOW_LABELS_V1)
+        if label != "__unknown__"
+    }
+    bits = bytearray(len(RAW_AUTHORIZATION_FLOW_LABELS_V1))
+    for label in labels:
+        index = indexes.get(label)
+        if index is None:
+            if reject_unknown:
+                bits[unknown_index] = 1
+            continue
+        bits[index] = 1
+    return bytes(bits)
+
+
+def _timestamp_epoch(value: datetime | str) -> int:
+    """把规范 UTC 秒级时间转换为 B2 有界整数坐标。"""
+    parsed = (
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if type(value) is str
+        else value
+    )
+    if type(parsed) is not datetime or parsed.tzinfo is None:
+        raise ValueError("B2 timestamps must be timezone-aware")
+    return int(parsed.astimezone(timezone.utc).timestamp())
+
+
+def _decode_digest(value: str) -> bytes:
+    """解码 signed SHA-256 hex；非规范字段映射为稳定不匹配摘要。"""
+    if type(value) is str:
+        try:
+            decoded = bytes.fromhex(value)
+        except ValueError:
+            decoded = b""
+        if len(decoded) == 32 and value == value.lower() and len(value) == 64:
+            return decoded
+        invalid_material = value.encode("utf-8", errors="replace")
+    else:
+        invalid_material = type(value).__name__.encode("ascii", errors="replace")
+    return hashlib.sha256(
+        b"SAGA-PQ-CAN-InvalidSignedDigestV1\x00" + invalid_material
+    ).digest()
+
+
+def _text_digest(value: str) -> bytes:
+    """将 identity/action 文本编码为固定 SHA-256 宽度关系输入。"""
+    return hashlib.sha256(value.encode("utf-8")).digest()
 
 
 def _trace(
@@ -873,3 +1299,31 @@ def _route_b_enforcement_reason(
     ):
         return "fixed_policy_output_invalid"
     return fixed_decision.reason
+
+
+def _route_b_fixed_authorization_reason(
+    *,
+    policy_evidence: RouteBFixedPolicyEnforcementEvidence,
+    raw_signature_matches: bool,
+    relation_decision: FixedAuthorizationRelationDecision,
+    accepted: bool,
+) -> str:
+    """按安全优先级生成 B2 reason，先保留 B1.5 与外部签名失败。"""
+    if not policy_evidence.accepted:
+        return policy_evidence.reason
+    if not raw_signature_matches:
+        return "raw_standard_signature_mismatch"
+    if accepted:
+        return "route_b_fixed_authorization_accept"
+    relation_output_is_one = (
+        type(relation_decision.output) is int
+        and relation_decision.output == 1
+    )
+    if (
+        type(relation_decision.accepted) is not bool
+        or (relation_decision.accepted is True) is not relation_output_is_one
+        or type(relation_decision.reason) is not str
+        or not relation_decision.reason
+    ):
+        return "fixed_authorization_output_invalid"
+    return relation_decision.reason

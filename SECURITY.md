@@ -516,8 +516,49 @@ Coordinator commit is required, carries `authority_granted=false`, and exposes
 no replay, commit, authorization, Context, or protected-sink method. Only the
 shared `RuntimeAuthCoordinator` may later revalidate and commit this route
 decision in the integration branch. B1.5 does not yet wire Route B into Agent
-network execution, and it does not complete B2 raw-relation circuits, B3 policy
-portability, BG7/BG8 performance evidence, or durable transactional state.
+network execution, B3 policy portability, BG7/BG8 performance evidence, or
+durable transactional state.
+
+### Route B B2 Raw Authorization Relations
+
+`RouteBRawAuthorizationCompiler` produces the versioned
+`RouteBRawAuthorizationInputV1`; callers do not provide allow/deny facts. The
+layout carries fixed-width bitsets and bounded integers plus six pairs of
+SHA-256-width values. `FixedAuthorizationCircuitV1` directly computes these
+ordered relations with fixed `Linear`/`ReLU` modules:
+
+1. the strict standard-signature input bit is one;
+2. the requested action-family bitset is a subset of signed authorized families;
+3. runtime flow-label bits are a subset of signed egress-label bits;
+4. the capability is either a canonical root or a one-level child whose observed
+   parent digest and depth match, whose child maximum depth does not exceed the
+   parent's maximum, whose action families and allowed fixed flow labels are
+   attenuated, and whose validity window is contained by the parent's window;
+5. `issued <= observed <= expires <= issued + 900 seconds`; and
+6. binding/envelope, sender, receiver, token, message, and action-scope digests
+   are pairwise equal.
+
+The circuit output is a hard built-in integer `0` or `1`, all weights have
+`requires_grad=false`, and its trace contains only a domain-separated input
+digest, predicate outputs, stable reasons, and structural complexity. A plain
+integer/set reference oracle is tested against a deterministic raw-input corpus.
+The external ML-DSA verification remains independently necessary; neither a
+forged B1 fact nor a forged B2 signature input can replace it.
+
+`RouteBFixedAuthorizationCircuitRoute` accepts only when the full B1.5 result
+and all B2 relations accept with exact integer outputs. Its immutable evidence
+still says `coordinator_commit_required=true` and `authority_granted=false` and
+exposes no commit, Context, replay, authorization, or sink entrypoint.
+
+B2 V1 deliberately represents action *families*, not qualified scope names or
+parameter constraints. Exact qualified-scope, constraint, parent-scope, and
+parent-constraint semantics therefore remain mandatory B1.5 checks. The V1
+flow vocabulary is fixed to `public`, `internal`, `private`, `confidential`,
+`restricted`, and `secret`; an unmodelled runtime label maps to a dedicated
+reject-only bit and fails closed even if B1 recognizes a matching custom label.
+A later versioned B3 layout/compiler may add such policy profiles. B2 does not
+yet connect Route B to Agent network execution or the Coordinator commit path,
+and it is not a claim of BG7/BG8 portability or performance closure.
 
 The current compiled toy verifier has a deliberately narrow boundary:
 
