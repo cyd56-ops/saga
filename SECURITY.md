@@ -557,8 +557,43 @@ flow vocabulary is fixed to `public`, `internal`, `private`, `confidential`,
 `restricted`, and `secret`; an unmodelled runtime label maps to a dedicated
 reject-only bit and fails closed even if B1 recognizes a matching custom label.
 A later versioned B3 layout/compiler may add such policy profiles. B2 does not
-yet connect Route B to Agent network execution or the Coordinator commit path,
-and it is not a claim of BG7/BG8 portability or performance closure.
+connect Route B to Agent network execution or the Coordinator commit path.
+
+### Route B B3 Versioned Policy Compiler
+
+`RouteBAuthorizationPolicyCompilerV1` now compiles two immutable, registered
+authorization profiles through the same ordered predicate IR, raw input schema,
+reference implementation, `FixedAuthorizationCircuitV1` class, and fixed gadget
+graph. The existing general profile retains all six action families, the six
+known flow labels, the 900-second TTL, and maximum delegation depth 255. The
+second `memory_access` profile permits only `memory_read` and `memory_write`,
+permits only `public` through `confidential` flow labels, limits TTL to 300
+seconds, and limits maximum delegation depth to 2. Each profile has an
+independent versioned layout/circuit identity and a domain-separated digest.
+
+Profile policy masks are fixed compiler constants rather than caller-provided
+allow bits. Both the plain reference and fixed circuit check signed scopes and
+flow allowances against those masks, and check the signed maximum delegation
+depth against the profile maximum. Unknown profiles, reordered axes,
+cross-profile raw inputs, compiler/circuit profile mismatches, and the dedicated
+unknown flow bit fail closed. The runtime route still requires the external
+standard ML-DSA result and the complete B1.5 exact qualified-scope/constraint
+decision independently; a B3 profile cannot replace or weaken either check.
+The route remains stateless evidence-only and cannot commit replay state, create
+a `LocalExecutionContext`, or authorize a protected sink.
+
+`experiments.route_b_policy_compiler_runner` emits the preliminary BG7/BG8
+machine-readable report. With a fixed seed it compares reference and fixed
+outputs/reasons over targeted and randomized inputs for both profiles and
+requires true/false coverage for every relation. The manifest also records
+fixed layer/parameter/depth counts, per-operation reference/fixed latency, the
+fixed evaluation's Python allocator peak, trainable-state findings, and
+authority count. BG8 latency is an in-process Python microbenchmark, not Agent
+end-to-end latency. Memory is a `tracemalloc` Python-allocator peak, not process
+RSS or accelerator memory. These measurements close the first component-level
+BG7/BG8 evidence stage; Agent/Coordinator integration, durable transactional
+state, sustained-load measurements, and paper-scale fair experiments remain
+outside this claim.
 
 The current compiled toy verifier has a deliberately narrow boundary:
 

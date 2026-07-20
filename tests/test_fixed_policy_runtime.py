@@ -14,12 +14,16 @@ import cryptography
 
 from neural import (
     AUTHORIZATION_FACT_NAMES,
+    FixedAuthorizationCircuitV1,
+    MEMORY_AUTHORIZATION_CIRCUIT_PROFILE_V1,
     RouteBCompiledRawAuthorizationInput,
     RouteBFixedAuthorizationCircuitEvidence,
     RouteBFixedAuthorizationCircuitRoute,
     RouteBFixedPolicyEnforcedRoute,
     RouteBFixedPolicyEnforcementEvidence,
     RouteBFixedPolicyShadowRoute,
+    RouteBAuthorizationPolicyCompilerV1,
+    RouteBRawAuthorizationCompiler,
     RouteBShadowRequest,
     RouteBTrustedFactCompiler,
     summarize_route_b_shadow_corpus,
@@ -868,6 +872,100 @@ class RouteBFixedAuthorizationCircuitRouteTests(unittest.TestCase):
             replace(rejected, authority_granted=cast(object, True))
         with self.assertRaises(ValueError):
             replace(rejected, coordinator_commit_required=cast(object, False))
+
+    def test_memory_profile_reuses_real_mldsa_route_and_enforces_short_policy(self) -> None:
+        """第二 profile 复用同一 runtime route，并直接限制 memory scope、TTL 和 depth。"""
+        compiled = RouteBAuthorizationPolicyCompilerV1().compile(
+            MEMORY_AUTHORIZATION_CIRCUIT_PROFILE_V1
+        )
+        memory_route = RouteBFixedAuthorizationCircuitRoute(
+            MLDSARouteBVerifier(self.backend, _real_contract(self.backend)),
+            raw_compiler=RouteBRawAuthorizationCompiler(compiled.profile),
+            relation_circuit=compiled.circuit,
+        )
+        envelope = _envelope(
+            action_scope="memory_write",
+            authorized_scopes=("memory_read", "memory_write"),
+            issued_at=_NOW - timedelta(minutes=2),
+            expires_at=_NOW + timedelta(minutes=2),
+            max_delegation_depth=2,
+            turn_id="b3-memory-valid",
+        )
+        request = _request(envelope)
+        signature = self.backend.sign(
+            self.key_pair.secret_key,
+            request.binding.canonical_bytes(),
+        )
+
+        evidence = memory_route.evaluate(
+            request,
+            self.key_pair.public_key,
+            signature,
+        )
+
+        self.assertTrue(evidence.accepted)
+        self.assertTrue(evidence.policy_evidence.accepted)
+        self.assertTrue(evidence.relation_decision.accepted)
+        self.assertFalse(evidence.authority_granted)
+        self.assertFalse(hasattr(memory_route, "commit"))
+
+    def test_memory_profile_rejects_tool_surface_and_long_ttl(self) -> None:
+        """B1.5 可接受的 tool 或长时 memory 请求仍被第二 profile 的 B2 常量拒绝。"""
+        compiled = RouteBAuthorizationPolicyCompilerV1().compile(
+            MEMORY_AUTHORIZATION_CIRCUIT_PROFILE_V1
+        )
+        memory_route = RouteBFixedAuthorizationCircuitRoute(
+            MLDSARouteBVerifier(self.backend, _real_contract(self.backend)),
+            raw_compiler=RouteBRawAuthorizationCompiler(compiled.profile),
+            relation_circuit=compiled.circuit,
+        )
+        envelopes = (
+            _envelope(
+                issued_at=_NOW - timedelta(minutes=2),
+                expires_at=_NOW + timedelta(minutes=2),
+                max_delegation_depth=2,
+                turn_id="b3-memory-tool-reject",
+            ),
+            _envelope(
+                action_scope="memory_read",
+                issued_at=_NOW - timedelta(minutes=3),
+                expires_at=_NOW + timedelta(minutes=3),
+                max_delegation_depth=2,
+                turn_id="b3-memory-ttl-reject",
+            ),
+        )
+        expected_reasons = ("scope_not_authorized", "time_window_invalid")
+        for envelope, expected_reason in zip(
+            envelopes,
+            expected_reasons,
+            strict=True,
+        ):
+            request = _request(envelope)
+            signature = self.backend.sign(
+                self.key_pair.secret_key,
+                request.binding.canonical_bytes(),
+            )
+            with self.subTest(reason=expected_reason):
+                evidence = memory_route.evaluate(
+                    request,
+                    self.key_pair.public_key,
+                    signature,
+                )
+                self.assertTrue(evidence.policy_evidence.accepted)
+                self.assertFalse(evidence.relation_decision.accepted)
+                self.assertEqual(evidence.relation_decision.reason, expected_reason)
+                self.assertFalse(evidence.accepted)
+
+    def test_runtime_route_rejects_mismatched_compiler_and_circuit_profiles(self) -> None:
+        """raw compiler 与 fixed circuit profile 不一致时构造 route 即 fail closed。"""
+        with self.assertRaises(ValueError):
+            RouteBFixedAuthorizationCircuitRoute(
+                MLDSARouteBVerifier(self.backend, _real_contract(self.backend)),
+                raw_compiler=RouteBRawAuthorizationCompiler(
+                    MEMORY_AUTHORIZATION_CIRCUIT_PROFILE_V1
+                ),
+                relation_circuit=FixedAuthorizationCircuitV1(),
+            )
 
 
 if __name__ == "__main__":

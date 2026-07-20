@@ -10,11 +10,9 @@ import json
 from typing import Any, Literal
 
 from neural.fixed_authorization import (
-    RAW_AUTHORIZATION_FLOW_LABELS_V1,
-    RAW_AUTHORIZATION_LAYOUT_ID_V1,
-    RAW_AUTHORIZATION_LAYOUT_VERSION_V1,
-    RAW_AUTHORIZATION_MAX_TTL_SECONDS_V1,
-    RAW_AUTHORIZATION_SCOPE_FAMILIES_V1,
+    GENERAL_AUTHORIZATION_CIRCUIT_PROFILE_V1,
+    ROUTE_B_AUTHORIZATION_CIRCUIT_PROFILES_V1,
+    AuthorizationCircuitProfileV1,
     FixedAuthorizationCircuitV1,
     FixedAuthorizationRelationDecision,
     RouteBRawAuthorizationInputV1,
@@ -733,6 +731,18 @@ class RouteBTrustedFactCompiler:
 class RouteBRawAuthorizationCompiler:
     """把 signed envelope 与 runtime snapshot 编译为 B2 固定宽度原始输入。"""
 
+    def __init__(
+        self,
+        profile: AuthorizationCircuitProfileV1 | None = None,
+    ) -> None:
+        """绑定一个已注册 CircuitProfile，不接受运行时可变 policy 常量。"""
+        if profile is not None and type(profile) is not AuthorizationCircuitProfileV1:
+            raise TypeError("profile must be AuthorizationCircuitProfileV1")
+        selected = profile or GENERAL_AUTHORIZATION_CIRCUIT_PROFILE_V1
+        if selected not in ROUTE_B_AUTHORIZATION_CIRCUIT_PROFILES_V1:
+            raise ValueError("profile is not registered for raw compilation")
+        self.profile = selected
+
     def compile(
         self,
         request: RouteBShadowRequest,
@@ -751,26 +761,55 @@ class RouteBRawAuthorizationCompiler:
         expires_at = _timestamp_epoch(envelope.expires_at)
         observed_at = _timestamp_epoch(request.observed_at)
         requested_scope_base, _ = parse_action_scope(request.action_scope)
-        requested_scope_bits = _scope_family_bits((requested_scope_base,))
-        authorized_scope_bits = _scope_family_bits(envelope.authorized_scopes)
-        parent_scope_bits = _scope_family_bits(
-            parent.authorized_scopes if parent is not None else ()
+        requested_scope_bits = _scope_family_bits(
+            (requested_scope_base,),
+            self.profile.scope_families,
         )
-        flow_label_bits = _flow_label_bits(request.flow_labels, reject_unknown=True)
+        authorized_scope_bits = _scope_family_bits(
+            envelope.authorized_scopes,
+            self.profile.scope_families,
+        )
+        parent_scope_bits = _scope_family_bits(
+            parent.authorized_scopes if parent is not None else (),
+            self.profile.scope_families,
+        )
+        flow_label_bits = _flow_label_bits(
+            request.flow_labels,
+            self.profile.flow_labels,
+            reject_unknown=True,
+        )
         allowed_flow_label_bits = _flow_label_bits(
             flow_policy_allowed_labels(envelope.flow_policy, request.action_scope),
+            self.profile.flow_labels,
             reject_unknown=False,
         )
         parent_allowed_flow_label_bits = _flow_label_bits(
             flow_policy_allowed_labels(parent.flow_policy, request.action_scope)
             if parent is not None
             else (),
+            self.profile.flow_labels,
             reject_unknown=False,
         )
         zero_digest = bytes(32)
+        bound_digest_map = {
+            "envelope": request.binding.envelope_digest,
+            "sender": _text_digest(envelope.sender_aid),
+            "receiver": _text_digest(envelope.receiver_aid),
+            "token": _decode_digest(envelope.token_digest),
+            "message": _decode_digest(envelope.message_digest),
+            "action_scope": _text_digest(envelope.action_scope),
+        }
+        observed_digest_map = {
+            "envelope": envelope.digest(),
+            "sender": _text_digest(request.sender_aid),
+            "receiver": _text_digest(request.receiver_aid),
+            "token": request.token_digest,
+            "message": request.message_digest,
+            "action_scope": _text_digest(request.action_scope),
+        }
         raw_input = RouteBRawAuthorizationInputV1(
-            layout_id=RAW_AUTHORIZATION_LAYOUT_ID_V1,
-            layout_version=RAW_AUTHORIZATION_LAYOUT_VERSION_V1,
+            layout_id=self.profile.layout_id,
+            layout_version=self.profile.layout_version,
             standard_signature_valid=_strict_signature_input_value(
                 request,
                 signature_evidence,
@@ -805,22 +844,14 @@ class RouteBRawAuthorizationCompiler:
             parent_expires_at_epoch=(
                 _timestamp_epoch(parent.expires_at) if parent is not None else 0
             ),
-            max_ttl_seconds=RAW_AUTHORIZATION_MAX_TTL_SECONDS_V1,
-            bound_digests=(
-                request.binding.envelope_digest,
-                _text_digest(envelope.sender_aid),
-                _text_digest(envelope.receiver_aid),
-                _decode_digest(envelope.token_digest),
-                _decode_digest(envelope.message_digest),
-                _text_digest(envelope.action_scope),
+            max_ttl_seconds=self.profile.max_ttl_seconds,
+            bound_digests=tuple(
+                bound_digest_map[name]
+                for name in self.profile.digest_relations
             ),
-            observed_digests=(
-                envelope.digest(),
-                _text_digest(request.sender_aid),
-                _text_digest(request.receiver_aid),
-                request.token_digest,
-                request.message_digest,
-                _text_digest(request.action_scope),
+            observed_digests=tuple(
+                observed_digest_map[name]
+                for name in self.profile.digest_relations
             ),
         )
         return RouteBCompiledRawAuthorizationInput(
@@ -957,11 +988,26 @@ class RouteBFixedAuthorizationCircuitRoute:
             raise TypeError(
                 "relation_circuit must be FixedAuthorizationCircuitV1"
             )
+        selected_profile = (
+            raw_compiler.profile
+            if raw_compiler is not None
+            else relation_circuit.profile
+            if relation_circuit is not None
+            else GENERAL_AUTHORIZATION_CIRCUIT_PROFILE_V1
+        )
+        selected_raw_compiler = raw_compiler or RouteBRawAuthorizationCompiler(
+            selected_profile
+        )
+        selected_relation_circuit = relation_circuit or FixedAuthorizationCircuitV1(
+            selected_profile
+        )
+        if selected_raw_compiler.profile != selected_relation_circuit.profile:
+            raise ValueError("raw compiler and relation circuit profiles must match")
         self.signature_verifier = signature_verifier
         self.fact_compiler = fact_compiler or RouteBTrustedFactCompiler()
         self.fixed_policy = fixed_policy or build_fixed_policy_aggregator_v1()
-        self.raw_compiler = raw_compiler or RouteBRawAuthorizationCompiler()
-        self.relation_circuit = relation_circuit or FixedAuthorizationCircuitV1()
+        self.raw_compiler = selected_raw_compiler
+        self.relation_circuit = selected_relation_circuit
 
     def evaluate(
         self,
@@ -1137,28 +1183,38 @@ def _strict_signature_input_value(
     )
 
 
-def _scope_family_bits(scopes: Iterable[str]) -> bytes:
+def _scope_family_bits(
+    scopes: Iterable[str],
+    scope_families: tuple[str, ...],
+) -> bytes:
     """把动作 scope 映射为固定族 bitset；限定符仍由 B1.5 精确检查。"""
     indexes = {
         scope: index
-        for index, scope in enumerate(RAW_AUTHORIZATION_SCOPE_FAMILIES_V1)
+        for index, scope in enumerate(scope_families)
     }
-    bits = bytearray(len(RAW_AUTHORIZATION_SCOPE_FAMILIES_V1))
+    bits = bytearray(len(scope_families))
     for scope in scopes:
         base, _ = parse_action_scope(scope)
+        if base not in indexes:
+            raise ValueError("action scope is unsupported by the selected profile axis")
         bits[indexes[base]] = 1
     return bytes(bits)
 
 
-def _flow_label_bits(labels: Iterable[str], *, reject_unknown: bool) -> bytes:
+def _flow_label_bits(
+    labels: Iterable[str],
+    flow_labels: tuple[str, ...],
+    *,
+    reject_unknown: bool,
+) -> bytes:
     """把固定 IFC 标签编码为 bitset；运行时自定义标签映射到拒绝位。"""
-    unknown_index = RAW_AUTHORIZATION_FLOW_LABELS_V1.index("__unknown__")
+    unknown_index = flow_labels.index("__unknown__")
     indexes = {
         label: index
-        for index, label in enumerate(RAW_AUTHORIZATION_FLOW_LABELS_V1)
+        for index, label in enumerate(flow_labels)
         if label != "__unknown__"
     }
-    bits = bytearray(len(RAW_AUTHORIZATION_FLOW_LABELS_V1))
+    bits = bytearray(len(flow_labels))
     for label in labels:
         index = indexes.get(label)
         if index is None:
