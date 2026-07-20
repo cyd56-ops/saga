@@ -14,6 +14,8 @@ import cryptography
 
 from neural import (
     AUTHORIZATION_FACT_NAMES,
+    RouteBFixedPolicyEnforcedRoute,
+    RouteBFixedPolicyEnforcementEvidence,
     RouteBFixedPolicyShadowRoute,
     RouteBShadowRequest,
     RouteBTrustedFactCompiler,
@@ -474,6 +476,133 @@ class RouteBRealMLDSAFixedPolicyShadowTests(unittest.TestCase):
             summarize_route_b_shadow_corpus(
                 (("duplicate", evidence), ("duplicate", evidence))
             )
+
+
+class RouteBFixedPolicyEnforcementTests(unittest.TestCase):
+    """验证 B1.5 强制 AND 与 Coordinator-only authority 边界。"""
+
+    def setUp(self) -> None:
+        """构造真实 ML-DSA-44 backend、无状态 enforcement route 和临时密钥对。"""
+        self.backend = CryptographyMLDSABackend(SignatureAlgorithmId.ML_DSA_44)
+        self.route = RouteBFixedPolicyEnforcedRoute(
+            MLDSARouteBVerifier(self.backend, _real_contract(self.backend))
+        )
+        self.key_pair = self.backend.keygen_pair()
+
+    def _evaluate(
+        self,
+        request: RouteBShadowRequest,
+        *,
+        corrupt_signature: bool = False,
+    ) -> RouteBFixedPolicyEnforcementEvidence:
+        """对 binding 生成一次测试签名，并可确定性破坏首字节。"""
+        signature = self.backend.sign(
+            self.key_pair.secret_key,
+            request.binding.canonical_bytes(),
+        )
+        if corrupt_signature:
+            signature = bytes((signature[0] ^ 1,)) + signature[1:]
+        return self.route.evaluate(request, self.key_pair.public_key, signature)
+
+    def test_valid_request_requires_coordinator_after_route_b_accepts(self) -> None:
+        """六项事实和外部验签均成立时只生成待 Coordinator 提交的接受 evidence。"""
+        evidence = self._evaluate(_request(_envelope(turn_id="enforced-valid")))
+
+        self.assertTrue(evidence.accepted)
+        self.assertEqual(evidence.reason, "route_b_fixed_policy_accept")
+        self.assertTrue(evidence.outside_standard_signature_valid)
+        self.assertTrue(evidence.signature_fact_matches_outside)
+        self.assertEqual(evidence.fixed_decision.output, 1)
+        self.assertTrue(evidence.coordinator_commit_required)
+        self.assertFalse(evidence.authority_granted)
+        self.assertFalse(hasattr(self.route, "commit"))
+        self.assertFalse(hasattr(self.route, "authorize"))
+        self.assertFalse(hasattr(self.route, "build_local_execution_context"))
+
+    def test_fixed_policy_rejection_blocks_valid_standard_signature(self) -> None:
+        """标准签名有效但 scope predicate 失败时，B1.5 必须拒绝。"""
+        envelope = _envelope(
+            scope_constraints={
+                _ACTION_SCOPE: [
+                    {
+                        "field": "recipient_domain",
+                        "op": "eq",
+                        "value": "example.com",
+                    }
+                ]
+            },
+            turn_id="enforced-scope-reject",
+        )
+        evidence = self._evaluate(
+            _request(envelope, parameters={"recipient_domain": "evil.test"})
+        )
+
+        self.assertTrue(evidence.outside_standard_signature_valid)
+        self.assertFalse(evidence.accepted)
+        self.assertEqual(evidence.reason, "scope_not_authorized")
+        self.assertEqual(evidence.fixed_decision.output, 0)
+
+    def test_external_signature_remains_independent_when_compiler_facts_are_forged(self) -> None:
+        """即使 compiler/fixed 路径被伪造成接受，电路外无效签名仍必须拒绝。"""
+        request = _request(_envelope(turn_id="enforced-signature-independent"))
+        forged_facts = self.route.fact_compiler.compile(
+            request,
+            _signature_evidence(True),
+        )
+        self.route.fact_compiler.compile = lambda _request, _evidence: forged_facts  # type: ignore[method-assign]
+
+        evidence = self._evaluate(request, corrupt_signature=True)
+
+        self.assertFalse(evidence.outside_standard_signature_valid)
+        self.assertTrue(evidence.fixed_decision.accepted)
+        self.assertEqual(evidence.fixed_decision.output, 1)
+        self.assertFalse(evidence.signature_fact_matches_outside)
+        self.assertFalse(evidence.accepted)
+        self.assertEqual(evidence.reason, "standard_signature_fact_mismatch")
+
+    def test_non_integer_fixed_output_cannot_authorize(self) -> None:
+        """即使 accepted 位为真，布尔或浮点 1 也不能冒充精确整数电路输出。"""
+        request = _request(_envelope(turn_id="enforced-output-type"))
+        original_evaluate = self.route.fixed_policy.evaluate
+        original = original_evaluate(
+            self.route.fact_compiler.compile(request, _signature_evidence(True)).fact_set
+        )
+        invalid_decisions = (
+            (True, True),
+            (True, 1.0),
+            (False, 1),
+        )
+        for invalid_accepted, invalid_output in invalid_decisions:
+            with self.subTest(
+                accepted=invalid_accepted,
+                output=repr(invalid_output),
+            ):
+                self.route.fixed_policy.evaluate = (  # type: ignore[method-assign]
+                    lambda _facts,
+                    accepted=invalid_accepted,
+                    output=invalid_output: replace(
+                        original,
+                        accepted=accepted,
+                        output=cast(int, output),
+                    )
+                )
+                evidence = self._evaluate(request)
+                self.assertFalse(evidence.accepted)
+                self.assertEqual(evidence.reason, "fixed_policy_output_invalid")
+        self.route.fixed_policy.evaluate = original_evaluate  # type: ignore[method-assign]
+
+    def test_enforcement_evidence_rejects_accepted_or_authority_relabeling(self) -> None:
+        """冻结 evidence 不能把拒绝翻转为接受，也不能自行携带 authority。"""
+        rejected = self._evaluate(
+            _request(_envelope(turn_id="enforced-evidence-relabel")),
+            corrupt_signature=True,
+        )
+        with self.assertRaises(ValueError):
+            replace(rejected, accepted=True)
+        with self.assertRaises(ValueError):
+            replace(rejected, authority_granted=cast(object, True))
+        with self.assertRaises(ValueError):
+            replace(rejected, coordinator_commit_required=cast(object, False))
 
 
 if __name__ == "__main__":

@@ -495,9 +495,29 @@ covers a valid request, scope/flow/time/transport/delegation rejection, valid
 delegation, and invalid signature. Its manifest requires reference/fixed
 equivalence, negative coverage for every fact, stable reason matching, and zero
 authority. This closes the component-level BG1-BG6 B1 shadow gate. It does not
-run the Agent network path, measure sustained shadow load, or approve B1.5:
-integration must still preserve external standard-signature necessity and the
-Coordinator's exclusive Context commit boundary.
+run the Agent network path or measure sustained shadow load.
+
+After that component gate passed, `RouteBFixedPolicyEnforcedRoute` implements
+the B1.5 stateless Route B decision as:
+
+```text
+route_B_accept =
+    outside_standard_mldsa_valid
+    AND signature_fact_matches_outside_result
+    AND fixed_policy_accept
+    AND fixed_policy_output_is_exact_builtin_integer_1
+```
+
+The standard ML-DSA result remains an independent check outside the fixed
+circuit. A forged signature fact, a valid signature with a rejected policy
+predicate, or a Boolean/float value masquerading as circuit output therefore
+fails closed. Enforcement evidence is immutable, explicitly records that
+Coordinator commit is required, carries `authority_granted=false`, and exposes
+no replay, commit, authorization, Context, or protected-sink method. Only the
+shared `RuntimeAuthCoordinator` may later revalidate and commit this route
+decision in the integration branch. B1.5 does not yet wire Route B into Agent
+network execution, and it does not complete B2 raw-relation circuits, B3 policy
+portability, BG7/BG8 performance evidence, or durable transactional state.
 
 The current compiled toy verifier has a deliberately narrow boundary:
 

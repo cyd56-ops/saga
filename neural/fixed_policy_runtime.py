@@ -18,8 +18,11 @@ from neural.fixed_policy import (
     AuthorizationFactProvenance,
     AuthorizationFactSet,
     AuthorizationFactSource,
+    FixedPolicyAggregator,
+    FixedPolicyDecision,
     FixedPolicyShadowEvidence,
     FixedPolicyShadowEvaluator,
+    build_fixed_policy_aggregator_v1,
     build_fixed_policy_shadow_evaluator_v1,
 )
 from pq.mldsa_route_b import (
@@ -182,6 +185,93 @@ class RouteBFixedPolicyShadowRouteEvidence:
             "fixed_accepted": self.shadow_evidence.fixed_decision.accepted,
             "fixed_reason": self.shadow_evidence.fixed_decision.reason,
             "equivalent": self.shadow_evidence.equivalent,
+            "authority_granted": self.authority_granted,
+        }
+
+
+@dataclass(frozen=True)
+class RouteBFixedPolicyEnforcementEvidence:
+    """记录 B1.5 强制 AND 结果，但不创建或携带执行 authority。"""
+
+    mode: Literal["route_b_fixed_policy_enforced"]
+    accepted: bool
+    reason: str
+    signature_evidence: MLDSARouteBVerificationEvidence
+    compiled_facts: RouteBCompiledAuthorizationFacts
+    fixed_decision: FixedPolicyDecision
+    outside_standard_signature_valid: bool
+    signature_fact_matches_outside: bool
+    coordinator_commit_required: Literal[True]
+    authority_granted: Literal[False]
+
+    def __post_init__(self) -> None:
+        """重算强制公式，拒绝伪造接受位、非精确整数输出或 authority 标记。"""
+        if self.mode != "route_b_fixed_policy_enforced":
+            raise ValueError("Route B enforcement evidence requires the B1.5 mode")
+        if type(self.accepted) is not bool:
+            raise TypeError("accepted must be a built-in bool")
+        if type(self.signature_evidence) is not MLDSARouteBVerificationEvidence:
+            raise TypeError("signature_evidence must be MLDSARouteBVerificationEvidence")
+        if type(self.compiled_facts) is not RouteBCompiledAuthorizationFacts:
+            raise TypeError("compiled_facts must be RouteBCompiledAuthorizationFacts")
+        if type(self.fixed_decision) is not FixedPolicyDecision:
+            raise TypeError("fixed_decision must be FixedPolicyDecision")
+        if type(self.outside_standard_signature_valid) is not bool:
+            raise TypeError("outside_standard_signature_valid must be a built-in bool")
+        if type(self.signature_fact_matches_outside) is not bool:
+            raise TypeError("signature_fact_matches_outside must be a built-in bool")
+        if self.coordinator_commit_required is not True:
+            raise ValueError("Route B evidence must require Coordinator commit")
+        if self.authority_granted is not False:
+            raise ValueError("Route B evidence cannot grant execution authority")
+
+        signature_fact = _compiled_signature_fact_value(self.compiled_facts)
+        outside_valid = _outside_signature_valid(self.signature_evidence)
+        signature_fact_matches = (
+            signature_fact is not None and signature_fact is outside_valid
+        )
+        fixed_output_is_one = (
+            type(self.fixed_decision.output) is int
+            and self.fixed_decision.output == 1
+        )
+        expected_accept = (
+            outside_valid
+            and signature_fact_matches
+            and self.fixed_decision.accepted is True
+            and fixed_output_is_one
+        )
+        expected_reason = _route_b_enforcement_reason(
+            outside_valid=outside_valid,
+            signature_fact_matches=signature_fact_matches,
+            fixed_decision=self.fixed_decision,
+            accepted=expected_accept,
+        )
+        if self.outside_standard_signature_valid is not outside_valid:
+            raise ValueError("outside signature result does not match strict evidence")
+        if self.signature_fact_matches_outside is not signature_fact_matches:
+            raise ValueError("signature fact match flag is inconsistent")
+        if self.accepted is not expected_accept:
+            raise ValueError("accepted does not match the Route B enforcement formula")
+        if self.reason != expected_reason:
+            raise ValueError("reason does not match the Route B enforcement formula")
+
+    def as_dict(self) -> dict[str, object]:
+        """导出不含密钥、签名、token 或 message 原文的强制判定摘要。"""
+        return {
+            "mode": self.mode,
+            "accepted": self.accepted,
+            "reason": self.reason,
+            "signature_accepted": self.signature_evidence.accepted,
+            "signature_reason": self.signature_evidence.reason,
+            "compiled_facts": self.compiled_facts.as_dict(),
+            "fixed_accepted": self.fixed_decision.accepted,
+            "fixed_reason": self.fixed_decision.reason,
+            "fixed_output": self.fixed_decision.output,
+            "outside_standard_signature_valid": (
+                self.outside_standard_signature_valid
+            ),
+            "signature_fact_matches_outside": self.signature_fact_matches_outside,
+            "coordinator_commit_required": self.coordinator_commit_required,
             "authority_granted": self.authority_granted,
         }
 
@@ -560,6 +650,77 @@ class RouteBFixedPolicyShadowRoute:
         )
 
 
+class RouteBFixedPolicyEnforcedRoute:
+    """执行 B1.5 标准验签与固定授权策略的无状态强制 AND。"""
+
+    def __init__(
+        self,
+        signature_verifier: MLDSARouteBVerifier,
+        *,
+        fact_compiler: RouteBTrustedFactCompiler | None = None,
+        fixed_policy: FixedPolicyAggregator | None = None,
+    ) -> None:
+        """保存受信组件；replay reserve 和 Context 创建仍只属于 Coordinator。"""
+        if type(signature_verifier) is not MLDSARouteBVerifier:
+            raise TypeError("signature_verifier must be MLDSARouteBVerifier")
+        if fact_compiler is not None and type(fact_compiler) is not RouteBTrustedFactCompiler:
+            raise TypeError("fact_compiler must be RouteBTrustedFactCompiler")
+        if fixed_policy is not None and type(fixed_policy) is not FixedPolicyAggregator:
+            raise TypeError("fixed_policy must be FixedPolicyAggregator")
+        self.signature_verifier = signature_verifier
+        self.fact_compiler = fact_compiler or RouteBTrustedFactCompiler()
+        self.fixed_policy = fixed_policy or build_fixed_policy_aggregator_v1()
+
+    def evaluate(
+        self,
+        request: RouteBShadowRequest,
+        public_key: bytes,
+        signature: bytes,
+    ) -> RouteBFixedPolicyEnforcementEvidence:
+        """计算标准验签与 fixed policy 的 AND，不提交 replay 或执行状态。"""
+        if type(request) is not RouteBShadowRequest:
+            raise TypeError("request must be RouteBShadowRequest")
+        signature_evidence = self.signature_verifier.verify(
+            request.binding,
+            public_key,
+            signature,
+        )
+        compiled_facts = self.fact_compiler.compile(request, signature_evidence)
+        fixed_decision = self.fixed_policy.evaluate(compiled_facts.fact_set)
+        outside_valid = _outside_signature_valid(signature_evidence)
+        signature_fact = _compiled_signature_fact_value(compiled_facts)
+        signature_fact_matches = (
+            signature_fact is not None and signature_fact is outside_valid
+        )
+        fixed_output_is_one = (
+            type(fixed_decision.output) is int and fixed_decision.output == 1
+        )
+        accepted = (
+            outside_valid
+            and signature_fact_matches
+            and fixed_decision.accepted is True
+            and fixed_output_is_one
+        )
+        reason = _route_b_enforcement_reason(
+            outside_valid=outside_valid,
+            signature_fact_matches=signature_fact_matches,
+            fixed_decision=fixed_decision,
+            accepted=accepted,
+        )
+        return RouteBFixedPolicyEnforcementEvidence(
+            mode="route_b_fixed_policy_enforced",
+            accepted=accepted,
+            reason=reason,
+            signature_evidence=signature_evidence,
+            compiled_facts=compiled_facts,
+            fixed_decision=fixed_decision,
+            outside_standard_signature_valid=outside_valid,
+            signature_fact_matches_outside=signature_fact_matches,
+            coordinator_commit_required=True,
+            authority_granted=False,
+        )
+
+
 def summarize_route_b_shadow_corpus(
     cases: Iterable[tuple[str, RouteBFixedPolicyShadowRouteEvidence]],
 ) -> RouteBShadowCorpusManifest:
@@ -661,3 +822,54 @@ def _json_digest(value: object) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _outside_signature_valid(
+    evidence: MLDSARouteBVerificationEvidence,
+) -> bool:
+    """只把严格 R6 evidence 的原生接受结果视为电路外签名成立。"""
+    return (
+        type(evidence) is MLDSARouteBVerificationEvidence
+        and evidence.accepted is True
+        and evidence.reason == "signature_valid"
+    )
+
+
+def _compiled_signature_fact_value(
+    compiled_facts: RouteBCompiledAuthorizationFacts,
+) -> bool | None:
+    """从受信 compiler 结果读取签名事实；任何结构漂移均返回 None。"""
+    try:
+        fact = compiled_facts.fact_set.fact_map().get("standard_signature_valid")
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if type(fact) is not AuthorizationFact or type(fact.value) is not bool:
+        return None
+    return fact.value
+
+
+def _route_b_enforcement_reason(
+    *,
+    outside_valid: bool,
+    signature_fact_matches: bool,
+    fixed_decision: FixedPolicyDecision,
+    accepted: bool,
+) -> str:
+    """按安全优先级生成 B1.5 稳定 reason，避免电路错误遮蔽签名失败。"""
+    if not signature_fact_matches:
+        return "standard_signature_fact_mismatch"
+    if not outside_valid:
+        return "standard_signature_invalid"
+    if accepted:
+        return "route_b_fixed_policy_accept"
+    fixed_output_is_one = (
+        type(fixed_decision.output) is int and fixed_decision.output == 1
+    )
+    if (
+        type(fixed_decision.accepted) is not bool
+        or (fixed_decision.accepted is True) is not fixed_output_is_one
+        or type(fixed_decision.reason) is not str
+        or not fixed_decision.reason
+    ):
+        return "fixed_policy_output_invalid"
+    return fixed_decision.reason
