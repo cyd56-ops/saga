@@ -1284,6 +1284,10 @@ U10 证据映射如下：
 - random real-valued signatures;
 - boundary inputs around 1/3 and 2/3;
 - gradient-based smoke test if Torch autograd is enabled.
+- versioned four-mode dual-route corpus over identical canonical inputs;
+- independent A/B reference equivalence and false-reject counts;
+- A/B/evaluate/commit p50/p95/p99 latency and bounded shadow-load statistics;
+- restart replay, local SQLite PENDING recovery, and protected-sink side effects.
 
 These empirical tests are not a proof. The proof obligation follows from the Shamir transformation assumptions and correct implementation.
 
@@ -1292,6 +1296,10 @@ These empirical tests are not a proof. The proof obligation follows from the Sha
 - 随机实数值签名；
 - 1/3 和 2/3 附近的边界输入；
 - 如果启用 Torch autograd，做基于梯度的 smoke test。
+- 在相同 canonical 输入上运行版本化四模式双路线语料；
+- 分别统计 A/B reference equivalence 与误拒绝；
+- 统计 A/B/evaluate/commit 的 p50/p95/p99 延迟和有界 shadow 负载；
+- 验证重启 replay、本地 SQLite PENDING 恢复与受保护 sink 副作用。
 
 这些经验测试不是证明。证明义务来自 Shamir 变换假设和正确实现。
 

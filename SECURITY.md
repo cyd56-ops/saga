@@ -188,12 +188,25 @@ authority. `dual_required_research` requires exact A output integer `1` and B
 acceptance synchronously. `offline_compare` can expose the A/B quadrant but
 cannot commit state or return a Context even when both routes accept.
 
-This is a local integration checkpoint, not an Agent network or production HA
-claim. Route A remains toy/research-only and cannot inherit Route B's standard
-cryptographic claim. SQLite retains the local crash/availability limitations
-described above. Sustained shadow load, fair A/B experiment statistics,
-protected-sink end-to-end measurements, and the J11 untrusted-inference threat
-model remain open.
+`experiments/dual_route_fair_runner.py` is a versioned, object-level evidence
+harness outside the mandatory runtime kernel. Its fair core reuses the same
+canonical envelopes and detached A/B signatures across all four locally chosen
+modes. It separately reports A and B reference equivalence, false rejects,
+phase latency, restart replay rejection, Context-backed protected-sink effects,
+and the offline A/B quadrant. A separate bounded shadow-load probe records
+backlog, drop, error/timeout, disagreement, and late-latency statistics. Any
+artificial verifier delay is explicit in the report and excluded from the fair
+core. The JSON never serializes request text, tokens, public/private key bytes,
+signatures, or SQLite paths.
+
+The crash probe covers safe recovery of an identical local SQLite `PENDING`
+record to `COMMITTED`, followed by replay rejection. It deliberately issues no
+Context itself and does not close the availability gap after a crash between
+`COMMITTED` and Context delivery. The runner is not an Agent network,
+production HA, or distributed-consensus claim. Route A remains
+toy/research-only and cannot inherit Route B's standard cryptographic claim.
+Agent network measurements, repeated paper-scale trials, and the J11
+untrusted-inference threat model remain open.
 
 Experiment, paper-reproduction, and demonstration code is not part of the
 mandatory runtime security boundary for the PQ-CAN prototype. In particular,

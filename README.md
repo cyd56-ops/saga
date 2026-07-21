@@ -542,8 +542,25 @@ authority transition to the R17 durable Coordinator path. A shadow queue drop,
 late result, verifier error, or disagreement cannot roll back or expand Route B
 authority. No mode implements `A OR B` or fallback from failed ML-DSA to the toy
 Route A verifier. This checkpoint covers local integration and concurrency
-tests; fair sustained-load experiments, Agent network wiring, J11 threat-model
-closure, and the paper route decision remain R18 follow-up work.
+tests.
+
+The first versioned R18 fair runner is available at
+`experiments/dual_route_fair_runner.py`:
+
+```bash
+.venv/bin/python experiments/dual_route_fair_runner.py \
+  --output /tmp/saga-dual-route-fair.json
+```
+
+It reuses the same four canonical envelope/signature inputs across all four
+modes, records the A/B quadrants, independent reference equivalence, false
+rejects, A/B/evaluate/commit p50/p95/p99 latency, restart replay rejection, and
+protected-sink effects. A separate bounded shadow-load probe records peak
+backlog, queue drops, errors/timeouts, late latency, and authority isolation;
+its configured artificial delay is not included in the fair core. The report
+contains only digests, stable reasons, software identities, and aggregate
+counts. Agent network wiring, J11 threat-model closure, repeated paper-scale
+runs, and the paper route decision remain R18 follow-up work.
 
 The current `experiments/schedule_meeting.py`, `experiments/expense_report.py`,
 and `experiments/create_blogpost.py` entrypoints will automatically call the
