@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -20,13 +22,22 @@ from neural.shadow_queue import (
 )
 from saga.durable_authorization import DurableAuthorizationStateStore
 from saga.execution_gate import (
+    EnforcementMode,
     ExecutionGateDecision,
     ExecutionGateRequest,
     LocalExecutionContext,
     RuntimeAuthCoordinator,
     SignedRequestExecutionGate,
 )
-from saga.messages import parse_request_envelope, sha256_hex
+from pq.signature_binding import (
+    EnvelopeCanonicalizationId,
+    EnvelopeDigestAlgorithmId,
+    SignatureAlgorithmId,
+    SignatureBindingV1,
+    SignatureProfileId,
+    SignatureRouteId,
+)
+from saga.messages import RequestEnvelope, parse_request_envelope, sha256_hex
 
 
 DualRouteMode = Literal[
@@ -55,6 +66,7 @@ _DUAL_ROUTE_MODES = frozenset(
     }
 )
 _MAX_SIGNATURE_BYTES = 1 << 20
+_MAX_SIGNATURE_BASE64_CHARS = ((_MAX_SIGNATURE_BYTES + 2) // 3) * 4
 
 
 class RouteBFixedAuthorizationEvaluator(Protocol):
@@ -74,6 +86,242 @@ class RouteAShadowSubmitter(Protocol):
 
     def submit(self, job: A0ShadowJob) -> A0ShadowSubmission:
         """提交公开材料 job，且不得返回执行 authority。"""
+
+
+class DetachedEnvelopeSigner(Protocol):
+    """定义发送侧短生命周期密钥对象所需的 detached sign 接口。"""
+
+    def sign(self, secret_key: bytes, message: bytes) -> bytes:
+        """使用调用方持有的私钥签名完整消息。"""
+
+
+class DualRouteNetworkRequestError(ValueError):
+    """表示网络材料无法安全编译为 dual-route 请求，并携带稳定拒绝原因。"""
+
+    def __init__(self, reason: str) -> None:
+        """保存可审计的稳定原因，不携带密钥、签名或业务原文。"""
+        if type(reason) is not str or not reason:
+            raise ValueError("dual-route network error reason must be non-empty")
+        self.reason = reason
+        super().__init__(reason)
+
+
+class DualRouteTransportSignerV1:
+    """为同一 canonical envelope 生成独立 Route B 与可选 Route A 签名字段。"""
+
+    def __init__(
+        self,
+        *,
+        route_b_signer: DetachedEnvelopeSigner,
+        route_b_secret_key: bytes,
+        route_b_key_id: bytes,
+        route_b_algorithm_id: SignatureAlgorithmId,
+        route_b_profile_id: SignatureProfileId,
+        route_a_signer: DetachedEnvelopeSigner | None = None,
+        route_a_secret_key: bytes | None = None,
+    ) -> None:
+        """绑定进程内短生命周期签名材料；私钥不进入 verifier 或全局状态。"""
+        if not callable(getattr(route_b_signer, "sign", None)):
+            raise TypeError("route_b_signer must expose sign")
+        if type(route_b_secret_key) is not bytes or not route_b_secret_key:
+            raise ValueError("route_b_secret_key must be non-empty bytes")
+        if type(route_b_key_id) is not bytes or not route_b_key_id:
+            raise ValueError("route_b_key_id must be non-empty bytes")
+        if not isinstance(route_b_algorithm_id, SignatureAlgorithmId):
+            raise TypeError("route_b_algorithm_id must use SignatureAlgorithmId")
+        if not isinstance(route_b_profile_id, SignatureProfileId):
+            raise TypeError("route_b_profile_id must use SignatureProfileId")
+        if (route_a_signer is None) != (route_a_secret_key is None):
+            raise ValueError("Route A signer and secret key must be supplied together")
+        if route_a_signer is not None and not callable(
+            getattr(route_a_signer, "sign", None)
+        ):
+            raise TypeError("route_a_signer must expose sign")
+        if route_a_secret_key is not None and (
+            type(route_a_secret_key) is not bytes or not route_a_secret_key
+        ):
+            raise ValueError("route_a_secret_key must be non-empty bytes")
+        # 构造一次 binding 以提前拒绝弱路线或不兼容 profile。
+        SignatureBindingV1(
+            route_id=SignatureRouteId.ROUTE_B_STANDARD,
+            algorithm_id=route_b_algorithm_id,
+            key_id=route_b_key_id,
+            profile_id=route_b_profile_id,
+            digest_algorithm_id=EnvelopeDigestAlgorithmId.SHA256,
+            canonicalization_id=(
+                EnvelopeCanonicalizationId.SAGA_REQUEST_ENVELOPE_JSON_V1
+            ),
+            envelope_digest=bytes(32),
+        )
+        self._route_b_signer = route_b_signer
+        self._route_b_secret_key = route_b_secret_key
+        self.route_b_key_id = route_b_key_id
+        self.route_b_algorithm_id = route_b_algorithm_id
+        self.route_b_profile_id = route_b_profile_id
+        self._route_a_signer = route_a_signer
+        self._route_a_secret_key = route_a_secret_key
+
+    def sign_envelope(self, envelope: RequestEnvelope) -> dict[str, str]:
+        """返回 transport-safe A/B 签名字段，不传输可由本地 registry 决定的 key id。"""
+        if type(envelope) is not RequestEnvelope:
+            raise TypeError("envelope must be RequestEnvelope")
+        binding = SignatureBindingV1(
+            route_id=SignatureRouteId.ROUTE_B_STANDARD,
+            algorithm_id=self.route_b_algorithm_id,
+            key_id=self.route_b_key_id,
+            profile_id=self.route_b_profile_id,
+            digest_algorithm_id=EnvelopeDigestAlgorithmId.SHA256,
+            canonicalization_id=(
+                EnvelopeCanonicalizationId.SAGA_REQUEST_ENVELOPE_JSON_V1
+            ),
+            envelope_digest=envelope.digest(),
+        )
+        route_b_signature = self._route_b_signer.sign(
+            self._route_b_secret_key,
+            binding.canonical_bytes(),
+        )
+        fields = {
+            "pq_signature": _encode_transport_signature(
+                route_b_signature,
+                "Route B",
+            )
+        }
+        if self._route_a_signer is not None and self._route_a_secret_key is not None:
+            fields["route_a_signature"] = _encode_transport_signature(
+                self._route_a_signer.sign(
+                    self._route_a_secret_key,
+                    envelope.digest(),
+                ),
+                "Route A",
+            )
+        return fields
+
+
+class DualRouteNetworkRequestAdapterV1:
+    """把网络快照按接收方本地信任配置编译为无 allow-bit 的 dual-route 请求。"""
+
+    def __init__(
+        self,
+        *,
+        route_b_key_ids_by_sender: Mapping[str, bytes],
+        route_b_algorithm_id: SignatureAlgorithmId,
+        route_b_profile_id: SignatureProfileId,
+        route_a_key_ids_by_sender: Mapping[str, bytes] | None = None,
+        flow_labels: tuple[str, ...] = ("public",),
+        parent_envelope_resolver: Callable[[str], RequestEnvelope | None] | None = None,
+        now_fn: Callable[[], datetime] | None = None,
+    ) -> None:
+        """固定 sender-key 映射、签名 profile 与本地 flow labels，拒绝请求侧选弱路线。"""
+        if not isinstance(route_b_algorithm_id, SignatureAlgorithmId):
+            raise TypeError("route_b_algorithm_id must use SignatureAlgorithmId")
+        if not isinstance(route_b_profile_id, SignatureProfileId):
+            raise TypeError("route_b_profile_id must use SignatureProfileId")
+        if type(flow_labels) is not tuple or not flow_labels:
+            raise ValueError("flow_labels must be a non-empty tuple")
+        if parent_envelope_resolver is not None and not callable(
+            parent_envelope_resolver
+        ):
+            raise TypeError("parent_envelope_resolver must be callable")
+        self.route_b_key_ids_by_sender = _copy_sender_key_id_registry(
+            route_b_key_ids_by_sender,
+            "route_b_key_ids_by_sender",
+        )
+        self.route_a_key_ids_by_sender = _copy_sender_key_id_registry(
+            route_a_key_ids_by_sender or {},
+            "route_a_key_ids_by_sender",
+        )
+        self.route_b_algorithm_id = route_b_algorithm_id
+        self.route_b_profile_id = route_b_profile_id
+        self.flow_labels = flow_labels
+        self.parent_envelope_resolver = parent_envelope_resolver
+        self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
+
+    def adapt_execution_request(
+        self,
+        request: ExecutionGateRequest,
+        transport_payload: Mapping[str, object],
+    ) -> DualRouteAuthorizationRequestV1:
+        """只从 canonical envelope、transport 摘要和本地 registry 构造路线输入。"""
+        if type(request) is not ExecutionGateRequest:
+            raise DualRouteNetworkRequestError("dual_route_execution_request_invalid")
+        if not isinstance(transport_payload, Mapping):
+            raise DualRouteNetworkRequestError("dual_route_transport_payload_invalid")
+        sender_aid = request.sender_aid
+        if type(sender_aid) is not str or not sender_aid:
+            raise DualRouteNetworkRequestError("dual_route_sender_missing")
+        route_b_key_id = self.route_b_key_ids_by_sender.get(sender_aid)
+        if route_b_key_id is None:
+            raise DualRouteNetworkRequestError("route_b_sender_untrusted")
+        try:
+            envelope = parse_request_envelope(request.request_envelope)
+            route_b_signature = _decode_transport_signature(
+                request.pq_signature,
+                "route_b_signature",
+            )
+            observed_at = _coerce_utc_now(self._now_fn())
+            binding = SignatureBindingV1(
+                route_id=SignatureRouteId.ROUTE_B_STANDARD,
+                algorithm_id=self.route_b_algorithm_id,
+                key_id=route_b_key_id,
+                profile_id=self.route_b_profile_id,
+                digest_algorithm_id=EnvelopeDigestAlgorithmId.SHA256,
+                canonicalization_id=(
+                    EnvelopeCanonicalizationId.SAGA_REQUEST_ENVELOPE_JSON_V1
+                ),
+                envelope_digest=envelope.digest(),
+            )
+            parent_envelope = self._resolve_parent(envelope)
+        except DualRouteNetworkRequestError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise DualRouteNetworkRequestError(
+                "dual_route_transport_material_invalid"
+            ) from exc
+
+        route_a_key_id = self.route_a_key_ids_by_sender.get(sender_aid)
+        route_a_signature_value = transport_payload.get("route_a_signature")
+        if route_a_signature_value is None:
+            route_a_key_id = None
+            route_a_signature = None
+        else:
+            if route_a_key_id is None:
+                raise DualRouteNetworkRequestError("route_a_sender_untrusted")
+            route_a_signature = _decode_transport_signature(
+                route_a_signature_value,
+                "route_a_signature",
+            )
+
+        execution_request = replace(request, pq_signature=route_b_signature)
+        route_b_request = RouteBShadowRequest(
+            binding=binding,
+            envelope=envelope,
+            sender_aid=sender_aid,
+            receiver_aid=request.receiver_aid,
+            token_digest=hashlib.sha256(request.token.encode("utf-8")).digest(),
+            message_digest=hashlib.sha256(request.message.encode("utf-8")).digest(),
+            action_scope=request.action_scope,
+            observed_at=observed_at,
+            parameters=request.parameters,
+            flow_labels=self.flow_labels,
+            parent_envelope=parent_envelope,
+        )
+        return DualRouteAuthorizationRequestV1(
+            execution_request=execution_request,
+            route_b_request=route_b_request,
+            route_a_key_id=route_a_key_id,
+            route_a_signature=route_a_signature,
+        )
+
+    def _resolve_parent(self, envelope: RequestEnvelope) -> RequestEnvelope | None:
+        """只经本地 resolver 读取父 capability；网络 payload 不能直接提供父事实。"""
+        if not envelope.parent_envelope_digest:
+            return None
+        if self.parent_envelope_resolver is None:
+            return None
+        parent = self.parent_envelope_resolver(envelope.parent_envelope_digest)
+        if parent is not None and type(parent) is not RequestEnvelope:
+            raise DualRouteNetworkRequestError("dual_route_parent_material_invalid")
+        return parent
 
 
 @dataclass(frozen=True)
@@ -340,6 +588,7 @@ class DualRouteRuntimeAuthCoordinator(RuntimeAuthCoordinator):
         route_a_public_keys: Mapping[bytes, bytes] | None = None,
         route_a_verifier: A0ShadowVerifier | None = None,
         route_a_shadow_submitter: RouteAShadowSubmitter | None = None,
+        network_request_adapter: DualRouteNetworkRequestAdapterV1 | None = None,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         """固定本地 mode/trust registry，并接管 state gate 的唯一 Coordinator。"""
@@ -368,6 +617,13 @@ class DualRouteRuntimeAuthCoordinator(RuntimeAuthCoordinator):
         )
         self.route_a_verifier = route_a_verifier
         self.route_a_shadow_submitter = route_a_shadow_submitter
+        if network_request_adapter is not None and type(
+            network_request_adapter
+        ) is not DualRouteNetworkRequestAdapterV1:
+            raise TypeError(
+                "network_request_adapter must be DualRouteNetworkRequestAdapterV1"
+            )
+        self.network_request_adapter = network_request_adapter
         self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
         if mode == "route_b_with_a_shadow":
             if not self.route_a_public_keys or not callable(
@@ -382,6 +638,19 @@ class DualRouteRuntimeAuthCoordinator(RuntimeAuthCoordinator):
         super().__init__(state_gate, route_id=f"dual_route_runtime_v1:{mode}")
         # state gate 不保留另一个可调用的 single-route Coordinator。
         state_gate.runtime_auth_coordinator = self
+
+    def adapt_execution_request(
+        self,
+        request: ExecutionGateRequest,
+        transport_payload: Mapping[str, object],
+    ) -> DualRouteAuthorizationRequestV1:
+        """通过本地 adapter 把 Agent 网络请求转换为 dual-route 请求。"""
+        if self.network_request_adapter is None:
+            raise DualRouteNetworkRequestError("dual_route_network_adapter_missing")
+        return self.network_request_adapter.adapt_execution_request(
+            request,
+            transport_payload,
+        )
 
     def evaluate(
         self,
@@ -733,6 +1002,7 @@ def build_dual_route_runtime_coordinator(
     route_a_public_keys: Mapping[bytes, bytes] | None = None,
     route_a_verifier: A0ShadowVerifier | None = None,
     route_a_shadow_submitter: RouteAShadowSubmitter | None = None,
+    network_request_adapter: DualRouteNetworkRequestAdapterV1 | None = None,
     now_fn: Callable[[], datetime] | None = None,
 ) -> DualRouteRuntimeAuthCoordinator:
     """构造没有 single-route 信任旁路、只使用 R17 durable state 的四模式 Coordinator。"""
@@ -751,8 +1021,44 @@ def build_dual_route_runtime_coordinator(
         route_a_public_keys=route_a_public_keys,
         route_a_verifier=route_a_verifier,
         route_a_shadow_submitter=route_a_shadow_submitter,
+        network_request_adapter=network_request_adapter,
         now_fn=now_fn,
     )
+
+
+def enable_dual_route_agent_runtime_auth(
+    agent: object,
+    coordinator: DualRouteRuntimeAuthCoordinator,
+    *,
+    transport_signer: DualRouteTransportSignerV1 | None = None,
+    capability_ttl_seconds: int = 300,
+) -> SignedRequestExecutionGate:
+    """把 dual-route Coordinator 接到 Agent strict gate，并可选启用发送侧 A/B 签名。"""
+    if type(coordinator) is not DualRouteRuntimeAuthCoordinator:
+        raise TypeError("coordinator must be DualRouteRuntimeAuthCoordinator")
+    if coordinator.mode == "offline_compare":
+        raise ValueError("offline_compare cannot be attached to an execution Agent")
+    if transport_signer is not None and type(
+        transport_signer
+    ) is not DualRouteTransportSignerV1:
+        raise TypeError("transport_signer must be DualRouteTransportSignerV1")
+    if (
+        type(capability_ttl_seconds) is not int
+        or capability_ttl_seconds <= 0
+    ):
+        raise ValueError("capability_ttl_seconds must be a positive integer")
+    setattr(agent, "execution_gate", coordinator.state_gate)
+    setattr(agent, "enforcement_mode", EnforcementMode.STRICT.value)
+    setattr(agent, "strict_execution_gate", True)
+    setattr(agent, "execution_gate_downgrade_reason", None)
+    setattr(agent, "runtime_auth_capability_ttl_seconds", capability_ttl_seconds)
+    if transport_signer is not None:
+        setattr(agent, "runtime_auth_payload_signer", transport_signer)
+    local_agent = getattr(agent, "local_agent", None)
+    setter = getattr(local_agent, "set_strict_execution_capabilities", None)
+    if callable(setter):
+        setter(True)
+    return coordinator.state_gate
 
 
 def _integration_binding_reason(
@@ -869,6 +1175,64 @@ def _copy_public_key_registry(
     if field_name == "route_b_public_keys" and not copied:
         raise ValueError("route_b_public_keys must be non-empty")
     return copied
+
+
+def _copy_sender_key_id_registry(
+    registry: Mapping[str, bytes],
+    field_name: str,
+) -> dict[str, bytes]:
+    """复制接收方 sender-key 映射，拒绝空 AID、空 key id 或重复规范键。"""
+    if not isinstance(registry, Mapping):
+        raise TypeError(f"{field_name} must be a mapping")
+    copied: dict[str, bytes] = {}
+    for sender_aid, key_id in registry.items():
+        if type(sender_aid) is not str or not sender_aid:
+            raise ValueError(f"{field_name} sender ids must be non-empty text")
+        if type(key_id) is not bytes or not key_id:
+            raise ValueError(f"{field_name} key ids must be non-empty bytes")
+        # SignatureBindingV1 负责固定 key-id 长度上界与 profile 语义。
+        copied[sender_aid] = key_id
+    if field_name == "route_b_key_ids_by_sender" and not copied:
+        raise ValueError("route_b_key_ids_by_sender must be non-empty")
+    return copied
+
+
+def _encode_transport_signature(signature: object, route_name: str) -> str:
+    """把 backend 输出收紧为有界非空 bytes，再编码为规范 base64 transport 字段。"""
+    if (
+        type(signature) is not bytes
+        or not signature
+        or len(signature) > _MAX_SIGNATURE_BYTES
+    ):
+        raise ValueError(f"{route_name} signer returned invalid signature bytes")
+    return base64.b64encode(signature).decode("ascii")
+
+
+def _decode_transport_signature(value: object, field_name: str) -> bytes:
+    """解码 raw bytes 或规范 base64 文本，并在入电路前执行长度限制。"""
+    if type(value) is bytes:
+        signature = value
+    elif type(value) is str:
+        if len(value) > _MAX_SIGNATURE_BASE64_CHARS:
+            raise DualRouteNetworkRequestError(f"{field_name}_length_invalid")
+        try:
+            signature = base64.b64decode(value, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise DualRouteNetworkRequestError(
+                f"{field_name}_encoding_invalid"
+            ) from exc
+    else:
+        raise DualRouteNetworkRequestError(f"{field_name}_type_invalid")
+    if not signature or len(signature) > _MAX_SIGNATURE_BYTES:
+        raise DualRouteNetworkRequestError(f"{field_name}_length_invalid")
+    return signature
+
+
+def _coerce_utc_now(value: object) -> datetime:
+    """把可信时钟收紧为 aware UTC datetime，拒绝 naive 或错误类型。"""
+    if type(value) is not datetime or value.tzinfo is None:
+        raise DualRouteNetworkRequestError("dual_route_trusted_time_invalid")
+    return value.astimezone(timezone.utc)
 
 
 def _canonical_parameters(parameters: Mapping[str, object] | None) -> str:

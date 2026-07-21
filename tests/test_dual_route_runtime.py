@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import base64
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -37,12 +38,15 @@ from pq import (
 from saga.durable_authorization import SQLiteDurableAuthorizationStateStore
 from saga.dual_route_runtime import (
     DualRouteAuthorizationRequestV1,
+    DualRouteNetworkRequestAdapterV1,
+    DualRouteNetworkRequestError,
     DualRouteRuntimeAuthCoordinator,
+    DualRouteTransportSignerV1,
     RouteAIntegrationEvidenceV1,
     build_dual_route_runtime_coordinator,
 )
 from saga.execution_gate import ExecutionGateRequest
-from saga.messages import build_request_envelope
+from saga.messages import build_request_envelope, parse_request_envelope
 
 
 class _CachedRouteB:
@@ -215,6 +219,86 @@ class DualRouteRuntimeTests(unittest.TestCase):
             route_a_shadow_submitter=shadow_queue,  # type: ignore[arg-type]
             now_fn=lambda: self.now,
         )
+
+    def test_network_signer_and_local_adapter_reconstruct_same_dual_request(self) -> None:
+        """网络只传 A/B 签名；接收方按 sender registry 重建固定 Route B binding。"""
+        envelope = build_request_envelope(
+            sender_aid=self.sender_aid,
+            receiver_aid=self.receiver_aid,
+            token=self.token,
+            session_id="session-network-adapter",
+            turn_id="turn-network-adapter",
+            issued_at=self.now - timedelta(minutes=1),
+            expires_at=self.now + timedelta(minutes=4),
+            action_scope="llm_prompt",
+            message=self.message,
+            timestamp=self.now,
+        )
+        signer = DualRouteTransportSignerV1(
+            route_b_signer=self.mldsa_backend,
+            route_b_secret_key=self.route_b_secret_key,
+            route_b_key_id=self.route_b_key_id,
+            route_b_algorithm_id=SignatureAlgorithmId.ML_DSA_44,
+            route_b_profile_id=SignatureProfileId.ML_DSA_PURE,
+            route_a_signer=self.route_a_scheme,
+            route_a_secret_key=self.route_a_keys.secret_key,
+        )
+        fields = signer.sign_envelope(envelope)
+        adapter = DualRouteNetworkRequestAdapterV1(
+            route_b_key_ids_by_sender={self.sender_aid: self.route_b_key_id},
+            route_b_algorithm_id=SignatureAlgorithmId.ML_DSA_44,
+            route_b_profile_id=SignatureProfileId.ML_DSA_PURE,
+            route_a_key_ids_by_sender={self.sender_aid: self.route_a_key_id},
+            flow_labels=("public",),
+            now_fn=lambda: self.now,
+        )
+        execution = ExecutionGateRequest(
+            sender_aid=self.sender_aid,
+            receiver_aid=self.receiver_aid,
+            token=self.token,
+            message=self.message,
+            action_scope="llm_prompt",
+            request_envelope=envelope.canonical_json(),
+            pq_signature=fields["pq_signature"],
+        )
+
+        adapted = adapter.adapt_execution_request(execution, fields)
+
+        self.assertEqual(adapted.route_b_request.binding.key_id, self.route_b_key_id)
+        self.assertEqual(adapted.route_b_request.envelope, envelope)
+        self.assertEqual(adapted.route_b_request.flow_labels, ("public",))
+        self.assertEqual(adapted.route_a_key_id, self.route_a_key_id)
+        self.assertEqual(
+            adapted.execution_request.pq_signature,
+            base64.b64decode(fields["pq_signature"], validate=True),
+        )
+        self.assertEqual(parse_request_envelope(execution.request_envelope), envelope)
+
+    def test_network_adapter_ignores_request_key_hint_and_rejects_bad_a_material(self) -> None:
+        """请求侧 key hint 不能改写本地 registry，畸形 Route A 字段在评估前拒绝。"""
+        request = self._request(turn_id="network-invalid-a")
+        execution = replace(
+            request.execution_request,
+            pq_signature=base64.b64encode(
+                request.execution_request.pq_signature
+            ).decode("ascii"),
+        )
+        adapter = DualRouteNetworkRequestAdapterV1(
+            route_b_key_ids_by_sender={self.sender_aid: self.route_b_key_id},
+            route_b_algorithm_id=SignatureAlgorithmId.ML_DSA_44,
+            route_b_profile_id=SignatureProfileId.ML_DSA_PURE,
+            route_a_key_ids_by_sender={self.sender_aid: self.route_a_key_id},
+            now_fn=lambda: self.now,
+        )
+        payload = {
+            "route_b_key_id": base64.b64encode(b"attacker-key").decode("ascii"),
+            "route_a_signature": "not-base64!",
+        }
+
+        with self.assertRaises(DualRouteNetworkRequestError) as raised:
+            adapter.adapt_execution_request(execution, payload)
+
+        self.assertEqual(raised.exception.reason, "route_a_signature_encoding_invalid")
 
     def test_route_b_only_commits_once_and_uses_durable_context(self) -> None:
         """B-only 只由 B 接受决定，且唯一 Context 必须来自 durable Coordinator。"""

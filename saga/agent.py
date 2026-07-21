@@ -16,7 +16,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import traceback
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from cryptography.exceptions import InvalidSignature
 from cryptography.x509 import Certificate
 
@@ -1083,7 +1083,33 @@ class Agent:
         )
         coordinator = getattr(execution_gate, "runtime_auth_coordinator", None)
         if coordinator is not None:
-            evidence = coordinator.evaluate(request)
+            coordinator_request: object = request
+            request_adapter = getattr(
+                coordinator,
+                "adapt_execution_request",
+                None,
+            )
+            if callable(request_adapter):
+                try:
+                    coordinator_request = request_adapter(request, message_dict)
+                except Exception as exc:
+                    # 网络适配失败必须在进入任一路线前 fail-closed，且不记录敏感异常文本。
+                    reason = getattr(
+                        exc,
+                        "reason",
+                        "runtime_auth_request_adaptation_error",
+                    )
+                    return self._apply_enforcement_mode(
+                        ExecutionGateDecision(
+                            False,
+                            str(reason),
+                            protocol_allow=protocol_allow,
+                            enforcement_mode=enforcement_mode.value,
+                        ),
+                        enforcement_mode=enforcement_mode,
+                        downgrade_reason=downgrade_reason,
+                    )
+            evidence = coordinator.evaluate(coordinator_request)
             coordinator_decision = evidence.decision
             if consume:
                 coordinator_decision = coordinator.commit(evidence).decision
@@ -1453,9 +1479,13 @@ class Agent:
         if scope_constraints:
             payload["scope_constraints"] = scope_constraints
 
+        payload_signer = getattr(self, "runtime_auth_payload_signer", None)
         signature_scheme = getattr(self, "pq_signature_scheme", None)
         secret_key = getattr(self, "pq_secret_key", None)
-        if receiver_aid is None or signature_scheme is None or secret_key is None:
+        legacy_signer_available = signature_scheme is not None and secret_key is not None
+        if receiver_aid is None or (
+            payload_signer is None and not legacy_signer_available
+        ):
             return payload
 
         # 签名覆盖规范化信封摘要，消息和 token 只以哈希形式进入信封。
@@ -1496,9 +1526,32 @@ class Agent:
             parent_scope_constraints=parent_scope_constraints,
             delegation_depth=delegation_depth,
         )
-        signature = signature_scheme.sign(secret_key, envelope.digest())
         payload["request_envelope"] = envelope.canonical_json()
-        payload["pq_signature"] = base64.b64encode(signature).decode("utf-8")
+        if payload_signer is not None:
+            signer_method = getattr(payload_signer, "sign_envelope", None)
+            if not callable(signer_method):
+                raise TypeError("runtime_auth_payload_signer must expose sign_envelope")
+            signature_fields = signer_method(envelope)
+            if not isinstance(signature_fields, Mapping):
+                raise TypeError("runtime auth signature fields must be a mapping")
+            allowed_fields = {"pq_signature", "route_a_signature"}
+            if set(signature_fields) - allowed_fields or "pq_signature" not in signature_fields:
+                raise ValueError("runtime auth signature fields are not canonical")
+            for field_name, field_value in signature_fields.items():
+                if type(field_value) is not str or not field_value:
+                    raise ValueError(
+                        f"runtime auth {field_name} must be non-empty base64 text"
+                    )
+                try:
+                    base64.b64decode(field_value, validate=True)
+                except (ValueError, binascii.Error) as exc:
+                    raise ValueError(
+                        f"runtime auth {field_name} must be canonical base64 text"
+                    ) from exc
+                payload[field_name] = field_value
+        else:
+            signature = signature_scheme.sign(secret_key, envelope.digest())
+            payload["pq_signature"] = base64.b64encode(signature).decode("utf-8")
         return payload
 
     def _conversation_authorized_scopes(
